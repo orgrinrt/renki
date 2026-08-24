@@ -109,7 +109,7 @@ pub(crate) fn ensure_built(
     resolved: &Resolved,
 ) -> Result<PathBuf, String> {
     let root = builds_dir(cache_root).join(key);
-    let bin = root.join("bin").join(tool.engine_crate);
+    let bin = root.join("bin").join(tool.engine_bin_name());
     if bin.is_file() {
         return Ok(bin);
     }
@@ -188,18 +188,21 @@ fn rustc_version_line() -> String {
 /// absolute working directory so cwd is irrelevant, then whatever the tool's
 /// hooks add, then the caller's forwarded arguments.
 ///
-/// Split out of [`exec_engine`] because an `exec` cannot be observed from a
-/// test, and this is the half worth observing. The flag was hardcoded here
-/// while [`Tool::dir_flag`] documented itself as the flag the launcher always
-/// passes, so a tool that named its own got the user's copy stripped under that
-/// name and the conventional one handed to the engine.
-pub(crate) fn engine_argv(
+/// The whole command line, argv[0] first, because an `exec` cannot be observed
+/// from a test and this is the half worth observing.
+///
+/// argv[0] is the launcher's own short name rather than the engine binary's
+/// path, so an engine that prints its own usage prints the name the user
+/// typed. `Command::new` alone puts the path there, and the engine then tells
+/// the user about a binary they have never heard of and cannot invoke.
+pub(crate) fn engine_command_line(
     tool: &Tool,
     workdir: &Path,
     extra: &[String],
     args: &[String],
 ) -> Vec<std::ffi::OsString> {
-    let mut argv = Vec::with_capacity(2 + extra.len() + args.len());
+    let mut argv = Vec::with_capacity(3 + extra.len() + args.len());
+    argv.push(tool.short.into());
     argv.push(tool.dir_flag.into());
     argv.push(workdir.as_os_str().to_os_string());
     argv.extend(extra.iter().map(Into::into));
@@ -217,9 +220,8 @@ pub(crate) fn exec_engine(
     args: &[String],
 ) -> Result<std::convert::Infallible, String> {
     use std::os::unix::process::CommandExt;
-    let err = Command::new(bin)
-        .args(engine_argv(tool, workdir, extra, args))
-        .exec();
+    let argv = engine_command_line(tool, workdir, extra, args);
+    let err = Command::new(bin).arg0(&argv[0]).args(&argv[1..]).exec();
     Err(format!("failed to exec {}: {err}", bin.display()))
 }
 
@@ -235,6 +237,7 @@ mod tests {
         config_file: "t.toml",
         pin_prefix: "t",
         engine_crate: "engine",
+        engine_bin: None,
         cache_namespace: "tns",
         default_url: "u",
         launcher_crate: "t-launcher",
@@ -301,15 +304,43 @@ mod tests {
             dir_flag: "--at",
             ..T
         };
-        let argv = engine_argv(&AT, Path::new("/w"), &[], &[]);
-        assert_eq!(argv, ["--at", "/w"]);
+        let argv = engine_command_line(&AT, Path::new("/w"), &[], &[]);
+        assert_eq!(argv, ["t", "--at", "/w"]);
         assert!(
             !argv.iter().any(|a| a == "--dir"),
             "the conventional flag reached a tool that named its own: {argv:?}"
         );
 
         // and the conventional spelling still arrives for a tool that chose it
-        assert_eq!(engine_argv(&T, Path::new("/w"), &[], &[]), ["--dir", "/w"]);
+        assert_eq!(
+            engine_command_line(&T, Path::new("/w"), &[], &[]),
+            ["t", "--dir", "/w"]
+        );
+    }
+
+    #[test]
+    fn the_engine_is_told_it_is_the_launcher_and_not_the_binary_on_disk() {
+        // An engine that prints its own usage prints argv[0], so if the exec
+        // leaves that as the cached binary's path the user is told to run a
+        // `widget-engine` they have never installed and cannot find. The name
+        // handed over is the launcher's, which is the one they typed.
+        let argv = engine_command_line(&T, Path::new("/w"), &[], &[]);
+        assert_eq!(argv[0], T.short);
+        assert_ne!(
+            argv[0], T.engine_crate,
+            "the engine's own package name reached argv[0]"
+        );
+
+        // and it tracks the tool rather than being a constant that happens to
+        // match this fixture
+        const OTHER: Tool = Tool {
+            short: "other",
+            ..T
+        };
+        assert_eq!(
+            engine_command_line(&OTHER, Path::new("/w"), &[], &[])[0],
+            "other"
+        );
     }
 
     #[test]
@@ -321,8 +352,9 @@ mod tests {
         let extra = vec!["--dep".to_string(), "{ path = \"x\" }".to_string()];
         let args = vec!["lock".to_string(), "--".to_string(), "-v".to_string()];
         assert_eq!(
-            engine_argv(&T, Path::new("/w"), &extra, &args),
+            engine_command_line(&T, Path::new("/w"), &extra, &args),
             [
+                "t",
                 "--dir",
                 "/w",
                 "--dep",
@@ -343,8 +375,8 @@ mod tests {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
         let raw = OsStr::from_bytes(b"/w/\xff\xfe");
-        let argv = engine_argv(&T, Path::new(raw), &[], &[]);
-        assert_eq!(argv[1], raw, "the path was lossily re-encoded");
+        let argv = engine_command_line(&T, Path::new(raw), &[], &[]);
+        assert_eq!(argv[2], raw, "the path was lossily re-encoded");
     }
 
     #[test]
@@ -410,6 +442,45 @@ mod tests {
         .unwrap();
         let got = ensure_built(&T, dir.path(), key, &resolved).unwrap();
         assert_eq!(got, binpath.join("engine"));
+    }
+
+    #[test]
+    fn a_package_whose_binary_is_named_differently_is_still_found() {
+        // `cargo install widget-engine` on a package whose `[[bin]]` is
+        // `widget` writes `bin/widget`, so a lookup keyed on the package name
+        // finds nothing and rebuilds on every run, forever, silently.
+        let dir = tempfile::tempdir().unwrap();
+        let key = "deadbeefdeadbeef";
+        let binpath = builds_dir(dir.path()).join(key).join("bin");
+        std::fs::create_dir_all(&binpath).unwrap();
+        std::fs::write(binpath.join("shortname"), b"#!/bin/sh\n").unwrap();
+
+        const RENAMED: Tool = Tool {
+            engine_bin: Some("shortname"),
+            ..T
+        };
+        assert_ne!(
+            RENAMED.engine_crate, "shortname",
+            "the fixture proves nothing"
+        );
+
+        // No attempts, so a miss cannot fall through to a build: returning the
+        // path is the only way this succeeds.
+        let no_attempts = Resolved {
+            pin: Pin {
+                url: "u".into(),
+                reference: Reference::Rev("r".into()),
+            },
+            key_rev: "r".into(),
+            attempts: vec![],
+        };
+        let got = ensure_built(&RENAMED, dir.path(), key, &no_attempts).unwrap();
+        assert_eq!(got, binpath.join("shortname"));
+
+        // and the control: the same cache is a miss for the tool that did not
+        // rename, which is what makes the hit above about `engine_bin` rather
+        // than about the file merely existing
+        assert!(ensure_built(&T, dir.path(), key, &no_attempts).is_err());
     }
 
     #[test]

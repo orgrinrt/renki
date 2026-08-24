@@ -188,7 +188,7 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
         ));
     }
 
-    let bin = root.join("bin").join(tool.engine_crate);
+    let bin = root.join("bin").join(tool.engine_bin_name());
     if !bin.is_file() {
         return Err(format!(
             "cargo install reported success but produced no binary under {}",
@@ -237,6 +237,7 @@ mod tests {
         config_file: "t.toml",
         pin_prefix: "t",
         engine_crate: "engine",
+        engine_bin: None,
         cache_namespace: "t",
         default_url: "u",
         launcher_crate: "t-launcher",

@@ -111,6 +111,7 @@ mod tests {
         config_file: "t.toml",
         pin_prefix: "eng",
         engine_crate: "engine",
+        engine_bin: None,
         cache_namespace: "t",
         default_url: "ssh://default",
         launcher_crate: "t-launcher",
