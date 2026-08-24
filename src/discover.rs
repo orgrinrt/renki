@@ -19,7 +19,7 @@ use crate::tool::{Anchor, Tool};
 
 /// A located config and the working directory it maps.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Located {
+pub(crate) struct Located {
     /// The config to read the pin from.
     pub config_path: PathBuf,
     /// The absolute directory the engine runs against.
@@ -30,7 +30,7 @@ pub struct Located {
 ///
 /// The tool's root environment variable wins when set and pointing at a
 /// directory. Otherwise the anchor decides. `None` when neither resolves.
-pub fn repo_root(tool: &Tool) -> Option<PathBuf> {
+pub(crate) fn repo_root(tool: &Tool) -> Option<PathBuf> {
     let from_env = std::env::var_os(tool.root_env());
     let cwd = std::env::current_dir().ok()?;
     repo_root_with(tool, from_env, &cwd)
@@ -95,7 +95,7 @@ fn repo_root_with(
 /// Finding the root found the config, so there is no scan and no two-config
 /// error. A subdirectory carrying a config of its own is a nested workspace
 /// rather than an ambiguity here.
-pub fn locate(tool: &Tool, root: &Path) -> Result<Option<Located>, String> {
+pub(crate) fn locate(tool: &Tool, root: &Path) -> Result<Option<Located>, String> {
     if tool.anchor == Anchor::ConfigFile {
         let cfg = root.join(tool.config_file);
         return Ok(cfg.is_file().then(|| located(tool, root, root, cfg)));
@@ -182,7 +182,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::tool::{Hooks, Workdir};
+    use crate::tool::{Cli, Hooks, Locate, Workdir};
 
     /// A tool whose config lives in a repo, mockspace's shape.
     const REPO: Tool = Tool {
@@ -198,6 +198,9 @@ mod tests {
             key: "work_dir",
             root_default: "mock",
         }),
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
 

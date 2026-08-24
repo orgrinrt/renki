@@ -20,7 +20,7 @@
 //! Declare a [`Tool`] as a `const`, and hand it over:
 //!
 //! ```no_run
-//! use renki::{Anchor, Hooks, Tool};
+//! use renki::{Anchor, Cli, Hooks, Locate, Tool};
 //!
 //! const TOOL: Tool = Tool {
 //!     anchor:          Anchor::Marker(".git"),
@@ -32,16 +32,26 @@
 //!     default_url:     "ssh://git@github.com/o/widget.git",
 //!     launcher_crate:  "widget",
 //!     workdir:         None,
+//!     dir_flag:        Cli::DIR_FLAG,
+//!     engine_flag:     Cli::ENGINE_FLAG,
+//!     locate:          Locate::DEFAULT,
 //!     hooks:           Hooks::NONE,
 //! };
 //!
 //! fn main() -> std::process::ExitCode {
-//!     renki::run(&TOOL)
+//!     // SAFETY: the first statement of main, before any thread exists.
+//!     unsafe { renki::run(&TOOL) }
 //! }
 //! ```
 //!
 //! Everything that is one tool's and no other's goes through [`Hooks`] rather
 //! than into this crate.
+
+// The crate's whole selling point is a small honest surface, and both of these
+// guard exactly that claim. `unreachable_pub` caught thirty-one items marked
+// public inside private modules, and one genuinely public type hiding in that
+// noise that the crate root had forgotten to re-export.
+#![warn(unreachable_pub, missing_docs)]
 
 mod cache;
 mod discover;
@@ -60,7 +70,7 @@ use std::process::ExitCode;
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
 pub use crate::manifest::{Header, Pin, Reference};
 pub use crate::pin::Resolved;
-pub use crate::tool::{Anchor, Hooks, Tool, Workdir};
+pub use crate::tool::{Anchor, Check, Cli, Hooks, Locate, Tool, Workdir};
 
 /// Where a resolved pin came from, so the registry can tell a repo that has
 /// adopted an explicit pin from one still on whatever legacy fallback the tool
@@ -72,15 +82,53 @@ enum PinSource {
 }
 
 /// The launcher entry. A tool's `main` is this and nothing else.
-pub fn run(tool: &Tool) -> ExitCode {
-    // The launcher runs as a child of git hooks, whose exported repo-location
-    // GIT_* variables poison every `git` this process, and the engine it
-    // spawns, invokes from a different working directory. Drop them first.
-    //
-    // SAFETY: this is the first statement of the installed binary's main; no
-    // thread has been spawned yet.
+///
+/// A launcher usually runs as a child of a git hook, whose exported
+/// repo-location `GIT_*` variables would poison every `git` this process and
+/// the engine it spawns invoke from a different working directory. This drops
+/// them, which is what makes it unsafe: the environment is process-global and
+/// unsynchronised, so the removal is sound only in a process that has not
+/// started a thread yet. That is a fact about the caller, which is why the
+/// caller states it.
+///
+/// # Safety
+///
+/// Call as the first statement of `main`, before anything spawns a thread and
+/// before anything reads the environment. See [`sanitize_git_env`], whose
+/// contract this inherits whole.
+///
+/// ```no_run
+/// # const TOOL: renki::Tool = renki::Tool {
+/// #     anchor: renki::Anchor::ConfigFile, short: "w", config_file: "w.toml",
+/// #     pin_prefix: "w", engine_crate: "w-engine", cache_namespace: "w",
+/// #     default_url: "https://example.invalid/w.git", launcher_crate: "w",
+/// #     workdir: None, dir_flag: renki::Cli::DIR_FLAG,
+/// #     engine_flag: renki::Cli::ENGINE_FLAG, locate: renki::Locate::DEFAULT,
+/// #     hooks: renki::Hooks::NONE,
+/// # };
+/// fn main() -> std::process::ExitCode {
+///     // SAFETY: the first statement of main, before any thread exists.
+///     unsafe { renki::run(&TOOL) }
+/// }
+/// ```
+///
+/// [`run_without_sanitizing`] is the safe door, for a caller that has already
+/// scrubbed or that is not a hook descendant and wants its environment left
+/// alone.
+pub unsafe fn run(tool: &Tool) -> ExitCode {
+    // SAFETY: forwarded to this function's own caller, unchanged.
     unsafe { sanitize_git_env() };
+    run_without_sanitizing(tool)
+}
 
+/// The launcher entry, without touching the environment.
+///
+/// Safe, and correspondingly narrower: a launcher reached from a git hook needs
+/// the scrub [`run`] performs, or every `git` it and its engine run reads the
+/// hook's repository rather than the one under the working directory. Reach for
+/// this when the caller has already sanitised, or when it knows it is not a
+/// hook descendant.
+pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
     let raw: Vec<String> = std::env::args().collect();
     let forwarded = normalize_args(tool, &raw);
     match dispatch(tool, &forwarded) {
@@ -164,9 +212,9 @@ fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
 /// name is `cargo-<x>`. That is cargo's convention rather than any one tool's,
 /// which is why it lives here.
 ///
-/// A user-supplied `--dir <x>` is stripped: the launcher owns `--dir` and
-/// always passes the absolute working directory.
-fn normalize_args(_tool: &Tool, raw: &[String]) -> Vec<String> {
+/// A user-supplied [`Tool::dir_flag`] is stripped, in either spelling: the
+/// launcher owns it and always passes the absolute working directory.
+fn normalize_args(tool: &Tool, raw: &[String]) -> Vec<String> {
     let prog = raw
         .first()
         .map(|p| {
@@ -183,37 +231,52 @@ fn normalize_args(_tool: &Tool, raw: &[String]) -> Vec<String> {
     {
         rest.remove(0);
     }
-    strip_dir_flag(rest)
+    strip_dir_flag(rest, tool.dir_flag)
 }
 
-/// Drop a `--dir <value>` pair anywhere in the args.
-fn strip_dir_flag(args: Vec<String>) -> Vec<String> {
-    let mut out = Vec::with_capacity(args.len());
-    let mut skip = false;
-    for a in args {
-        if skip {
-            skip = false;
-            continue;
-        }
-        if a == "--dir" {
-            skip = true;
-            continue;
-        }
-        out.push(a);
-    }
-    out
+/// Drop a user-supplied `<dir_flag> <value>` pair anywhere in the args, in
+/// either spelling. The launcher passes its own, so a second one is an
+/// ambiguity the engine should never have to resolve.
+///
+/// A `<dir_flag>` with no value after it is dropped too, and that is not the
+/// oversight it looks like beside the engine flag's refusal below. The user's
+/// directory is discarded whether they named one or not, so naming nothing
+/// changes nothing about the run.
+fn strip_dir_flag(args: Vec<String>, dir_flag: &str) -> Vec<String> {
+    engine::take_flag(args, dir_flag).1
+}
+
+/// Whether these arguments ask the launcher the locate question rather than
+/// asking the engine anything.
+///
+/// Its own function because the guard on the left is load-bearing and easy to
+/// lose: without it, a tool that wants no locate query at all has
+/// `subcommand: None`, an invocation with no arguments compares `None` against
+/// `None`, and every bare run answers the query instead of running the engine.
+fn is_the_locate_query(locate: &Locate, args: &[String]) -> bool {
+    locate.subcommand.is_some() && args.first().map(String::as_str) == locate.subcommand
 }
 
 fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // `--engine <path>` is the launcher's, so it comes off before anything
     // reads the arguments, the same as `--dir`.
-    let (engine_override, args) = engine::take_flag(args.to_vec());
+    let (engine_override, args) = engine::take_flag(args.to_vec(), tool.engine_flag);
+    // Passed with nothing after it. Running the pinned engine here is the exact
+    // opposite of what was asked, and it is the silent kind of wrong: the
+    // override path announces itself on stderr and this path would not.
+    if engine_override == engine::Flag::Missing {
+        return Err(format!(
+            "{} needs a path to an engine checkout, and none followed it",
+            tool.engine_flag
+        ));
+    }
+    let engine_override = engine_override.value();
     let args = args.as_slice();
 
     // Answered before anything else: it is a question about this checkout
     // rather than a run of the engine, so it skips the self-update, the pin
     // resolution and the build.
-    if args.first().map(String::as_str) == Some("locate") {
+    if is_the_locate_query(&tool.locate, args) {
         return locate_query(tool);
     }
 
@@ -241,9 +304,11 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // A repo state that would silently route the user somewhere else is refused
     // rather than tolerated. A retired cargo alias shadowing the launcher is the
     // case this exists for: the two spellings must be the same tool.
-    if located.is_some()
-        && let Some(verify) = tool.hooks.verify_repo_state
-    {
+    // Every run that found a root, config or none. A repo with no config is a
+    // repo that has not adopted the launcher, which is where a stale route left
+    // over from whatever it used before is most likely to still be in place, so
+    // gating this on a config found would skip the case it exists for.
+    if let Some(verify) = tool.hooks.verify_repo_state {
         verify(&root)?;
     }
 
@@ -446,6 +511,9 @@ mod tests {
         default_url: "u",
         launcher_crate: "cargo-mock",
         workdir: None,
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
 
@@ -510,6 +578,109 @@ mod tests {
             ),
             s(&["check", "--scope", "x"])
         );
+    }
+
+    #[test]
+    fn the_joined_dir_flag_is_stripped_too() {
+        // The defect the single `take_flag` exists to prevent, and the one the
+        // two copies before it had: the separated spelling was stripped and the
+        // joined one was forwarded, so the engine saw a flag the launcher owns
+        // and the launcher's own `--dir` fought it.
+        assert_eq!(
+            normalize_args(
+                &T,
+                &s(&["mock", "check", "--dir=/somewhere", "--scope", "x"])
+            ),
+            s(&["check", "--scope", "x"])
+        );
+        // the same for the flag this tool actually spells, in case a tool picks
+        // another and only one of the two spellings is wired to it
+        const OTHER: Tool = Tool {
+            dir_flag: "--at",
+            ..T
+        };
+        assert_eq!(
+            normalize_args(&OTHER, &s(&["mock", "check", "--at=/somewhere"])),
+            s(&["check"])
+        );
+        assert_eq!(
+            normalize_args(&OTHER, &s(&["mock", "check", "--dir=/somewhere"])),
+            s(&["check", "--dir=/somewhere"]),
+            "a flag the tool did not choose was stripped anyway"
+        );
+    }
+
+    #[test]
+    fn a_dir_flag_with_no_value_is_dropped_and_takes_nothing_with_it() {
+        // Deliberate, and the counterpart to the engine flag's refusal: the
+        // user's directory is discarded whether they named one or not, so
+        // naming nothing changes nothing. What must not happen is the next
+        // argument being eaten as the value.
+        assert_eq!(
+            normalize_args(&T, &s(&["mock", "check", "--dir", "--scope", "x"])),
+            s(&["check", "--scope", "x"])
+        );
+    }
+
+    #[test]
+    fn an_engine_flag_with_no_path_is_refused_rather_than_running_the_pinned_engine() {
+        // Before this, the flag came back as a bare `None`, which is what an
+        // absent flag also came back as, so the run fell through to the pinned
+        // engine. That is the opposite of what was asked and it is silent: the
+        // override path prints `ENGINE OVERRIDE` and this path printed nothing.
+        //
+        // The refusal is the first thing `dispatch` does, so this reaches it
+        // without any discovery, build or exec.
+        let e = dispatch(&T, &s(&["--engine"])).unwrap_err();
+        assert!(
+            e.contains("--engine") && e.contains("none followed it"),
+            "the refusal does not name the flag or say what was missing: {e}"
+        );
+
+        let e = dispatch(&T, &s(&["--engine", "--verbose"])).unwrap_err();
+        assert!(e.contains("--engine"), "{e}");
+
+        // and it names the tool's own flag, not the conventional spelling
+        const OTHER: Tool = Tool {
+            engine_flag: "--with",
+            ..T
+        };
+        let e = dispatch(&OTHER, &s(&["--with"])).unwrap_err();
+        assert!(e.contains("--with"), "{e}");
+        assert!(!e.contains("--engine"), "{e}");
+    }
+
+    #[test]
+    fn the_locate_query_needs_a_subcommand_to_ask_it_with() {
+        // The `is_some()` half of the guard. A tool that wants no locate query
+        // has `subcommand: None`, and a bare invocation has no first argument,
+        // so without it `None == None` and every plain run answers the query
+        // instead of running the engine.
+        const NO_QUERY: Locate = Locate {
+            subcommand: None,
+            ..Locate::DEFAULT
+        };
+        assert!(
+            !is_the_locate_query(&NO_QUERY, &s(&[])),
+            "a tool with no locate subcommand answered the query on a bare run"
+        );
+        assert!(!is_the_locate_query(&NO_QUERY, &s(&["locate"])));
+        assert!(!is_the_locate_query(&NO_QUERY, &s(&["lock"])));
+
+        // and the control, so the assertions above are not passing because the
+        // predicate is a constant `false`
+        assert!(is_the_locate_query(&Locate::DEFAULT, &s(&["locate"])));
+        assert!(!is_the_locate_query(&Locate::DEFAULT, &s(&[])));
+        assert!(!is_the_locate_query(&Locate::DEFAULT, &s(&["lock"])));
+
+        // a tool that spells it differently is asked by its own name and not by
+        // the conventional one
+        const RENAMED: Locate = Locate {
+            subcommand: Some("where"),
+            ..Locate::DEFAULT
+        };
+        assert!(is_the_locate_query(&RENAMED, &s(&["where"])));
+        assert!(!is_the_locate_query(&RENAMED, &s(&["locate"])));
     }
 
     #[test]

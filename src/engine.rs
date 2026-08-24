@@ -45,29 +45,72 @@ fn scratch_dir(cache_root: &Path) -> PathBuf {
 
 /// Pull `--engine <path>` (or `--engine=<path>`) out of the forwarded arguments.
 ///
-/// Returns the path and the arguments with the flag removed, so the engine never
-/// sees a flag the launcher owns, the same treatment `--dir` gets.
-pub fn take_flag(args: Vec<String>) -> (Option<String>, Vec<String>) {
-    let mut path = None;
+/// Take a `<flag> <value>` or `<flag>=<value>` pair out of the arguments.
+///
+/// Returns the value and the arguments with both halves removed, so the engine
+/// never sees a flag the launcher owns. One function rather than two, because
+/// the launcher does this to [`Tool::engine_flag`] keeping the value and to
+/// [`Tool::dir_flag`] discarding it, and two copies is how one of them came to
+/// handle the joined spelling while the other silently forwarded it.
+///
+/// A value beginning with `-` is not taken. `--engine --verbose` is a flag with
+/// its value missing, and reading `--verbose` as a path both loses the flag and
+/// produces a diagnostic about a file nobody named.
+pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
+    let joined = format!("{flag}=");
+    let mut found = Flag::Absent;
     let mut rest = Vec::with_capacity(args.len());
     let mut want_value = false;
     for arg in args {
         if want_value {
             want_value = false;
-            path = Some(arg);
-            continue;
+            if !arg.starts_with('-') {
+                found = Flag::Value(arg);
+                continue;
+            }
+            // The flag was passed and the next argument is another flag, so it
+            // stays `Missing` and this argument is the user's.
         }
-        if arg == "--engine" {
+        if arg == flag {
             want_value = true;
+            found = Flag::Missing;
             continue;
         }
-        if let Some(value) = arg.strip_prefix("--engine=") {
-            path = Some(value.to_string());
+        if let Some(value) = arg.strip_prefix(&joined) {
+            found = Flag::Value(value.to_string());
             continue;
         }
         rest.push(arg);
     }
-    (path, rest)
+    (found, rest)
+}
+
+/// What [`take_flag`] found, which is three things rather than two.
+///
+/// A flag nobody passed and a flag passed with nothing after it are different
+/// facts, and collapsing them to `None` is how `--engine` with no value came to
+/// run the pinned engine silently: the caller saw an absent override and did
+/// what it does when the user asked for nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Flag {
+    /// Not passed.
+    Absent,
+    /// Passed, with the value.
+    Value(String),
+    /// Passed, with no value after it. A usage error for a flag whose value is
+    /// read, and harmless for one whose value is discarded.
+    Missing,
+}
+
+impl Flag {
+    /// The value, for a caller that treats a missing one the same as an absent
+    /// flag. Only correct where the flag's value is discarded anyway.
+    pub(crate) fn value(self) -> Option<String> {
+        match self {
+            Self::Value(v) => Some(v),
+            Self::Absent | Self::Missing => None,
+        }
+    }
 }
 
 /// Check that `raw` looks like an engine checkout, and make it absolute.
@@ -79,7 +122,7 @@ pub fn take_flag(args: Vec<String>) -> (Option<String>, Vec<String>) {
 ///
 /// The tool's own `verify_engine_dir` hook runs after the manifest check, for
 /// whatever else that engine's checkout has to carry.
-pub fn locate(tool: &Tool, raw: &str) -> Result<PathBuf, String> {
+pub(crate) fn locate(tool: &Tool, raw: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw);
     let abs = if path.is_absolute() {
         path
@@ -112,7 +155,7 @@ pub fn locate(tool: &Tool, raw: &str) -> Result<PathBuf, String> {
 /// to run here would be a worse version of what cargo already does. cargo skips
 /// what genuinely did not change, and the target directory is kept between runs
 /// so it can.
-pub fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<PathBuf, String> {
+pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<PathBuf, String> {
     let scratch = scratch_dir(cache_root);
     sweep(&scratch);
 
@@ -185,7 +228,7 @@ fn sweep(scratch: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool::{Anchor, Hooks};
+    use crate::tool::{Anchor, Cli, Hooks, Locate};
 
     /// A tool that demands nothing of a checkout beyond a manifest.
     const PLAIN: Tool = Tool {
@@ -198,12 +241,18 @@ mod tests {
         default_url: "u",
         launcher_crate: "t-launcher",
         workdir: None,
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
 
     /// A tool that demands more, the way mockspace demands a lint-rules crate
     /// its custom-lint cdylibs can link against.
     const FUSSY: Tool = Tool {
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks {
             verify_engine_dir: Some(|abs| {
                 abs.join("extra")
@@ -225,15 +274,18 @@ mod tests {
         // The engine must never see it. It is the launcher's, like `--dir`, and
         // an engine given an argument it does not know reports a usage error
         // against a flag the user passed correctly.
-        let (path, rest) = take_flag(strings(&["lock", "--engine", "/tmp/e", "--verbose"]));
-        assert_eq!(path.as_deref(), Some("/tmp/e"));
+        let (path, rest) = take_flag(
+            strings(&["lock", "--engine", "/tmp/e", "--verbose"]),
+            "--engine",
+        );
+        assert_eq!(path, Flag::Value("/tmp/e".into()));
         assert_eq!(rest, strings(&["lock", "--verbose"]));
     }
 
     #[test]
     fn the_joined_form_is_the_same_flag() {
-        let (path, rest) = take_flag(strings(&["--engine=/tmp/e", "close"]));
-        assert_eq!(path.as_deref(), Some("/tmp/e"));
+        let (path, rest) = take_flag(strings(&["--engine=/tmp/e", "close"]), "--engine");
+        assert_eq!(path, Flag::Value("/tmp/e".into()));
         assert_eq!(rest, strings(&["close"]));
     }
 
@@ -241,19 +293,47 @@ mod tests {
     fn a_run_without_the_flag_is_untouched() {
         // The control. Every assertion above would hold for a parser that
         // dropped arguments it did not recognise.
-        let (path, rest) = take_flag(strings(&["lock", "--verbose"]));
-        assert!(path.is_none());
+        let (path, rest) = take_flag(strings(&["lock", "--verbose"]), "--engine");
+        assert_eq!(path, Flag::Absent);
         assert_eq!(rest, strings(&["lock", "--verbose"]));
     }
 
     #[test]
     fn a_trailing_flag_with_no_value_takes_nothing() {
-        let (path, rest) = take_flag(strings(&["lock", "--engine"]));
-        assert!(
-            path.is_none(),
-            "a value was invented for a flag that had none"
+        let (path, rest) = take_flag(strings(&["lock", "--engine"]), "--engine");
+        assert_eq!(
+            path,
+            Flag::Missing,
+            "a value was invented for a flag that had none, or its absence was \
+             reported as the flag never having been passed"
         );
         assert_eq!(rest, strings(&["lock"]));
+    }
+
+    #[test]
+    fn a_flag_with_another_flag_after_it_is_missing_its_value_rather_than_absent() {
+        // The distinction the caller acts on, and the one this returned as a
+        // bare `None` before: nobody passing the flag and somebody passing it
+        // with nothing after it are different facts, and only the first means
+        // "do what you do when it was not asked for".
+        let (never, rest) = take_flag(strings(&["lock", "--verbose"]), "--engine");
+        let (empty, rest2) = take_flag(strings(&["lock", "--engine", "--verbose"]), "--engine");
+        assert_eq!(never, Flag::Absent);
+        assert_eq!(empty, Flag::Missing);
+        assert_ne!(never, empty, "the two cases collapsed back into one");
+        // and in both the user's own argument survives, which is what the
+        // `-` check is for
+        assert_eq!(rest, strings(&["lock", "--verbose"]));
+        assert_eq!(rest2, strings(&["lock", "--verbose"]));
+    }
+
+    #[test]
+    fn value_collapses_missing_into_absent_and_nothing_else() {
+        // `strip_dir_flag` reads through this, deliberately: the user's
+        // directory is discarded whether they named one or not.
+        assert_eq!(Flag::Absent.value(), None);
+        assert_eq!(Flag::Missing.value(), None);
+        assert_eq!(Flag::Value("x".into()).value().as_deref(), Some("x"));
     }
 
     #[test]

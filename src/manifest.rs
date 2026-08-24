@@ -36,7 +36,10 @@ pub enum Reference {
 /// A pinned engine source: where it lives, and which revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pin {
+    /// Where the engine's source is. The tool's
+    /// [`default_url`](crate::Tool::default_url) when the config names none.
     pub url: String,
+    /// Which revision of it, in whichever of the four forms the config used.
     pub reference: Reference,
 }
 
@@ -100,7 +103,7 @@ impl Header {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool::{Anchor, Hooks, Workdir};
+    use crate::tool::{Anchor, Cli, Hooks, Locate, Workdir};
 
     const T: Tool = Tool {
         anchor: Anchor::Marker(".git"),
@@ -115,6 +118,9 @@ mod tests {
             key: "work_dir",
             root_default: "mock",
         }),
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
 

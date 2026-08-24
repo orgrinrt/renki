@@ -43,7 +43,7 @@ struct InstalledSource {
 
 /// Check for and apply a launcher update. May reinstall and re-exec, in which
 /// case it never returns; otherwise returns having done nothing user-visible.
-pub fn maybe_self_update(tool: &Tool, cache_root: &Path) {
+pub(crate) fn maybe_self_update(tool: &Tool, cache_root: &Path) {
     if std::env::var_os(tool.no_self_update_env()).is_some() {
         return;
     }
