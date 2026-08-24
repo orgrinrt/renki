@@ -141,13 +141,47 @@ pub(crate) fn ensure_built(
             failures.push(format!("{attempt:?} failed"));
         }
     }
-    Err(format!(
+    Err(build_failure(tool, &failures))
+}
+
+/// What the operator reads when no attempt produced a binary.
+///
+/// The toolchain is named because it is a real cause the message otherwise
+/// hides. `cargo install` resolves the engine's dependencies fresh rather than
+/// from its committed lockfile, so a transitive crate can float to a version
+/// whose minimum rustc is above the one in effect, and the build then fails on
+/// a crate nobody in this repo named. The toolchain in effect is the launcher's
+/// own, since `cargo install` inherits this process's working directory: the
+/// consuming repo's `rust-toolchain.toml` governs, not the engine's.
+///
+/// Measured rather than reasoned: installing one engine over `--git` failed
+/// under rustc 1.94 on a transitive crate requiring 1.96, and succeeded
+/// unchanged from a directory pinning a newer toolchain.
+fn build_failure(tool: &Tool, failures: &[String]) -> String {
+    format!(
         "could not build the {} engine for this pin; nothing was cached.\n  \
          tried, in order:\n    - {}\n  \
-         the pin may be wrong, the release may not exist yet, or the build broke.",
+         the pin may be wrong, the release may not exist yet, the build may have broken, \
+         or the toolchain in effect here ({}) may be older than one of the engine's \
+         dependencies requires.",
         tool.engine_crate,
-        failures.join("\n    - ")
-    ))
+        failures.join("\n    - "),
+        rustc_version_line()
+    )
+}
+
+/// The `rustc --version` line, for a diagnostic. Falls back to a phrase that
+/// reads correctly in the sentence above rather than to an empty string, which
+/// would leave the operator with an empty pair of brackets.
+fn rustc_version_line() -> String {
+    Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "no rustc on PATH".to_string())
 }
 
 /// The arguments the engine is run with: the tool's own directory flag and the
@@ -211,6 +245,49 @@ mod tests {
         hooks: Hooks::NONE,
     };
 
+    #[test]
+    fn the_build_failure_names_every_cause_including_the_toolchain() {
+        let msg = build_failure(&T, &["a failed".to_string(), "b failed".to_string()]);
+        // the engine it could not build, and each attempt in order
+        assert!(msg.contains("engine"), "{msg}");
+        assert!(
+            msg.contains("a failed") && msg.contains("b failed"),
+            "{msg}"
+        );
+        // the four causes, the last of which is the one an operator cannot see
+        // from the cargo output: `cargo install` resolves fresh rather than
+        // from the engine's committed lockfile, so a transitive crate floats to
+        // a version whose minimum rustc is above the one in effect, and the
+        // failure then names a crate nobody in the repo chose.
+        for cause in [
+            "pin may be wrong",
+            "release may not exist",
+            "build may have broken",
+        ] {
+            assert!(msg.contains(cause), "missing `{cause}`: {msg}");
+        }
+        assert!(msg.contains("toolchain in effect"), "{msg}");
+        // and it says WHICH. "check your toolchain" sends someone to read a
+        // file when the answer is what this process actually resolved.
+        assert!(
+            msg.contains("rustc ") || msg.contains("no rustc on PATH"),
+            "the toolchain is named as a cause but never identified: {msg}"
+        );
+        assert!(
+            !msg.contains("()"),
+            "an empty version left empty brackets: {msg}"
+        );
+    }
+
+    #[test]
+    fn the_version_line_is_never_empty_and_never_multiline() {
+        // It lands inside a parenthesised clause, so an empty or wrapped value
+        // breaks the sentence around it rather than merely being unhelpful.
+        let v = rustc_version_line();
+        assert!(!v.is_empty());
+        assert_eq!(v.lines().count(), 1, "{v:?}");
+        assert_eq!(v, v.trim(), "{v:?}");
+    }
     #[test]
     fn the_engine_is_handed_the_tools_own_directory_flag() {
         // The control that makes this mean anything: a tool whose flag is NOT
