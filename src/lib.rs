@@ -237,20 +237,46 @@ fn normalize_args(tool: &Tool, raw: &[String]) -> Vec<String> {
 /// Drop a user-supplied `<dir_flag> <value>` pair anywhere in the args, in
 /// either spelling. The launcher passes its own, so a second one is an
 /// ambiguity the engine should never have to resolve.
+///
+/// A `<dir_flag>` with no value after it is dropped too, and that is not the
+/// oversight it looks like beside the engine flag's refusal below. The user's
+/// directory is discarded whether they named one or not, so naming nothing
+/// changes nothing about the run.
 fn strip_dir_flag(args: Vec<String>, dir_flag: &str) -> Vec<String> {
     engine::take_flag(args, dir_flag).1
+}
+
+/// Whether these arguments ask the launcher the locate question rather than
+/// asking the engine anything.
+///
+/// Its own function because the guard on the left is load-bearing and easy to
+/// lose: without it, a tool that wants no locate query at all has
+/// `subcommand: None`, an invocation with no arguments compares `None` against
+/// `None`, and every bare run answers the query instead of running the engine.
+fn is_the_locate_query(locate: &Locate, args: &[String]) -> bool {
+    locate.subcommand.is_some() && args.first().map(String::as_str) == locate.subcommand
 }
 
 fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // `--engine <path>` is the launcher's, so it comes off before anything
     // reads the arguments, the same as `--dir`.
     let (engine_override, args) = engine::take_flag(args.to_vec(), tool.engine_flag);
+    // Passed with nothing after it. Running the pinned engine here is the exact
+    // opposite of what was asked, and it is the silent kind of wrong: the
+    // override path announces itself on stderr and this path would not.
+    if engine_override == engine::Flag::Missing {
+        return Err(format!(
+            "{} needs a path to an engine checkout, and none followed it",
+            tool.engine_flag
+        ));
+    }
+    let engine_override = engine_override.value();
     let args = args.as_slice();
 
     // Answered before anything else: it is a question about this checkout
     // rather than a run of the engine, so it skips the self-update, the pin
     // resolution and the build.
-    if tool.locate.subcommand.is_some() && args.first().map(String::as_str) == tool.locate.subcommand {
+    if is_the_locate_query(&tool.locate, args) {
         return locate_query(tool);
     }
 
@@ -552,6 +578,109 @@ mod tests {
             ),
             s(&["check", "--scope", "x"])
         );
+    }
+
+    #[test]
+    fn the_joined_dir_flag_is_stripped_too() {
+        // The defect the single `take_flag` exists to prevent, and the one the
+        // two copies before it had: the separated spelling was stripped and the
+        // joined one was forwarded, so the engine saw a flag the launcher owns
+        // and the launcher's own `--dir` fought it.
+        assert_eq!(
+            normalize_args(
+                &T,
+                &s(&["mock", "check", "--dir=/somewhere", "--scope", "x"])
+            ),
+            s(&["check", "--scope", "x"])
+        );
+        // the same for the flag this tool actually spells, in case a tool picks
+        // another and only one of the two spellings is wired to it
+        const OTHER: Tool = Tool {
+            dir_flag: "--at",
+            ..T
+        };
+        assert_eq!(
+            normalize_args(&OTHER, &s(&["mock", "check", "--at=/somewhere"])),
+            s(&["check"])
+        );
+        assert_eq!(
+            normalize_args(&OTHER, &s(&["mock", "check", "--dir=/somewhere"])),
+            s(&["check", "--dir=/somewhere"]),
+            "a flag the tool did not choose was stripped anyway"
+        );
+    }
+
+    #[test]
+    fn a_dir_flag_with_no_value_is_dropped_and_takes_nothing_with_it() {
+        // Deliberate, and the counterpart to the engine flag's refusal: the
+        // user's directory is discarded whether they named one or not, so
+        // naming nothing changes nothing. What must not happen is the next
+        // argument being eaten as the value.
+        assert_eq!(
+            normalize_args(&T, &s(&["mock", "check", "--dir", "--scope", "x"])),
+            s(&["check", "--scope", "x"])
+        );
+    }
+
+    #[test]
+    fn an_engine_flag_with_no_path_is_refused_rather_than_running_the_pinned_engine() {
+        // Before this, the flag came back as a bare `None`, which is what an
+        // absent flag also came back as, so the run fell through to the pinned
+        // engine. That is the opposite of what was asked and it is silent: the
+        // override path prints `ENGINE OVERRIDE` and this path printed nothing.
+        //
+        // The refusal is the first thing `dispatch` does, so this reaches it
+        // without any discovery, build or exec.
+        let e = dispatch(&T, &s(&["--engine"])).unwrap_err();
+        assert!(
+            e.contains("--engine") && e.contains("none followed it"),
+            "the refusal does not name the flag or say what was missing: {e}"
+        );
+
+        let e = dispatch(&T, &s(&["--engine", "--verbose"])).unwrap_err();
+        assert!(e.contains("--engine"), "{e}");
+
+        // and it names the tool's own flag, not the conventional spelling
+        const OTHER: Tool = Tool {
+            engine_flag: "--with",
+            ..T
+        };
+        let e = dispatch(&OTHER, &s(&["--with"])).unwrap_err();
+        assert!(e.contains("--with"), "{e}");
+        assert!(!e.contains("--engine"), "{e}");
+    }
+
+    #[test]
+    fn the_locate_query_needs_a_subcommand_to_ask_it_with() {
+        // The `is_some()` half of the guard. A tool that wants no locate query
+        // has `subcommand: None`, and a bare invocation has no first argument,
+        // so without it `None == None` and every plain run answers the query
+        // instead of running the engine.
+        const NO_QUERY: Locate = Locate {
+            subcommand: None,
+            ..Locate::DEFAULT
+        };
+        assert!(
+            !is_the_locate_query(&NO_QUERY, &s(&[])),
+            "a tool with no locate subcommand answered the query on a bare run"
+        );
+        assert!(!is_the_locate_query(&NO_QUERY, &s(&["locate"])));
+        assert!(!is_the_locate_query(&NO_QUERY, &s(&["lock"])));
+
+        // and the control, so the assertions above are not passing because the
+        // predicate is a constant `false`
+        assert!(is_the_locate_query(&Locate::DEFAULT, &s(&["locate"])));
+        assert!(!is_the_locate_query(&Locate::DEFAULT, &s(&[])));
+        assert!(!is_the_locate_query(&Locate::DEFAULT, &s(&["lock"])));
+
+        // a tool that spells it differently is asked by its own name and not by
+        // the conventional one
+        const RENAMED: Locate = Locate {
+            subcommand: Some("where"),
+            ..Locate::DEFAULT
+        };
+        assert!(is_the_locate_query(&RENAMED, &s(&["where"])));
+        assert!(!is_the_locate_query(&RENAMED, &s(&["locate"])));
     }
 
     #[test]
