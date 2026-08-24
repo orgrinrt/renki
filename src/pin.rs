@@ -5,107 +5,88 @@
 
 //! Resolving a pinned engine to concrete build attempts.
 //!
-//! The pin *schema* (which `mockspace.toml` keys, the `Cargo.lock` fallback,
-//! the [`Pin`] / [`Reference`] types) lives in the shared `mockspace-manifest`
-//! crate, so the launcher and the engine parse it identically. This module is
-//! the launcher-only half: turning a [`Pin`] into `cargo install` attempts,
-//! which means resolving a branch pin to a concrete rev via `git ls-remote`
-//! (cached with a TTL) and naming the pin-matched lint-rules dep.
+//! The pin schema lives in [`crate::manifest`]. This is the half that turns a
+//! [`Pin`] into `cargo install` attempts, which means resolving a branch pin to
+//! a concrete rev via `git ls-remote`, cached with a TTL.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub use mockspace_manifest::{Pin, Reference};
-
+pub use crate::manifest::{Pin, Reference};
 use crate::hash::Fnv;
-
-/// The crates.io package name of the engine.
-pub const ENGINE_CRATE: &str = "mockspace";
+use crate::tool::Tool;
 
 /// A branch pin re-resolves to a concrete rev at most this often; a fresh
 /// resolution within the window is reused without a network round-trip. Kept
-/// short so a repo tracking a branch (e.g. `mockspace_branch = "dev"`) picks up
-/// new heads within the hour, matching the launcher's self-update cadence.
+/// short so a repo tracking a branch picks up new heads within the hour,
+/// matching the launcher's own self-update cadence.
 const BRANCH_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// A pin resolved to concrete build attempts.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
-    /// The stable component of the cache key: `v:<version>` for a release,
-    /// the concrete rev for a rev/branch pin, `tag:<t>` for a git tag.
-    pub key_rev:        String,
-    /// One or more `cargo install` argument lists (source selectors, package
-    /// name included; `--root`/`--force` are added by the cache), tried in
-    /// order until one succeeds. A `version` pin tries crates.io first, then
-    /// the matching git tag.
-    pub attempts:       Vec<Vec<String>>,
-    /// The cargo dependency *value* for `mockspace-lint-rules`, renamed to the
-    /// package `mockspace`, pinned to the same source the engine is built
-    /// from. Passed to the engine so a custom-lint cdylib links the identical
-    /// lint-rules and its `Box<dyn Lint>` vtables match. Always a git ref (the
-    /// lint-rules crate lives in the same repo at the same tag/rev).
-    pub lint_rules_dep: String,
+    /// The pin this came from, kept so a tool's hooks can derive whatever they
+    /// need to hand the engine without re-reading the config. A dependency that
+    /// must match the exact revision the engine was built from is the case.
+    pub pin:      Pin,
+    /// The stable component of the cache key: `v:<version>` for a release, the
+    /// concrete rev for a rev or branch pin, `tag:<t>` for a tag.
+    pub key_rev:  String,
+    /// One or more `cargo install` argument lists, source selectors and package
+    /// name included, tried in order until one succeeds. `--root` and `--force`
+    /// are added by the cache. A version pin tries the registry first, then the
+    /// matching git tag.
+    pub attempts: Vec<Vec<String>>,
+}
+
+impl Resolved {
+    /// The git ref kind and value this resolved to, for a hook building a
+    /// dependency pinned to the same source. Always a concrete immutable ref:
+    /// a branch has already become the rev it pointed at.
+    pub fn git_ref(&self) -> (&'static str, &str) {
+        match &self.pin.reference {
+            Reference::Version(v) | Reference::Tag(v) => ("tag", v.as_str()),
+            Reference::Rev(_) | Reference::Branch(_) => ("rev", self.key_rev.as_str()),
+        }
+    }
 }
 
 /// Resolve a pin to concrete build attempts. A branch resolves to its current
-/// head via `git ls-remote`, cached with a TTL; a rev, tag, or version is
+/// head via `git ls-remote`, cached with a TTL; a rev, tag or version is
 /// already immutable.
-pub fn resolve(pin: &Pin, cache_root: &Path) -> Result<Resolved, String> {
+pub fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resolved, String> {
     let git = |sel: &[&str]| -> Vec<String> {
         let mut a = vec!["--git".to_string(), pin.url.clone()];
         a.extend(sel.iter().map(|s| s.to_string()));
-        a.push(ENGINE_CRATE.to_string());
+        a.push(tool.engine_crate.to_string());
         a
     };
-    // the lint-rules dep, renamed to `mockspace`, pinned by the same git ref
-    // (kind = "tag" | "rev") so a lint cdylib links identical types.
-    let lint_dep = |kind: &str, val: &str| -> String {
-        format!(
-            "{{ package = \"mockspace-lint-rules\", git = \"{}\", {kind} = \"{val}\" }}",
-            pin.url
-        )
-    };
-    match &pin.reference {
+    let (key_rev, attempts) = match &pin.reference {
         Reference::Version(v) => {
-            Ok(Resolved {
-                key_rev:        format!("v:{v}"),
-                attempts:       vec![
-                    // crates.io release first ("maps to crates.io directly").
-                    // Forward-looking: the engine is `publish = false` today, so
-                    // this attempt currently fails on a cold build and falls
-                    // through to the git tag below (silently, since ensure_built
-                    // only reports failure when every attempt fails). It becomes
-                    // the fast path once the engine publishes.
-                    vec![ENGINE_CRATE.into(), "--version".into(), v.clone()],
-                    // the matching git tag: works before the engine is published
-                    // and for git-only consumers.
-                    git(&["--tag", v]),
-                ],
-                lint_rules_dep: lint_dep("tag", v),
-            })
+            (format!("v:{v}"), vec![
+                // the registry release first, which is the fast path once the
+                // engine publishes. Before that it fails on a cold build and
+                // falls through to the tag below, silently, since a failure is
+                // only reported when every attempt fails.
+                vec![tool.engine_crate.to_string(), "--version".into(), v.clone()],
+                // the matching git tag: works before the engine is published,
+                // and for git-only consumers after.
+                git(&["--tag", v]),
+            ])
         },
-        Reference::Rev(r) => {
-            Ok(Resolved {
-                key_rev:        r.clone(),
-                attempts:       vec![git(&["--rev", r])],
-                lint_rules_dep: lint_dep("rev", r),
-            })
-        },
-        Reference::Tag(t) => {
-            Ok(Resolved {
-                key_rev:        format!("tag:{t}"),
-                attempts:       vec![git(&["--tag", t])],
-                lint_rules_dep: lint_dep("tag", t),
-            })
-        },
+        Reference::Rev(r) => (r.clone(), vec![git(&["--rev", r])]),
+        Reference::Tag(t) => (format!("tag:{t}"), vec![git(&["--tag", t])]),
         Reference::Branch(b) => {
             let sha = resolve_branch(pin, b, cache_root)?;
-            Ok(Resolved {
-                key_rev:        sha.clone(),
-                attempts:       vec![git(&["--rev", &sha])],
-                lint_rules_dep: lint_dep("rev", &sha),
-            })
+            let attempts = vec![git(&["--rev", &sha])];
+            (sha, attempts)
         },
-    }
+    };
+    Ok(Resolved {
+        pin: pin.clone(),
+        key_rev,
+        attempts,
+    })
 }
 
 fn resolve_branch(pin: &Pin, branch: &str, cache_root: &Path) -> Result<String, String> {
@@ -138,11 +119,7 @@ fn fresh_resolution(path: &Path) -> Option<String> {
     if sha.is_empty() {
         return None;
     }
-    if unix_now().saturating_sub(ts) <= BRANCH_TTL.as_secs() {
-        Some(sha)
-    } else {
-        None
-    }
+    (unix_now().saturating_sub(ts) <= BRANCH_TTL.as_secs()).then_some(sha)
 }
 
 pub(crate) fn ls_remote_head(url: &str, branch: &str) -> Result<String, String> {
@@ -181,73 +158,118 @@ fn branch_resolution_path(cache_root: &Path, url: &str, branch: &str) -> std::pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool::{Anchor, Hooks};
 
-    #[test]
-    fn version_maps_to_cratesio_then_git_tag() {
-        let dir = tempfile::tempdir().unwrap();
-        let pin = Pin {
-            url:       mockspace_manifest::CANONICAL_URL.to_string(),
-            reference: Reference::Version("0.0.0-d05".into()),
-        };
-        let r = resolve(&pin, dir.path()).unwrap();
-        assert_eq!(r.key_rev, "v:0.0.0-d05");
-        assert_eq!(r.attempts.len(), 2);
-        assert_eq!(r.attempts[0], vec!["mockspace", "--version", "0.0.0-d05"]);
-        assert_eq!(r.attempts[1], vec![
-            "--git",
-            mockspace_manifest::CANONICAL_URL,
-            "--tag",
-            "0.0.0-d05",
-            "mockspace"
-        ]);
+    const T: Tool = Tool {
+        anchor:          Anchor::Marker(".git"),
+        short:           "mock",
+        config_file:     "t.toml",
+        pin_prefix:      "t",
+        engine_crate:    "engine",
+        cache_namespace: "t",
+        default_url:     "u",
+        launcher_crate:  "t-launcher",
+        workdir:         None,
+        hooks:           Hooks::NONE,
+    };
+
+    fn pin(r: Reference) -> Pin {
+        Pin {
+            url:       "u".into(),
+            reference: r,
+        }
     }
 
     #[test]
-    fn rev_resolves_to_single_git_attempt() {
-        let dir = tempfile::tempdir().unwrap();
-        let pin = Pin {
-            url:       "u".into(),
-            reference: Reference::Rev("sha1".into()),
+    fn a_version_tries_the_registry_then_the_matching_tag() {
+        let d = tempfile::tempdir().unwrap();
+        let r = resolve(&T, &pin(Reference::Version("0.0.0-d05".into())), d.path()).unwrap();
+        assert_eq!(r.key_rev, "v:0.0.0-d05");
+        assert_eq!(r.attempts, vec![
+            vec!["engine", "--version", "0.0.0-d05"],
+            vec!["--git", "u", "--tag", "0.0.0-d05", "engine"],
+        ]);
+        // and the dep a hook would build points at the tag, not the version
+        assert_eq!(r.git_ref(), ("tag", "0.0.0-d05"));
+    }
+
+    #[test]
+    fn the_engine_crate_named_in_the_attempts_is_the_tools_own() {
+        // the control that makes the assertions above mean anything: nothing
+        // mockspace-shaped is baked into the argument lists.
+        let d = tempfile::tempdir().unwrap();
+        const OTHER: Tool = Tool {
+            engine_crate: "somethingelse",
+            ..T
         };
-        let r = resolve(&pin, dir.path()).unwrap();
+        let r = resolve(&OTHER, &pin(Reference::Tag("v1".into())), d.path()).unwrap();
+        assert_eq!(r.attempts, vec![vec![
+            "--git",
+            "u",
+            "--tag",
+            "v1",
+            "somethingelse"
+        ]]);
+    }
+
+    #[test]
+    fn a_rev_resolves_to_one_git_attempt() {
+        let d = tempfile::tempdir().unwrap();
+        let r = resolve(&T, &pin(Reference::Rev("sha1".into())), d.path()).unwrap();
         assert_eq!(r.key_rev, "sha1");
         assert_eq!(r.attempts, vec![vec![
-            "--git",
-            "u",
-            "--rev",
-            "sha1",
-            "mockspace"
+            "--git", "u", "--rev", "sha1", "engine"
         ]]);
+        assert_eq!(r.git_ref(), ("rev", "sha1"));
     }
 
     #[test]
-    fn tag_resolves_to_git_tag_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let pin = Pin {
-            url:       "u".into(),
-            reference: Reference::Tag("nightly".into()),
-        };
-        let r = resolve(&pin, dir.path()).unwrap();
+    fn a_tag_resolves_to_the_tag_only() {
+        let d = tempfile::tempdir().unwrap();
+        let r = resolve(&T, &pin(Reference::Tag("nightly".into())), d.path()).unwrap();
         assert_eq!(r.key_rev, "tag:nightly");
         assert_eq!(r.attempts, vec![vec![
-            "--git",
-            "u",
-            "--tag",
-            "nightly",
-            "mockspace"
+            "--git", "u", "--tag", "nightly", "engine"
         ]]);
+        assert_eq!(r.git_ref(), ("tag", "nightly"));
     }
 
     #[test]
-    fn branch_resolution_ttl_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = branch_resolution_path(dir.path(), "u", "dev");
+    fn the_branch_resolution_is_reused_inside_the_ttl_and_not_outside_it() {
+        let d = tempfile::tempdir().unwrap();
+        let path = branch_resolution_path(d.path(), "u", "dev");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let now = unix_now();
         std::fs::write(&path, format!("{now}\nfeedface99\n")).unwrap();
         assert_eq!(fresh_resolution(&path), Some("feedface99".into()));
-        let old = now - BRANCH_TTL.as_secs() - 1;
-        std::fs::write(&path, format!("{old}\nfeedface99\n")).unwrap();
+
+        std::fs::write(&path, format!("{}\nfeedface99\n", now - BRANCH_TTL.as_secs() - 1)).unwrap();
         assert_eq!(fresh_resolution(&path), None);
+    }
+
+    #[test]
+    fn a_malformed_or_empty_resolution_is_not_reused() {
+        // the control on the reader: a truncated write must not resolve to an
+        // empty rev, which would key the cache on nothing and build the default
+        // branch instead of the pin.
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("m");
+        for bad in ["", "notanumber\nabc\n", &format!("{}\n\n", unix_now()), "123\n"] {
+            std::fs::write(&path, bad).unwrap();
+            assert_eq!(fresh_resolution(&path), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn two_branches_on_one_url_do_not_share_a_resolution() {
+        let d = tempfile::tempdir().unwrap();
+        assert_ne!(
+            branch_resolution_path(d.path(), "u", "dev"),
+            branch_resolution_path(d.path(), "u", "main")
+        );
+        assert_ne!(
+            branch_resolution_path(d.path(), "u", "dev"),
+            branch_resolution_path(d.path(), "v", "dev")
+        );
     }
 }

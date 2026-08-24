@@ -3,112 +3,152 @@
 // SPDX-License-Identifier: MPL-2.0     https://mozilla.org/MPL/2.0        contact@hiisi.digital
 //--------------------------------------------------------------------------------------------------
 
-//! `cargo-mock` / `mock`: the launcher for the mockspace design-round
-//! workflow engine.
+//! The launcher half of a pinned-engine command-line tool.
 //!
-//! It resolves the engine version a repo pins (root `mockspace.toml`,
-//! `mockspace_version = "..."`, mapping to a git tag and a crates.io release),
-//! builds that engine once into a shared per-version cache under
-//! `~/.cache/mockspace/builds/`, and execs it with the absolute mock dir so
-//! the working directory never matters. No proxy crate, no `.cargo` alias, no
-//! `build.rs` bootstrap: the launcher is the sole entry.
+//! A tool built this way has two pieces. The **engine** does the work and is
+//! version-pinned by each repo that uses it. The **launcher** is what sits on
+//! `PATH`: it finds the repo, reads the pin, builds that exact engine once into
+//! a shared per-version cache, and execs it with an absolute working directory
+//! so the shell's cwd never matters.
 //!
-//! Installed as two binaries from one source: `cargo-mock` (cargo's external
-//! subcommand convention, so `cargo mock ...` works) and `mock` (the short
-//! direct form).
+//! The point is that a repo's tooling cannot drift from what the repo asked
+//! for, and that the launcher keeps itself current so nobody has to remember
+//! to. A hand-installed binary goes stale silently and nothing reports it.
+//!
+//! # Using it
+//!
+//! Declare a [`Tool`] as a `const`, and hand it over:
+//!
+//! ```no_run
+//! use renki::{Anchor, Hooks, Tool};
+//!
+//! const TOOL: Tool = Tool {
+//!     anchor:          Anchor::Marker(".git"),
+//!     short:           "widget",
+//!     config_file:     "widget.toml",
+//!     pin_prefix:      "widget",
+//!     engine_crate:    "widget-engine",
+//!     cache_namespace: "widget",
+//!     default_url:     "ssh://git@github.com/o/widget.git",
+//!     launcher_crate:  "widget",
+//!     workdir:         None,
+//!     hooks:           Hooks::NONE,
+//! };
+//!
+//! fn main() -> std::process::ExitCode {
+//!     renki::run(&TOOL)
+//! }
+//! ```
+//!
+//! Everything that is one tool's and no other's goes through [`Hooks`] rather
+//! than into this crate.
 
 mod cache;
 mod discover;
 mod engine;
+mod env;
 mod hash;
+mod manifest;
 mod pin;
 mod registry;
 mod selfupdate;
+mod tool;
 
 use std::path::Path;
 use std::process::ExitCode;
 
-use mockspace_manifest::gate::HOOK_VERSION;
-use pin::{Pin, Reference};
+pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
+pub use crate::manifest::{Header, Pin, Reference};
+pub use crate::pin::Resolved;
+pub use crate::tool::{Anchor, Hooks, Tool, Workdir};
 
 /// Where a resolved pin came from, so the registry can tell a repo that has
-/// adopted an explicit `mockspace_*` pin from one still on the legacy
-/// `Cargo.lock` fallback (the migration-detection signal).
+/// adopted an explicit pin from one still on whatever legacy fallback the tool
+/// honours. That difference is the migration-detection signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PinSource {
-    Toml,
+    Config,
     Legacy,
 }
 
-/// The launcher entry, shared by both installed binaries (`cargo-mock` and
-/// `mock`). Each bin is a two-line shim over this.
-pub fn run_cli() -> ExitCode {
+/// The launcher entry. A tool's `main` is this and nothing else.
+pub fn run(tool: &Tool) -> ExitCode {
     // The launcher runs as a child of git hooks, whose exported repo-location
-    // GIT_* variables poison every `git` this process (and the engine it
-    // spawns) invokes from a different working directory. Drop them first.
+    // GIT_* variables poison every `git` this process, and the engine it
+    // spawns, invokes from a different working directory. Drop them first.
     //
-    // SAFETY: this is the first statement of both installed binaries' mains;
-    // no thread has been spawned yet.
-    unsafe { mockspace_manifest::gate::sanitize_git_env() };
+    // SAFETY: this is the first statement of the installed binary's main; no
+    // thread has been spawned yet.
+    unsafe { sanitize_git_env() };
 
     let raw: Vec<String> = std::env::args().collect();
-    let forwarded = normalize_args(&raw);
-    match run(&forwarded) {
-        Ok(()) => ExitCode::SUCCESS, // unreachable when exec succeeds
+    let forwarded = normalize_args(tool, &raw);
+    match dispatch(tool, &forwarded) {
+        Ok(()) => ExitCode::SUCCESS, // unreachable when the exec succeeds
         Err(e) => {
-            eprintln!("mock: {e}");
+            eprintln!("{}: {e}", tool.short);
             ExitCode::FAILURE
         },
     }
 }
 
-/// Print where this checkout keeps its mockspace, as shell-assignable lines.
+/// Print where this checkout keeps its config and working directory, as
+/// shell-assignable lines.
 ///
-/// `discover::locate` is the authority on the search, including the rule that a
-/// repository has exactly one `mockspace.toml`. Every other consumer of that
-/// answer should ask here instead of walking the tree itself: the git hooks
-/// already carry a shell reimplementation that has to be kept in step, and a
-/// third copy is how the three drift apart.
-///
-/// Output is `key=value`, one per line, absolute paths, safe to `eval`:
+/// [`discover::locate`] is the authority on the search. Every other consumer of
+/// that answer should ask here rather than walking the tree itself: a tool's
+/// git hooks typically carry a shell reimplementation that has to be kept in
+/// step, and a third copy is how the three drift apart.
 ///
 /// ```text
 /// root=/path/to/repo
-/// config=/path/to/repo/mockspace.toml
-/// mock_dir=/path/to/repo/mock
+/// config=/path/to/repo/widget.toml
+/// workdir=/path/to/repo/mock
 /// ```
 ///
-/// `config` is empty when the repository has a mock directory but no config,
-/// which is a real shape: mockspace's own repository is one.
-fn locate_query() -> Result<(), String> {
-    let root = discover::repo_root().ok_or_else(|| {
-        "not inside a git repository (no .git found, and MOCK_ROOT is unset)".to_string()
-    })?;
-    let located = discover::locate(&root)?;
-    let (config, mock_dir) = match located {
-        Some(l) => (l.config_path.display().to_string(), l.mock_dir),
+/// `config` is empty when the repo has a working directory but no config, which
+/// is a real shape rather than a broken one.
+fn locate_query(tool: &Tool) -> Result<(), String> {
+    let root = discover::repo_root(tool).ok_or_else(|| no_root(tool))?;
+    let located = discover::locate(tool, &root)?;
+    let (config, workdir) = match located {
+        Some(l) => (l.config_path.display().to_string(), l.workdir),
         // No config, so the conventional directory if it is there at all. The
         // caller distinguishes by the empty `config`.
-        None => (String::new(), root.join("mock")),
+        None => (String::new(), tool.workdir_default(&root)),
     };
     println!("root={}", root.display());
     println!("config={config}");
-    if mock_dir.is_dir() {
-        println!("mock_dir={}", mock_dir.display());
+    if workdir.is_dir() {
+        println!("workdir={}", workdir.display());
     } else {
-        println!("mock_dir=");
+        println!("workdir=");
     }
     Ok(())
 }
 
+fn no_root(tool: &Tool) -> String {
+    let what = match tool.anchor {
+        Anchor::Marker(m) => m.to_string(),
+        Anchor::ConfigFile => tool.config_file.to_string(),
+    };
+    format!(
+        "no {what} found in this directory or any above it, and {} is unset",
+        tool.root_env()
+    )
+}
+
 /// The user-facing arguments to forward to the engine.
 ///
-/// Two invocation shapes collapse to one: `mock <args...>` passes `<args...>`;
-/// `cargo mock <args...>` is executed by cargo as `cargo-mock mock <args...>`,
-/// so a leading `mock` is dropped when we were invoked as `cargo-mock`. Any
-/// user-supplied `--dir <x>` is stripped: the launcher owns `--dir` (it always
-/// passes the absolute mock dir).
-fn normalize_args(raw: &[String]) -> Vec<String> {
+/// Two invocation shapes collapse to one. Invoked directly, every argument is
+/// forwarded. Invoked as a cargo external subcommand, cargo executes
+/// `cargo-<x> <x> <args...>`, so a leading `<x>` is dropped when the program
+/// name is `cargo-<x>`. That is cargo's convention rather than any one tool's,
+/// which is why it lives here.
+///
+/// A user-supplied `--dir <x>` is stripped: the launcher owns `--dir` and
+/// always passes the absolute working directory.
+fn normalize_args(_tool: &Tool, raw: &[String]) -> Vec<String> {
     let prog = raw
         .first()
         .map(|p| {
@@ -120,7 +160,9 @@ fn normalize_args(raw: &[String]) -> Vec<String> {
         })
         .unwrap_or_default();
     let mut rest: Vec<String> = raw.iter().skip(1).cloned().collect();
-    if prog == "cargo-mock" && rest.first().map(String::as_str) == Some("mock") {
+    if let Some(sub) = prog.strip_prefix("cargo-")
+        && rest.first().map(String::as_str) == Some(sub)
+    {
         rest.remove(0);
     }
     strip_dir_flag(rest)
@@ -144,129 +186,100 @@ fn strip_dir_flag(args: Vec<String>) -> Vec<String> {
     out
 }
 
-fn run(args: &[String]) -> Result<(), String> {
-    // `--engine <path>` is the launcher's, so it comes off before anything reads
-    // the arguments, the same as `--dir`.
+fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
+    // `--engine <path>` is the launcher's, so it comes off before anything
+    // reads the arguments, the same as `--dir`.
     let (engine_override, args) = engine::take_flag(args.to_vec());
     let args = args.as_slice();
 
-    // Answered before anything else: it is a question about this checkout, not
-    // a run of the engine, so it skips the self-update and the pin resolution
-    // and the build. Anything that needs to know where the mockspace is asks
-    // this rather than reimplementing the search, which has already been
-    // reimplemented once in the git hooks and must stay in sync there.
+    // Answered before anything else: it is a question about this checkout
+    // rather than a run of the engine, so it skips the self-update, the pin
+    // resolution and the build.
     if args.first().map(String::as_str) == Some("locate") {
-        return locate_query();
+        return locate_query(tool);
     }
 
-    // Keep the launcher itself current (branch installs only, hourly, opt-out).
+    // Keep the launcher itself current: branch installs only, hourly, opt-out.
     // May reinstall and re-exec into the new binary, never returning.
     //
-    // Skipped under `--engine`: that flag says which engine to run, and
-    // replacing the launcher underneath a deliberate override is the one moment
-    // an automatic update is unwelcome.
+    // Skipped under `--engine`, which says which engine to run: replacing the
+    // launcher underneath a deliberate override is the one moment an automatic
+    // update is unwelcome.
     if engine_override.is_none()
-        && let Ok(cache_root) = cache::cache_root()
+        && let Ok(cache_root) = cache::cache_root(tool)
     {
-        selfupdate::maybe_self_update(&cache_root);
+        selfupdate::maybe_self_update(tool, &cache_root);
     }
 
-    let root = discover::repo_root().ok_or_else(|| {
-        "not inside a git repository (no .git found, and MOCK_ROOT is unset)".to_string()
-    })?;
-    // `locate` hard-errors (blocking the run) if the repo has more than one
-    // mockspace.toml; `None` means none (legacy fallback), `Some` exactly one.
-    let located = discover::locate(&root)?;
-    // fall back to the conventional mock dir for a repo that has only a legacy
-    // Cargo.lock pin and no mockspace.toml yet.
-    let mock_abs = located
+    let root = discover::repo_root(tool).ok_or_else(|| no_root(tool))?;
+    // `locate` hard-errors, blocking the run, when a marker-anchored repo has
+    // more than one config. `None` means none, `Some` exactly one.
+    let located = discover::locate(tool, &root)?;
+    let workdir = located
         .as_ref()
-        .map(|l| l.mock_dir.clone())
-        .unwrap_or_else(|| root.join("mock"));
+        .map(|l| l.workdir.clone())
+        .unwrap_or_else(|| tool.workdir_default(&root));
 
-    if located.is_none() && !mock_abs.join("Cargo.lock").exists() {
-        return Err(format!(
-            "no mockspace.toml found under {} and no legacy Cargo.lock pin",
-            root.display()
-        ));
+    // A repo state that would silently route the user somewhere else is refused
+    // rather than tolerated. A retired cargo alias shadowing the launcher is the
+    // case this exists for: the two spellings must be the same tool.
+    if located.is_some()
+        && let Some(verify) = tool.hooks.verify_repo_state
+    {
+        verify(&root)?;
     }
 
-    // A retired alias intercepts `cargo mock` before this launcher ever runs
-    // under that spelling, so it is refused rather than tolerated: the two
-    // spellings must be the same tool.
-    if located.is_some() {
-        // Both spellings cargo honours: config.toml and the extensionless
-        // legacy config. The refusal covers what the retired bootstrap wrote,
-        // which was always repo-local; a user's own alias elsewhere is their
-        // choice, not an anomaly of ours.
-        let candidates = [
-            root.join(".cargo").join("config.toml"),
-            root.join(".cargo").join("config"),
-        ];
-        for cargo_cfg in candidates {
-            let Ok(cfg) = std::fs::read_to_string(&cargo_cfg) else {
-                continue;
-            };
-            if legacy_alias_present(&cfg) {
-                return Err(format!(
-                    "a retired `cargo mock` alias sits in {}. Cargo resolves \
-                     aliases before external subcommands, so `cargo mock` runs \
-                     whatever the alias points at instead of this launcher. \
-                     Delete the `mock = ...` line, and the [alias] table if \
-                     that empties it, then re-run.",
-                    cargo_cfg.display()
-                ));
-            }
-        }
-    }
-
-    // Plant the durable gate BEFORE building the engine.
+    // Whatever the tool keeps planted in a repo goes in BEFORE the engine is
+    // built.
     //
-    // The engine used to be the only thing that installed it, which leaves a
-    // window nothing covers: every way the engine can fail to run also leaves the
-    // repo ungated, silently. Its build can fail on a bad pin, on no network, or
-    // on a compile error in the pinned revision, and it can fail on the repo's own
-    // contents, which is not hypothetical: a workspace with no members exited
-    // non-zero before reaching any setup. The launcher cannot fail for any of
-    // those reasons, so it plants the gate and the engine keeps it current.
+    // Leaving it to the engine leaves a window nothing covers: every way the
+    // engine can fail to run also leaves the repo unprepared, silently. Its
+    // build can fail on a bad pin, on no network, or on a compile error in the
+    // pinned revision. The launcher cannot fail for any of those reasons.
     //
-    // Best-effort and quiet on success: a gate that cannot be written is worth
-    // reporting, but it must not stop the command the user actually ran.
-    if located.is_some() {
-        plant_gate(&root);
+    // Best-effort by contract: it must not stop the command the user ran.
+    if located.is_some()
+        && let Some(prepare) = tool.hooks.prepare_repo
+    {
+        prepare(&root);
     }
 
-    let cache_root = cache::cache_root()?;
+    let cache_root = cache::cache_root(tool)?;
 
     // The scratch path: build the engine from a checkout on disk and run this
-    // repo's gate against it. No pin is resolved, nothing is recorded in the
-    // registry, and nothing is keyed by revision, because the source is a
-    // working tree and the question being asked is what it does right now.
+    // repo against it. No pin is resolved, nothing is recorded in the registry
+    // and nothing is keyed by revision, because the source is a working tree
+    // and the question is what it does right now.
     if let Some(raw) = engine_override {
-        let source = engine::locate(&raw)?;
+        let source = engine::locate(tool, &raw)?;
         eprintln!(
-            "mock: ENGINE OVERRIDE: running the engine at {} instead of this \
-             repo's pinned engine",
+            "{}: ENGINE OVERRIDE: running the engine at {} instead of this repo's pinned engine",
+            tool.short,
             source.display()
         );
-        let bin = engine::build(&cache_root, &source)?;
-        let dep = engine::lint_rules_dep(&source);
-        return cache::exec_engine(&bin, &mock_abs, &dep, args).map(|_never| ());
+        let bin = engine::build(tool, &cache_root, &source)?;
+        let extra = tool
+            .hooks
+            .engine_args_local
+            .map(|f| f(&source))
+            .unwrap_or_default();
+        return cache::exec_engine(&bin, &workdir, &extra, args).map(|_never| ());
     }
 
-    let (pin, source) = resolve_pin(located.as_ref(), &root, &mock_abs)?;
-    let resolved = pin::resolve(&pin, &cache_root)?;
+    let (pin, source) = resolve_pin(tool, located.as_ref(), &root, &workdir)?;
+    let resolved = pin::resolve(tool, &pin, &cache_root)?;
     let toolchain = cache::rustc_fingerprint();
     let key = cache::compute_key(&pin.url, &resolved.key_rev, &toolchain, &[]);
-    let bin = cache::ensure_built(&cache_root, &key, &resolved)?;
+    let bin = cache::ensure_built(tool, &cache_root, &key, &resolved)?;
 
-    // Record this repo + build in the global registry and, at most once a day,
-    // garbage-collect engine builds nothing pins anymore. Best-effort: the
-    // registry is a cache, never a reason to fail a `mock` run.
+    // Record this repo and build in the registry, then at most once a day
+    // collect engine builds nothing pins anymore. Best-effort throughout: the
+    // registry is a cache, never a reason to fail a run.
     record_and_gc(
+        tool,
         &cache_root,
         &root,
-        &mock_abs,
+        &workdir,
         &pin,
         source,
         &resolved,
@@ -274,77 +287,25 @@ fn run(args: &[String]) -> Result<(), String> {
         &key,
     );
 
-    // A concurrent launcher's GC pass protects only *its own* resolved key, so
-    // it could have evicted this build in the window between our build and this
-    // exec. Re-materialise it if so, so a background GC never fails a `mock`
-    // run (the best-effort registry invariant).
+    // A concurrent launcher's collection pass protects only its own resolved
+    // key, so it could have evicted this build between our build and this exec.
+    // Re-materialise if so, so a background collection never fails a run.
     let bin = if bin.is_file() {
         bin
     } else {
-        cache::ensure_built(&cache_root, &key, &resolved)?
+        cache::ensure_built(tool, &cache_root, &key, &resolved)?
     };
 
-    // The engine builds and loads this repo's custom lints itself (into its own
-    // target/), using the pin-matched lint-rules dep we pass along; the
-    // launcher no longer needs to know about lints.
-    cache::exec_engine(&bin, &mock_abs, &resolved.lint_rules_dep, args).map(|_never| ())
+    let extra = tool
+        .hooks
+        .engine_args
+        .map(|f| f(&resolved))
+        .unwrap_or_default();
+    cache::exec_engine(&bin, &workdir, &extra, args).map(|_never| ())
 }
 
-fn legacy_alias_present(config: &str) -> bool {
-    let mut in_alias = false;
-    for line in config.lines() {
-        let t = line.trim();
-        if t.starts_with('[') {
-            in_alias = t == "[alias]";
-            continue;
-        }
-        if in_alias
-            && (t.starts_with("mock =")
-                || t.starts_with("mock=")
-                || t.starts_with("\"mock\" =")
-                || t.starts_with("\"mock\"="))
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// Install the durable hooks and point `core.hooksPath` at them.
-///
-/// The hook version is the launcher's own, and is deliberately shared with the
-/// engine through `mockspace-manifest` rather than duplicated: two copies of a
-/// version number is how a repo ends up with hooks from one era wired by another.
-/// Whether the repo's `.cargo/config.toml` still carries the retired
-/// `cargo mock` alias.
-///
-/// Cargo resolves aliases before external subcommands, so a leftover alias
-/// shadows this launcher whenever `cargo mock` is typed: the user runs
-/// whatever the alias points at, not the pinned engine, and nothing says so.
-/// Per the anomalous-state rule that is an error with guidance, never a
-/// silent difference between `mock` and `cargo mock`.
-fn plant_gate(root: &Path) {
-    let Some(dir) = mockspace_manifest::gate::durable_hooks_dir(HOOK_VERSION) else {
-        return; // no home directory to write into; nothing to do
-    };
-    let mut actions = mockspace_manifest::gate::install_durable_hooks(&dir, HOOK_VERSION);
-    // The same opt-out the engine honours; without it here the launcher edited
-    // `core.hooksPath` on every invocation and the variable was inert on the
-    // normal path. Hooks still get written; they are inert files until wired.
-    if std::env::var("MOCKSPACE_NO_AUTO_ACTIVATE").is_ok() {
-        for a in actions {
-            eprintln!("mock: {a}");
-        }
-        return;
-    }
-    actions.extend(mockspace_manifest::gate::activate(root, &dir));
-    for a in actions {
-        eprintln!("mock: {a}");
-    }
-}
-
-/// Unix seconds now, or 0 if the clock is before the epoch (impossible in
-/// practice; the registry treats 0 as "very old").
+/// Unix seconds now, or 0 if the clock is before the epoch, which is impossible
+/// in practice and which the registry reads as very old.
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -353,8 +314,8 @@ fn now_secs() -> u64 {
 }
 
 /// The registry pin form and value for a resolved pin. Legacy overrides the
-/// reference variant, since a legacy pin is always a `Cargo.lock` rev but must
-/// register as `legacy` for migration detection.
+/// reference variant: a legacy pin is always a rev, but must register as legacy
+/// for migration detection.
 fn pin_form_and_value(pin: &Pin, source: PinSource) -> (registry::PinForm, String) {
     let value = match &pin.reference {
         Reference::Version(v) | Reference::Branch(v) | Reference::Rev(v) | Reference::Tag(v) => {
@@ -363,7 +324,7 @@ fn pin_form_and_value(pin: &Pin, source: PinSource) -> (registry::PinForm, Strin
     };
     let form = match source {
         PinSource::Legacy => registry::PinForm::Legacy,
-        PinSource::Toml => {
+        PinSource::Config => {
             match &pin.reference {
                 Reference::Version(_) => registry::PinForm::Version,
                 Reference::Branch(_) => registry::PinForm::Branch,
@@ -375,17 +336,18 @@ fn pin_form_and_value(pin: &Pin, source: PinSource) -> (registry::PinForm, Strin
     (form, value)
 }
 
-/// Record this repo + its resolved build in the global registry, then run a
-/// throttled GC pass protecting the just-resolved key. Every step is
-/// best-effort; a registry failure never blocks the engine exec.
+/// Record this repo and its resolved build, then run a throttled collection
+/// pass protecting the just-resolved key. Every step is best-effort; a registry
+/// failure never blocks the exec.
 #[allow(clippy::too_many_arguments)]
 fn record_and_gc(
+    tool: &Tool,
     cache_root: &Path,
     root: &Path,
-    mock_abs: &Path,
+    workdir: &Path,
     pin: &Pin,
     source: PinSource,
-    resolved: &pin::Resolved,
+    resolved: &Resolved,
     toolchain: &str,
     key: &str,
 ) {
@@ -401,7 +363,7 @@ fn record_and_gc(
     reg.record(
         &root.display().to_string(),
         &name,
-        &mock_abs.display().to_string(),
+        &workdir.display().to_string(),
         &pin.url,
         form,
         &value,
@@ -414,7 +376,8 @@ fn record_and_gc(
         let removed = reg.gc(cache_root, key, now);
         if !removed.is_empty() {
             eprintln!(
-                "mock: cache gc removed {} unused engine build(s)",
+                "{}: cache gc removed {} unused engine build(s)",
+                tool.short,
                 removed.len()
             );
         }
@@ -422,73 +385,143 @@ fn record_and_gc(
     reg.save(&path);
 }
 
-/// The pin: the `mockspace_version` key in the located `mockspace.toml`
-/// (wherever it sits), then the legacy mockspace rev in the mock workspace's
-/// `Cargo.lock`, which keeps an un-pinned repo running until it adds one.
+/// The pin: the config's own key, then whatever legacy fallback the tool
+/// honours, which keeps a repo mid-migration running until it adopts one.
 fn resolve_pin(
+    tool: &Tool,
     located: Option<&discover::Located>,
     root: &Path,
-    mock_abs: &Path,
+    workdir: &Path,
 ) -> Result<(Pin, PinSource), String> {
     if let Some(l) = located
         && let Ok(s) = std::fs::read_to_string(&l.config_path)
-        && let Some(p) = mockspace_manifest::pin_from_mockspace_toml(&s)
+        && let Some(p) = Header::parse(tool, &s).to_pin(tool)
     {
-        return Ok((p, PinSource::Toml));
+        return Ok((p, PinSource::Config));
     }
-    if let Ok(s) = std::fs::read_to_string(mock_abs.join("Cargo.lock"))
-        && let Some(p) = mockspace_manifest::pin_from_legacy_lock(&s)
+    if let Some(legacy) = tool.hooks.legacy_pin
+        && let Some(p) = legacy(workdir)
     {
         return Ok((p, PinSource::Legacy));
     }
     let where_to = located
         .map(|l| l.config_path.clone())
-        .unwrap_or_else(|| root.join("mockspace.toml"));
+        .unwrap_or_else(|| root.join(tool.config_file));
     Err(format!(
-        "no mockspace pin found. add one to {}:\n\n    \
-         mockspace_version = \"0.0.0-d05\"   # the released engine version\n",
-        where_to.display()
+        "no {} pin found. add one to {}:\n\n    {}_version = \"0.1.0\"   # the released engine \
+         version\n",
+        tool.engine_crate,
+        where_to.display(),
+        tool.pin_prefix
     ))
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn a_retired_alias_is_detected_only_under_its_table() {
-        assert!(legacy_alias_present("[alias]\nmock = \"run --quiet\"\n"));
-        assert!(legacy_alias_present("[build]\njobs = 4\n[alias]\nmock=\"x\"\n"));
-        assert!(!legacy_alias_present("[env]\nmock = \"not an alias\"\n"));
-        assert!(!legacy_alias_present("[alias]\nmockery = \"other\"\n"));
-        assert!(!legacy_alias_present(""));
-    }
-
     use super::*;
+
+    const T: Tool = Tool {
+        anchor:          Anchor::Marker(".git"),
+        short:           "mock",
+        config_file:     "t.toml",
+        pin_prefix:      "t",
+        engine_crate:    "engine",
+        cache_namespace: "t",
+        default_url:     "u",
+        launcher_crate:  "cargo-mock",
+        workdir:         None,
+        hooks:           Hooks::NONE,
+    };
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
     }
 
     #[test]
-    fn direct_mock_forwards_all() {
-        let raw = s(&["/usr/bin/mock", "lock", "--foo"]);
-        assert_eq!(normalize_args(&raw), s(&["lock", "--foo"]));
+    fn a_direct_invocation_forwards_everything() {
+        assert_eq!(
+            normalize_args(&T, &s(&["/usr/bin/mock", "lock", "--foo"])),
+            s(&["lock", "--foo"])
+        );
     }
 
     #[test]
-    fn cargo_mock_drops_leading_mock() {
-        let raw = s(&["/root/.cargo/bin/cargo-mock", "mock", "lock", "--foo"]);
-        assert_eq!(normalize_args(&raw), s(&["lock", "--foo"]));
+    fn a_cargo_subcommand_drops_the_repeated_name() {
+        // cargo runs `cargo mock x` as `cargo-mock mock x`, so the engine would
+        // otherwise be handed a subcommand it does not have.
+        assert_eq!(
+            normalize_args(&T, &s(&["/root/.cargo/bin/cargo-mock", "mock", "lock", "--foo"])),
+            s(&["lock", "--foo"])
+        );
+        assert_eq!(normalize_args(&T, &s(&["cargo-mock", "mock"])), Vec::<String>::new());
     }
 
     #[test]
-    fn cargo_mock_without_subcommand() {
-        let raw = s(&["cargo-mock", "mock"]);
-        assert_eq!(normalize_args(&raw), Vec::<String>::new());
+    fn a_repeated_name_is_dropped_only_when_it_is_the_cargo_shape() {
+        // the control, and the reason the rule is written against the program
+        // name rather than the first argument. `mock mock` is a user asking the
+        // engine for a subcommand called `mock`, and eating it would be wrong.
+        assert_eq!(normalize_args(&T, &s(&["/usr/bin/mock", "mock"])), s(&["mock"]));
+        // and a cargo-shaped launcher whose first argument is something else
+        assert_eq!(
+            normalize_args(&T, &s(&["cargo-mock", "lock"])),
+            s(&["lock"])
+        );
+        // and the name has to match the program's own suffix
+        assert_eq!(
+            normalize_args(&T, &s(&["cargo-mock", "other", "lock"])),
+            s(&["other", "lock"])
+        );
     }
 
     #[test]
-    fn user_dir_flag_is_stripped() {
-        let raw = s(&["mock", "check", "--dir", "/somewhere", "--scope", "x"]);
-        assert_eq!(normalize_args(&raw), s(&["check", "--scope", "x"]));
+    fn a_user_supplied_dir_flag_is_stripped() {
+        // the launcher owns `--dir`, and two of them would leave the engine
+        // reading whichever it parsed last.
+        assert_eq!(
+            normalize_args(&T, &s(&["mock", "check", "--dir", "/somewhere", "--scope", "x"])),
+            s(&["check", "--scope", "x"])
+        );
+    }
+
+    #[test]
+    fn the_missing_root_message_names_what_was_looked_for() {
+        assert!(no_root(&T).contains(".git"), "{}", no_root(&T));
+        assert!(no_root(&T).contains("MOCK_ROOT"), "{}", no_root(&T));
+
+        const SPAN: Tool = Tool {
+            anchor: Anchor::ConfigFile,
+            short:  "widget",
+            ..T
+        };
+        // a config-anchored tool has no marker, so naming one would send the
+        // reader looking for a file that has nothing to do with it.
+        assert!(no_root(&SPAN).contains("t.toml"), "{}", no_root(&SPAN));
+        assert!(!no_root(&SPAN).contains(".git"), "{}", no_root(&SPAN));
+        assert!(no_root(&SPAN).contains("WIDGET_ROOT"), "{}", no_root(&SPAN));
+    }
+
+    #[test]
+    fn a_legacy_pin_registers_as_legacy_whatever_its_reference_is() {
+        let p = Pin {
+            url:       "u".into(),
+            reference: Reference::Rev("abc".into()),
+        };
+        assert_eq!(
+            pin_form_and_value(&p, PinSource::Config),
+            (registry::PinForm::Rev, "abc".to_string())
+        );
+        assert_eq!(
+            pin_form_and_value(&p, PinSource::Legacy),
+            (registry::PinForm::Legacy, "abc".to_string())
+        );
+    }
+
+    #[test]
+    fn the_missing_pin_message_names_the_tools_own_key() {
+        let d = tempfile::tempdir().unwrap();
+        let err = resolve_pin(&T, None, d.path(), d.path()).unwrap_err();
+        assert!(err.contains("t_version"), "{err}");
+        assert!(err.contains("t.toml"), "{err}");
     }
 }

@@ -7,11 +7,11 @@
 //! which built engine, used to garbage-collect engine builds nothing pins
 //! anymore and, forward-looking, to index every repo the launcher has seen.
 //!
-//! It lives at `~/.cache/mockspace/registry.toml`, beside `builds/`. Everything
-//! in it is recomputable: re-read each repo's `mockspace.toml`, re-resolve, and
+//! It lives at `<cache>/registry.toml`, beside `builds/`. Everything in it is
+//! recomputable: re-read each repo's config, re-resolve, and
 //! the same rows reappear. That is why it is cache, not config, a wipe costs
 //! only the first re-run of each repo. The durable per-developer state the v2
-//! spec places under `~/.config/mockspace/` (the TOFU `trust.toml`) is a
+//! spec places under `~/.config/<tool>/` is a
 //! separate concern this file does not touch.
 //!
 //! Two tables:
@@ -23,7 +23,7 @@
 //! - `[[build]]`, one per cached engine build: its key and when it was last
 //!   used. GC removes a build no live consumer resolves to.
 //!
-//! The `name` / `mock_dir` / `engine_url` fields are kept so a later cross-repo
+//! The `name` / `workdir` / `engine_url` fields are kept so a later cross-repo
 //! index (the v2 `[hosts.*]` alias direction) has its data already; the launcher
 //! does not resolve cross-repo references itself yet.
 
@@ -40,7 +40,7 @@ const GC_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const LRU_STALE_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// Pin form as recorded for a consumer. `Legacy` means the pin came from the
-/// mock workspace's `Cargo.lock` rather than an explicit `mockspace_*` key, so
+/// working directory's lockfile rather than an explicit pin key, so
 /// the repo has not been migrated to the launcher+pin model yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PinForm {
@@ -86,7 +86,7 @@ pub struct Consumer {
     /// Repo name (the root dir basename today; a real project name later).
     pub name:       String,
     /// Absolute mock dir the pin maps.
-    pub mock_dir:   String,
+    pub workdir:    String,
     /// The engine source url this repo builds from.
     pub engine_url: String,
     /// `version` / `branch` / `rev` / `tag` / `legacy`.
@@ -150,7 +150,7 @@ impl Registry {
         &mut self,
         root: &str,
         name: &str,
-        mock_dir: &str,
+        workdir: &str,
         engine_url: &str,
         form: PinForm,
         pin_value: &str,
@@ -162,7 +162,7 @@ impl Registry {
         match self.consumers.iter_mut().find(|c| c.root == root) {
             Some(c) => {
                 c.name = name.to_string();
-                c.mock_dir = mock_dir.to_string();
+                c.workdir = workdir.to_string();
                 c.engine_url = engine_url.to_string();
                 c.pin_form = form.as_str().to_string();
                 c.pin_value = pin_value.to_string();
@@ -173,7 +173,7 @@ impl Registry {
                 self.consumers.push(Consumer {
                     root:       root.to_string(),
                     name:       name.to_string(),
-                    mock_dir:   mock_dir.to_string(),
+                    workdir:    workdir.to_string(),
                     engine_url: engine_url.to_string(),
                     pin_form:   form.as_str().to_string(),
                     pin_value:  pin_value.to_string(),
@@ -246,7 +246,7 @@ mod tests {
     fn touch_build_dir(cache_root: &Path, key: &str) {
         let d = cache_root.join("builds").join(key).join("bin");
         fs::create_dir_all(&d).unwrap();
-        fs::write(d.join("mockspace"), b"#!/bin/sh\n").unwrap();
+        fs::write(d.join("engine"), b"#!/bin/sh\n").unwrap();
     }
 
     #[test]
@@ -465,8 +465,10 @@ mod tests {
 
     #[test]
     fn gc_due_throttles() {
-        let mut r = Registry::default();
-        r.last_gc = 1000;
+        let r = Registry {
+            last_gc: 1000,
+            ..Default::default()
+        };
         assert!(!r.gc_due(1000 + GC_INTERVAL_SECS - 1));
         assert!(r.gc_due(1000 + GC_INTERVAL_SECS));
     }

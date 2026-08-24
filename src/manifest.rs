@@ -100,9 +100,10 @@ impl Header {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool::{Hooks, Workdir};
+    use crate::tool::{Anchor, Hooks, Workdir};
 
     const T: Tool = Tool {
+        anchor:          Anchor::Marker(".git"),
         short:           "mock",
         config_file:     "t.toml",
         pin_prefix:      "eng",

@@ -70,11 +70,11 @@ mod tests {
         // Pin an exact value so a future refactor that changes the algorithm
         // is caught (the cache would silently invalidate otherwise).
         let mut h = Fnv::new();
-        h.write_field("mockspace");
+        h.write_field("a stable input");
         assert_eq!(h.hex().len(), 16);
         // deterministic: same input, same output.
         let mut h2 = Fnv::new();
-        h2.write_field("mockspace");
+        h2.write_field("a stable input");
         assert_eq!(h.hex(), h2.hex());
     }
 }

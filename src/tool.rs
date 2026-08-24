@@ -17,8 +17,39 @@ use std::path::{Path, PathBuf};
 
 use crate::pin::{Pin, Resolved};
 
+/// How the repo root is found, walking up from the working directory.
+///
+/// The two tools that exist need different answers and neither generalises to
+/// the other, which is why this is a parameter rather than the constant it was
+/// in the code this crate came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Anchor {
+    /// The nearest ancestor holding an entry of this name, `.git` in practice.
+    ///
+    /// Right for a tool whose config lives inside a repository, and whose
+    /// config may sit either at the root or one directory below it. The search
+    /// for the config then covers the root and its immediate subdirectories,
+    /// and more than one config found there is an error rather than a
+    /// precedence question.
+    Marker(&'static str),
+    /// The nearest ancestor holding the config file itself.
+    ///
+    /// Right for a tool whose config sits above a pile of repositories rather
+    /// than inside one. Anchoring on `.git` would stop at the first repository
+    /// walking up and never reach the config, which is the common case rather
+    /// than an edge: running such a tool from inside a member repository is
+    /// how it is normally used.
+    ///
+    /// Finding the anchor finds the config, so there is no second search and no
+    /// two-configs error. A member repository carrying a config of its own is a
+    /// nested workspace, not an ambiguity at this level.
+    ConfigFile,
+}
+
 /// The identity of one launcher.
 pub struct Tool {
+    /// How the repo root is found. See [`Anchor`].
+    pub anchor:          Anchor,
     /// The short name this launcher answers to, used in its own diagnostics
     /// (`mock: ...`) and as the prefix of the environment variables it reads
     /// (`MOCK_ROOT`, `MOCK_NO_SELF_UPDATE`, uppercased).
@@ -46,6 +77,11 @@ pub struct Tool {
     /// The tool-specific parts, all optional.
     pub hooks:           Hooks,
 }
+
+/// A check a tool runs against a directory, refusing with a message a reader
+/// can act on. Named because two hooks have this shape and a bare
+/// `Option<fn(&Path) -> Result<(), String>>` reads as noise at both.
+pub type Check = fn(&Path) -> Result<(), String>;
 
 /// A working subdirectory the config maps.
 ///
@@ -79,14 +115,14 @@ pub struct Hooks {
     /// Refuse an `--engine <path>` that is not a checkout of this engine.
     /// Reported against the flag the user passed, rather than surfacing later
     /// as a build failure about something else.
-    pub verify_engine_dir:  Option<fn(&Path) -> Result<(), String>>,
+    pub verify_engine_dir:  Option<Check>,
     /// A last-resort pin for a repo that has not adopted an explicit one,
     /// given the working directory. Keeps a repo mid-migration running.
     pub legacy_pin:         Option<fn(&Path) -> Option<Pin>>,
     /// Refuse a repo state that would silently route the user somewhere else,
     /// given the repo root. A retired cargo alias shadowing the launcher is
     /// the case this exists for.
-    pub verify_repo_state:  Option<fn(&Path) -> Result<(), String>>,
+    pub verify_repo_state:  Option<Check>,
 }
 
 impl Hooks {
@@ -149,6 +185,7 @@ mod tests {
     use super::*;
 
     const WITH: Tool = Tool {
+        anchor:          Anchor::Marker(".git"),
         short:           "mock",
         config_file:     "t.toml",
         pin_prefix:      "t",

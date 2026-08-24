@@ -7,6 +7,10 @@ description = "The launcher half of a pinned-engine command-line tool: resolves 
 license = "MPL-2.0"
 repository = "https://github.com/orgrinrt/renki"
 readme = "README.md"
+# Measured rather than guessed: 1.88 builds and tests this crate clean, and it
+# is where let-chains stabilised, which this uses throughout. A first attempt
+# claimed 1.90 and cargo refused the build, which is the check working.
+rust-version = "1.88"
 categories = ["development-tools", "command-line-utilities"]
 keywords = ["launcher", "pinning", "reproducible", "toolchain", "cli"]
 

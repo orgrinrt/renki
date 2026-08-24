@@ -5,20 +5,21 @@
 
 //! Keeping the launcher itself current.
 //!
-//! When `cargo-mock` was installed from a git branch (`cargo install --git …
-//! --branch dev cargo-mock`), that branch keeps moving. On invocation, at most
-//! once an hour, the launcher checks whether its branch has a newer head and,
+//! When the launcher was installed from a git branch (`cargo install --git …
+//! --branch dev <launcher>`), that branch keeps moving. On invocation, at most
+//! once an hour, it checks whether its branch has a newer head and,
 //! if so, reinstalls itself and re-execs into the new binary. This is the
-//! launcher-side twin of the engine's short branch-pin TTL: a repo tracking
-//! `dev` picks up new engine heads within the hour, and the launcher that
+//! launcher-side twin of the engine's short branch-pin TTL: a repo tracking a
+//! branch picks up new engine heads within the hour, and the launcher that
 //! drives it stays current on the same cadence.
 //!
 //! It is deliberately conservative:
 //!
 //! - Best-effort. Any failure (offline, no cargo, a build break on the branch)
-//!   leaves the current launcher running; a `mock` invocation never fails
-//!   because self-update could not run.
-//! - Opt-out with `MOCK_NO_SELF_UPDATE` (a CI job or a pinned developer sets it).
+//!   leaves the current launcher running; an invocation never fails because
+//!   self-update could not run.
+//! - Opt-out with the tool's `<SHORT>_NO_SELF_UPDATE` (a CI job or a pinned
+//!   developer sets it).
 //! - Only for a git-**branch** install under the cargo home bin. A version, tag,
 //!   or rev install is immutable and never chased; a binary built elsewhere
 //!   (`cargo run`, a dev checkout) is left alone.
@@ -26,6 +27,8 @@
 //!   re-exec'd new binary finds a fresh marker and does not re-check in a loop.
 
 use std::path::{Path, PathBuf};
+
+use crate::tool::Tool;
 
 /// Re-check the launcher's branch at most this often.
 const SELF_UPDATE_TTL_SECS: u64 = 60 * 60;
@@ -40,8 +43,8 @@ struct InstalledSource {
 
 /// Check for and apply a launcher update. May reinstall and re-exec, in which
 /// case it never returns; otherwise returns having done nothing user-visible.
-pub fn maybe_self_update(cache_root: &Path) {
-    if std::env::var_os("MOCK_NO_SELF_UPDATE").is_some() {
+pub fn maybe_self_update(tool: &Tool, cache_root: &Path) {
+    if std::env::var_os(tool.no_self_update_env()).is_some() {
         return;
     }
     // Only an actually-installed binary self-updates; a dev build is left alone.
@@ -57,7 +60,7 @@ pub fn maybe_self_update(cache_root: &Path) {
     // fresh check and does not loop, and so a failed attempt still backs off.
     mark_checked(&marker, now);
 
-    let Some(src) = installed_source() else {
+    let Some(src) = installed_source(tool) else {
         return; // not a git-branch install: nothing to chase.
     };
     let Ok(head) = crate::pin::ls_remote_head(&src.url, &src.branch) else {
@@ -66,12 +69,15 @@ pub fn maybe_self_update(cache_root: &Path) {
     if head == src.rev {
         return; // already current.
     }
-    eprintln!("mock: newer launcher on {}, updating ...", src.branch);
-    if reinstall(&src.url, &src.branch).is_ok() {
+    eprintln!(
+        "{}: newer launcher on {}, updating ...",
+        tool.short, src.branch
+    );
+    if reinstall(tool, &src.url, &src.branch).is_ok() {
         // Replace this process with the freshly-installed binary, same argv. On
         // success this never returns; on failure it falls through and the
         // current launcher carries on (the new binary is installed for next time).
-        reexec(&exe);
+        reexec(tool, &exe);
     }
 }
 
@@ -95,17 +101,18 @@ fn cargo_home() -> Option<PathBuf> {
 
 /// The launcher's install source from cargo's `.crates.toml`, if it is a
 /// git-branch install.
-fn installed_source() -> Option<InstalledSource> {
+fn installed_source(tool: &Tool) -> Option<InstalledSource> {
     let content = std::fs::read_to_string(cargo_home()?.join(".crates.toml")).ok()?;
-    installed_source_from(&content)
+    installed_source_from(tool.launcher_crate, &content)
 }
 
-/// Parse the `cargo-mock` install entry out of a `.crates.toml`, returning its
-/// source only when it is a git-branch install. Pure, for testing.
-fn installed_source_from(crates_toml: &str) -> Option<InstalledSource> {
+/// Parse the launcher's own install entry out of a `.crates.toml`, returning
+/// its source only when it is a git-branch install. Pure, for testing.
+fn installed_source_from(launcher: &str, crates_toml: &str) -> Option<InstalledSource> {
     let parsed: CratesToml = toml::from_str(crates_toml).ok()?;
-    let spec = parsed.v1.keys().find(|k| k.starts_with("cargo-mock "))?;
-    // `cargo-mock 0.1.0 (git+<url>?branch=<b>#<rev>)`
+    let prefix = format!("{launcher} ");
+    let spec = parsed.v1.keys().find(|k| k.starts_with(&prefix))?;
+    // `<launcher> 0.1.0 (git+<url>?branch=<b>#<rev>)`
     let inner = spec.split_once('(')?.1;
     let inner = inner.strip_suffix(')').unwrap_or(inner);
     parse_git_branch_spec(inner)
@@ -149,9 +156,9 @@ fn mark_checked(marker: &Path, now: u64) {
     let _ = std::fs::write(marker, now.to_string());
 }
 
-fn reinstall(url: &str, branch: &str) -> Result<(), String> {
+fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
     let status = std::process::Command::new("cargo")
-        .args(["install", "--git", url, "--branch", branch, "cargo-mock", "--force"])
+        .args(["install", "--git", url, "--branch", branch, tool.launcher_crate, "--force"])
         .status()
         .map_err(|e| format!("could not run cargo install: {e}"))?;
     if status.success() {
@@ -164,11 +171,14 @@ fn reinstall(url: &str, branch: &str) -> Result<(), String> {
 /// Replace this process with `exe`, forwarding the original argv (minus the
 /// program name; the new process re-derives its own). On success `exec` never
 /// returns; on failure it returns and the caller continues with this process.
-fn reexec(exe: &Path) {
+fn reexec(tool: &Tool, exe: &Path) {
     use std::os::unix::process::CommandExt;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let err = std::process::Command::new(exe).args(&args).exec();
-    eprintln!("mock: could not re-exec updated launcher ({err}); continuing");
+    eprintln!(
+        "{}: could not re-exec updated launcher ({err}); continuing",
+        tool.short
+    );
 }
 
 #[cfg(test)]
@@ -177,44 +187,73 @@ mod tests {
 
     const CRATES_TOML: &str = "\
 [v1]
-\"cargo-mock 0.1.0 (git+ssh://git@github.com/hiisi-digital/mockspace.git?branch=dev#8dd3b750abc)\" = [\"cargo-mock\", \"mock\"]
+\"lch 0.1.0 (git+ssh://git@github.com/o/r.git?branch=dev#8dd3b750abc)\" = [\"lch\", \"t\"]
 \"ripgrep 14.0.0 (registry+https://github.com/rust-lang/crates.io-index)\" = [\"rg\"]
 ";
 
     #[test]
-    fn parses_git_branch_install() {
-        let src = installed_source_from(CRATES_TOML).unwrap();
-        assert_eq!(src.url, "ssh://git@github.com/hiisi-digital/mockspace.git");
+    fn a_git_branch_install_is_parsed() {
+        let src = installed_source_from("lch", CRATES_TOML).unwrap();
+        assert_eq!(src.url, "ssh://git@github.com/o/r.git");
         assert_eq!(src.branch, "dev");
         assert_eq!(src.rev, "8dd3b750abc");
     }
 
     #[test]
-    fn non_branch_installs_are_not_chased() {
-        // a tag install: no branch to chase.
-        let toml = "[v1]\n\"cargo-mock 0.1.0 (git+ssh://x/y.git?tag=v1#abc)\" = [\"cargo-mock\"]\n";
-        assert!(installed_source_from(toml).is_none());
-        // a plain rev / default-branch install (no query): not chased.
-        let toml = "[v1]\n\"cargo-mock 0.1.0 (git+ssh://x/y.git#abc)\" = [\"cargo-mock\"]\n";
-        assert!(installed_source_from(toml).is_none());
-        // a crates.io install: not a git source.
-        let toml = "[v1]\n\"cargo-mock 0.1.0 (registry+https://x)\" = [\"cargo-mock\"]\n";
-        assert!(installed_source_from(toml).is_none());
+    fn only_this_launchers_entry_is_read() {
+        // the control on the prefix match. Another tool's launcher in the same
+        // ledger must not be chased, and a name this one is a prefix of must
+        // not match either, which is why the space is part of the prefix.
+        assert!(installed_source_from("ripgrep", CRATES_TOML).is_none());
+        assert!(installed_source_from("l", CRATES_TOML).is_none());
+        assert!(installed_source_from("lch-extra", CRATES_TOML).is_none());
     }
 
     #[test]
-    fn no_cargo_mock_entry_is_none() {
-        let toml = "[v1]\n\"ripgrep 14.0.0 (registry+https://x)\" = [\"rg\"]\n";
-        assert!(installed_source_from(toml).is_none());
+    fn a_non_branch_install_is_not_chased() {
+        // each of these is immutable or unknowable, so there is no newer head
+        // to find and reinstalling would be churn.
+        for toml in [
+            // a tag install
+            "[v1]\n\"lch 0.1.0 (git+ssh://x/y.git?tag=v1#abc)\" = [\"lch\"]\n",
+            // a plain rev or default-branch install, carrying no query
+            "[v1]\n\"lch 0.1.0 (git+ssh://x/y.git#abc)\" = [\"lch\"]\n",
+            // a registry install: not a git source at all
+            "[v1]\n\"lch 0.1.0 (registry+https://x)\" = [\"lch\"]\n",
+            // a branch pin with an empty branch, which names nothing
+            "[v1]\n\"lch 0.1.0 (git+ssh://x/y.git?branch=#abc)\" = [\"lch\"]\n",
+        ] {
+            assert!(installed_source_from("lch", toml).is_none(), "{toml}");
+        }
     }
 
     #[test]
-    fn ttl_marker_roundtrip() {
+    fn an_absent_or_unreadable_ledger_is_none() {
+        assert!(installed_source_from("lch", "[v1]\n").is_none());
+        assert!(installed_source_from("lch", "this is not [ toml").is_none());
+        assert!(installed_source_from("lch", "").is_none());
+    }
+
+    #[test]
+    fn the_ttl_marker_gates_the_check_and_creates_its_own_directory() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("sub").join("launcher-selfupdate");
         assert!(!recently_checked(&marker, 10_000));
         mark_checked(&marker, 10_000);
         assert!(recently_checked(&marker, 10_000 + SELF_UPDATE_TTL_SECS - 1));
         assert!(!recently_checked(&marker, 10_000 + SELF_UPDATE_TTL_SECS));
+    }
+
+    #[test]
+    fn a_garbled_marker_does_not_suppress_the_check() {
+        // the failure direction that matters: a marker that cannot be read must
+        // mean "check now", never "checked recently", or a corrupt byte freezes
+        // the launcher at its installed version forever.
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("m");
+        for bad in ["", "not-a-number", "\n"] {
+            std::fs::write(&marker, bad).unwrap();
+            assert!(!recently_checked(&marker, 10_000), "{bad:?}");
+        }
     }
 }
