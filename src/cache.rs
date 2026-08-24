@@ -141,20 +141,76 @@ pub(crate) fn ensure_built(
             failures.push(format!("{attempt:?} failed"));
         }
     }
-    Err(format!(
-        "could not build the {} engine for this pin; nothing was cached.\n  \
-         tried, in order:\n    - {}\n  \
-         the pin may be wrong, the release may not exist yet, or the build broke.",
-        tool.engine_crate,
-        failures.join("\n    - ")
-    ))
+    Err(build_failure(tool, &failures))
 }
 
-/// Replace this process with the engine: the absolute working directory so cwd
-/// is irrelevant, then whatever the tool's hooks add, then the caller's
-/// forwarded arguments. On unix `exec` never returns on success; it returns
-/// only if the exec itself fails.
+/// What the operator reads when no attempt produced a binary.
+///
+/// The toolchain is named because it is a real cause the message otherwise
+/// hides. `cargo install` resolves the engine's dependencies fresh rather than
+/// from its committed lockfile, so a transitive crate can float to a version
+/// whose minimum rustc is above the one in effect, and the build then fails on
+/// a crate nobody in this repo named. The toolchain in effect is the launcher's
+/// own, since `cargo install` inherits this process's working directory: the
+/// consuming repo's `rust-toolchain.toml` governs, not the engine's.
+///
+/// Measured rather than reasoned: installing one engine over `--git` failed
+/// under rustc 1.94 on a transitive crate requiring 1.96, and succeeded
+/// unchanged from a directory pinning a newer toolchain.
+fn build_failure(tool: &Tool, failures: &[String]) -> String {
+    format!(
+        "could not build the {} engine for this pin; nothing was cached.\n  \
+         tried, in order:\n    - {}\n  \
+         the pin may be wrong, the release may not exist yet, the build may have broken, \
+         or the toolchain in effect here ({}) may be older than one of the engine's \
+         dependencies requires.",
+        tool.engine_crate,
+        failures.join("\n    - "),
+        rustc_version_line()
+    )
+}
+
+/// The `rustc --version` line, for a diagnostic. Falls back to a phrase that
+/// reads correctly in the sentence above rather than to an empty string, which
+/// would leave the operator with an empty pair of brackets.
+fn rustc_version_line() -> String {
+    Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "no rustc on PATH".to_string())
+}
+
+/// The arguments the engine is run with: the tool's own directory flag and the
+/// absolute working directory so cwd is irrelevant, then whatever the tool's
+/// hooks add, then the caller's forwarded arguments.
+///
+/// Split out of [`exec_engine`] because an `exec` cannot be observed from a
+/// test, and this is the half worth observing. The flag was hardcoded here
+/// while [`Tool::dir_flag`] documented itself as the flag the launcher always
+/// passes, so a tool that named its own got the user's copy stripped under that
+/// name and the conventional one handed to the engine.
+pub(crate) fn engine_argv(
+    tool: &Tool,
+    workdir: &Path,
+    extra: &[String],
+    args: &[String],
+) -> Vec<std::ffi::OsString> {
+    let mut argv = Vec::with_capacity(2 + extra.len() + args.len());
+    argv.push(tool.dir_flag.into());
+    argv.push(workdir.as_os_str().to_os_string());
+    argv.extend(extra.iter().map(Into::into));
+    argv.extend(args.iter().map(Into::into));
+    argv
+}
+
+/// Replace this process with the engine. On unix `exec` never returns on
+/// success; it returns only if the exec itself fails.
 pub(crate) fn exec_engine(
+    tool: &Tool,
     bin: &Path,
     workdir: &Path,
     extra: &[String],
@@ -162,10 +218,7 @@ pub(crate) fn exec_engine(
 ) -> Result<std::convert::Infallible, String> {
     use std::os::unix::process::CommandExt;
     let err = Command::new(bin)
-        .arg("--dir")
-        .arg(workdir)
-        .args(extra)
-        .args(args)
+        .args(engine_argv(tool, workdir, extra, args))
         .exec();
     Err(format!("failed to exec {}: {err}", bin.display()))
 }
@@ -191,6 +244,108 @@ mod tests {
         locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
+
+    #[test]
+    fn the_build_failure_names_every_cause_including_the_toolchain() {
+        let msg = build_failure(&T, &["a failed".to_string(), "b failed".to_string()]);
+        // the engine it could not build, and each attempt in order
+        assert!(msg.contains("engine"), "{msg}");
+        assert!(
+            msg.contains("a failed") && msg.contains("b failed"),
+            "{msg}"
+        );
+        // the four causes, the last of which is the one an operator cannot see
+        // from the cargo output: `cargo install` resolves fresh rather than
+        // from the engine's committed lockfile, so a transitive crate floats to
+        // a version whose minimum rustc is above the one in effect, and the
+        // failure then names a crate nobody in the repo chose.
+        for cause in [
+            "pin may be wrong",
+            "release may not exist",
+            "build may have broken",
+        ] {
+            assert!(msg.contains(cause), "missing `{cause}`: {msg}");
+        }
+        assert!(msg.contains("toolchain in effect"), "{msg}");
+        // and it says WHICH. "check your toolchain" sends someone to read a
+        // file when the answer is what this process actually resolved.
+        assert!(
+            msg.contains("rustc ") || msg.contains("no rustc on PATH"),
+            "the toolchain is named as a cause but never identified: {msg}"
+        );
+        assert!(
+            !msg.contains("()"),
+            "an empty version left empty brackets: {msg}"
+        );
+    }
+
+    #[test]
+    fn the_version_line_is_never_empty_and_never_multiline() {
+        // It lands inside a parenthesised clause, so an empty or wrapped value
+        // breaks the sentence around it rather than merely being unhelpful.
+        let v = rustc_version_line();
+        assert!(!v.is_empty());
+        assert_eq!(v.lines().count(), 1, "{v:?}");
+        assert_eq!(v, v.trim(), "{v:?}");
+    }
+    #[test]
+    fn the_engine_is_handed_the_tools_own_directory_flag() {
+        // The control that makes this mean anything: a tool whose flag is NOT
+        // the conventional one. With `--dir` hardcoded at the exec site, the
+        // assertion below reads `--dir` for a tool that never named it, and the
+        // engine is handed a flag it does not take while never seeing the one
+        // it declared. A fixture using `Cli::DIR_FLAG` cannot tell the two
+        // apart, which is why the existing strip-side test could pass
+        // throughout.
+        const AT: Tool = Tool {
+            dir_flag: "--at",
+            ..T
+        };
+        let argv = engine_argv(&AT, Path::new("/w"), &[], &[]);
+        assert_eq!(argv, ["--at", "/w"]);
+        assert!(
+            !argv.iter().any(|a| a == "--dir"),
+            "the conventional flag reached a tool that named its own: {argv:?}"
+        );
+
+        // and the conventional spelling still arrives for a tool that chose it
+        assert_eq!(engine_argv(&T, Path::new("/w"), &[], &[]), ["--dir", "/w"]);
+    }
+
+    #[test]
+    fn the_directory_leads_and_the_hooks_arguments_precede_the_users() {
+        // The order is a contract: the engine reads its directory before
+        // anything, a hook's argument must not be shadowed by a user's copy of
+        // the same flag, and a `--` the user wrote has to stay last or every
+        // argument after it changes meaning.
+        let extra = vec!["--dep".to_string(), "{ path = \"x\" }".to_string()];
+        let args = vec!["lock".to_string(), "--".to_string(), "-v".to_string()];
+        assert_eq!(
+            engine_argv(&T, Path::new("/w"), &extra, &args),
+            [
+                "--dir",
+                "/w",
+                "--dep",
+                "{ path = \"x\" }",
+                "lock",
+                "--",
+                "-v"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_working_directory_that_is_not_utf8_survives_the_handover() {
+        // A path is bytes, not text. Building the argument list as `String`
+        // would replace whatever does not decode, and the engine would then be
+        // pointed at a directory that does not exist, reporting it under a name
+        // the operator cannot find on disk.
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let raw = OsStr::from_bytes(b"/w/\xff\xfe");
+        let argv = engine_argv(&T, Path::new(raw), &[], &[]);
+        assert_eq!(argv[1], raw, "the path was lossily re-encoded");
+    }
 
     #[test]
     fn the_cache_root_prefers_xdg_and_falls_back_to_home() {
