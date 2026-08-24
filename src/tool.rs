@@ -65,9 +65,14 @@ pub struct Tool {
     /// reads `widget_version`, `widget_rev`, `widget_branch`, `widget_tag` and
     /// `widget_git`.
     pub pin_prefix: &'static str,
-    /// The engine's package name on crates.io, which is also the name of the
-    /// binary its build produces.
+    /// The engine's package name, which is what `cargo install` is asked for.
     pub engine_crate: &'static str,
+    /// The binary that package installs, when it is not named after the
+    /// package. A crate `widget-engine` whose `[[bin]]` is `widget` names
+    /// `Some("widget")` here.
+    ///
+    /// `None` is the ordinary case and means the two are the same.
+    pub engine_bin: Option<&'static str>,
     /// The directory under `$XDG_CACHE_HOME` (or `~/.cache`) this launcher
     /// owns. Distinct per tool so two tools never share a build cache.
     pub cache_namespace: &'static str,
@@ -211,6 +216,56 @@ impl Hooks {
 }
 
 impl Tool {
+    /// The file name of the binary the engine's build produces.
+    #[must_use]
+    pub const fn engine_bin_name(&self) -> &'static str {
+        match self.engine_bin {
+            Some(name) => name,
+            None => self.engine_crate,
+        }
+    }
+
+    /// Whether [`Tool::short`] can survive being made into an environment
+    /// variable name.
+    ///
+    /// The short name is uppercased and suffixed to build `WIDGET_ROOT` and
+    /// `WIDGET_NO_SELF_UPDATE`, and a shell will not set a variable holding a
+    /// hyphen or a dot. A name like `my-tool` therefore produces overrides
+    /// nobody can use, and nothing about the run says so.
+    ///
+    /// Const, so a tool can settle it at compile time rather than finding out:
+    ///
+    /// ```
+    /// # use renki::{Anchor, Cli, Hooks, Locate, Tool};
+    /// # const TOOL: Tool = Tool {
+    /// #     anchor: Anchor::Marker(".git"), short: "widget",
+    /// #     config_file: "w.toml", pin_prefix: "w",
+    /// #     engine_crate: "w-engine", engine_bin: None, cache_namespace: "w",
+    /// #     default_url: "u", launcher_crate: "w", workdir: None,
+    /// #     dir_flag: Cli::DIR_FLAG, engine_flag: Cli::ENGINE_FLAG,
+    /// #     locate: Locate::DEFAULT, hooks: Hooks::NONE,
+    /// # };
+    /// const _: () = assert!(TOOL.short_is_usable());
+    /// ```
+    ///
+    /// [`run`](crate::run) refuses a tool that fails this, rather than running
+    /// with two overrides that silently do nothing.
+    #[must_use]
+    pub const fn short_is_usable(&self) -> bool {
+        let b = self.short.as_bytes();
+        if b.is_empty() || b[0].is_ascii_digit() {
+            return false;
+        }
+        let mut i = 0;
+        while i < b.len() {
+            if !(b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
     /// The environment variable naming the repo root, overriding the `.git`
     /// walk: the short name uppercased, plus `_ROOT`.
     pub fn root_env(&self) -> String {
@@ -267,6 +322,7 @@ mod tests {
         config_file: "t.toml",
         pin_prefix: "t",
         engine_crate: "engine",
+        engine_bin: None,
         cache_namespace: "t",
         default_url: "u",
         launcher_crate: "t-launcher",
@@ -284,6 +340,53 @@ mod tests {
         workdir: None,
         ..WITH
     };
+
+    #[test]
+    fn a_short_name_a_shell_cannot_spell_is_refused() {
+        // The whole matrix of what an environment variable name may hold,
+        // rather than the one hyphen case that prompted this.
+        for ok in ["w", "widget", "cargo_mock", "w2", "W", "_w"] {
+            assert!(
+                Tool { short: ok, ..WITH }.short_is_usable(),
+                "{ok} should be usable"
+            );
+        }
+        for bad in [
+            "", "my-tool", "my.tool", "my tool", "my/tool", "2tools", "tööli",
+        ] {
+            assert!(
+                !Tool { short: bad, ..WITH }.short_is_usable(),
+                "{bad:?} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_short_name_would_have_produced_an_unusable_variable() {
+        // The control that ties the predicate to what it is about, computed a
+        // second way, over the variable name rather than over the short name.
+        //
+        // Both halves are load-bearing, and the second was found by this test
+        // disagreeing with the first version of itself. An empty short is
+        // perfectly spellable: it yields `_ROOT`, which every shell accepts and
+        // which belongs to no tool, so every launcher built that way would read
+        // the same variable.
+        fn usable_variable(name: &str) -> bool {
+            let b = name.as_bytes();
+            let spellable = !b.is_empty()
+                && !b[0].is_ascii_digit()
+                && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_');
+            spellable && name != "_ROOT"
+        }
+        for s in ["w", "widget", "my-tool", "2tools", "", "my.tool", "tööli"] {
+            let t = Tool { short: s, ..WITH };
+            assert_eq!(
+                t.short_is_usable(),
+                usable_variable(&t.root_env()),
+                "disagreed about {s:?}"
+            );
+        }
+    }
 
     #[test]
     fn env_names_come_from_the_short_name() {

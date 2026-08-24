@@ -169,6 +169,7 @@ mod tests {
         config_file: "t.toml",
         pin_prefix: "t",
         engine_crate: "engine",
+        engine_bin: None,
         cache_namespace: "t",
         default_url: "u",
         launcher_crate: "t-launcher",
@@ -209,6 +210,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         const OTHER: Tool = Tool {
             engine_crate: "somethingelse",
+            engine_bin: None,
             ..T
         };
         let r = resolve(&OTHER, &pin(Reference::Tag("v1".into())), d.path()).unwrap();

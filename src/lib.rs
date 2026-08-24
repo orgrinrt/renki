@@ -28,6 +28,7 @@
 //!     config_file:     "widget.toml",
 //!     pin_prefix:      "widget",
 //!     engine_crate:    "widget-engine",
+//!     engine_bin:      None,
 //!     cache_namespace: "widget",
 //!     default_url:     "ssh://git@github.com/o/widget.git",
 //!     launcher_crate:  "widget",
@@ -100,7 +101,7 @@ enum PinSource {
 /// ```no_run
 /// # const TOOL: renki::Tool = renki::Tool {
 /// #     anchor: renki::Anchor::ConfigFile, short: "w", config_file: "w.toml",
-/// #     pin_prefix: "w", engine_crate: "w-engine", cache_namespace: "w",
+/// #     pin_prefix: "w", engine_crate: "w-engine", engine_bin: None, cache_namespace: "w",
 /// #     default_url: "https://example.invalid/w.git", launcher_crate: "w",
 /// #     workdir: None, dir_flag: renki::Cli::DIR_FLAG,
 /// #     engine_flag: renki::Cli::ENGINE_FLAG, locate: renki::Locate::DEFAULT,
@@ -129,6 +130,23 @@ pub unsafe fn run(tool: &Tool) -> ExitCode {
 /// this when the caller has already sanitised, or when it knows it is not a
 /// hook descendant.
 pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
+    // Refused here rather than tolerated, because the failure it prevents is
+    // silent: a short name a shell cannot spell leaves `<SHORT>_ROOT` and
+    // `<SHORT>_NO_SELF_UPDATE` unsettable, and both simply never fire.
+    // `Tool::short_is_usable` is const, so a tool can settle this at build
+    // time instead of shipping and finding out.
+    if !tool.short_is_usable() {
+        eprintln!(
+            "renki: the tool's short name {:?} cannot be an environment \
+             variable name, so {}_ROOT and {}_NO_SELF_UPDATE could never be \
+             set. Use ascii letters, digits and underscores, not leading with \
+             a digit.",
+            tool.short,
+            tool.short.to_uppercase(),
+            tool.short.to_uppercase()
+        );
+        return ExitCode::FAILURE;
+    }
     let raw: Vec<String> = std::env::args().collect();
     let forwarded = normalize_args(tool, &raw);
     match dispatch(tool, &forwarded) {
@@ -525,6 +543,7 @@ mod tests {
         config_file: "t.toml",
         pin_prefix: "t",
         engine_crate: "engine",
+        engine_bin: None,
         cache_namespace: "t",
         default_url: "u",
         launcher_crate: "cargo-mock",
