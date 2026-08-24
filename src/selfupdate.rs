@@ -230,6 +230,12 @@ mod tests {
             "[v1]\n\"lch 0.1.0 (registry+https://x)\" = [\"lch\"]\n",
             // a branch pin with an empty branch, which names nothing
             "[v1]\n\"lch 0.1.0 (git+ssh://x/y.git?branch=#abc)\" = [\"lch\"]\n",
+            // `cargo install --path`, which is what somebody working on the
+            // launcher itself runs, and what a repo's own readme is likely to
+            // recommend. There is no remote to compare against, so the check
+            // has nothing to chase, and a launcher installed this way stays
+            // exactly as stale as its checkout.
+            "[v1]\n\"lch 0.1.0 (path+file:///home/u/launcher)\" = [\"lch\"]\n",
         ] {
             assert!(installed_source_from("lch", toml).is_none(), "{toml}");
         }

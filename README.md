@@ -93,16 +93,16 @@ tool that needs none.
 
 ## Installation
 
-```bash
-cargo add renki
-```
-
-Or add to your `Cargo.toml`:
+Not on crates.io yet, so for now it comes off the repository:
 
 ```toml
 [dependencies]
-renki = "0.0"
+renki = { git = "https://github.com/orgrinrt/renki.git", branch = "dev" }
 ```
+
+Once it publishes, pin the exact version rather than a range. `Tool` is a struct
+literal, so every field added to it is a breaking change, and `0.0.x` releases
+are incompatible with each other by semver's own rules anyway.
 
 You don't install `renki` itself as a command. It's a library, and what goes on
 `PATH` is your own launcher built with it.
@@ -118,12 +118,12 @@ const TOOL: Tool = Tool {
     anchor:          Anchor::Marker(".git"),   // widget.toml sits beside .git
     short:           "widget",                 // WIDGET_ROOT, and `widget: ...` on diagnostics
     config_file:     "widget.toml",
-    pin_prefix:      "widget",                 // so: widget_version, widget_rev, widget_branch, widget_tag
+    pin_prefix:      "widget",                 // widget_version, _rev, _branch, _tag, and _git for the url
     engine_crate:    "widget-engine",
     engine_bin:      None,        // the bin is named after the package
     cache_namespace: "widget",                 // ~/.cache/widget/, yours alone
     default_url:     "ssh://git@github.com/o/widget.git",
-    launcher_crate:  "cargo-widget",           // how it finds itself in cargo's install ledger
+    launcher_crate:  "widget",                 // how it finds itself in cargo's install ledger
     workdir:         None,                     // no subdirectory, the engine runs against the repo root
     dir_flag:        Cli::DIR_FLAG,
     engine_flag:     Cli::ENGINE_FLAG,

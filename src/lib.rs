@@ -54,9 +54,12 @@
 // noise that the crate root had forgotten to re-export.
 #![warn(unreachable_pub, missing_docs)]
 
-// The README's example is compiled as a doctest, so the two cannot drift. It
-// went out of date once already: the `Tool` grew fields and the block in the
-// README kept the old shape, which read as correct and did not build.
+// The README's `rust` block is compiled as a doctest. Only that one: the shell
+// and toml blocks are prose as far as this is concerned, and changing the fence
+// would drop the check with nothing saying so.
+//
+// It went out of date once already, when `Tool` grew fields and the block kept
+// the old shape, which read as correct and did not build.
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct Readme;
@@ -137,32 +140,36 @@ pub unsafe fn run(tool: &Tool) -> ExitCode {
 /// this when the caller has already sanitised, or when it knows it is not a
 /// hook descendant.
 pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
-    // Refused here rather than tolerated, because the failure it prevents is
-    // silent: a short name a shell cannot spell leaves `<SHORT>_ROOT` and
-    // `<SHORT>_NO_SELF_UPDATE` unsettable, and both simply never fire.
-    // `Tool::short_is_usable` is const, so a tool can settle this at build
-    // time instead of shipping and finding out.
-    if !tool.short_is_usable() {
-        eprintln!(
-            "renki: the tool's short name {:?} cannot be an environment \
-             variable name, so {}_ROOT and {}_NO_SELF_UPDATE could never be \
-             set. Use ascii letters, digits and underscores, not leading with \
-             a digit.",
-            tool.short,
-            tool.short.to_uppercase(),
-            tool.short.to_uppercase()
-        );
-        return ExitCode::FAILURE;
-    }
     let raw: Vec<String> = std::env::args().collect();
-    let forwarded = normalize_args(tool, &raw);
-    match dispatch(tool, &forwarded) {
+    match outcome(tool, &raw) {
         Ok(()) => ExitCode::SUCCESS, // unreachable when the exec succeeds
         Err(e) => {
             eprintln!("{}: {e}", tool.short);
             ExitCode::FAILURE
         }
     }
+}
+
+/// What the launcher did, as a value rather than as an exit code and a line on
+/// stderr.
+///
+/// Split out because an exit code cannot say *why*, and both failures below
+/// produce the same one. A test asserting that a broken descriptor is refused
+/// passes just as well against a launcher that got as far as looking for a
+/// repository and did not find one, which is not the same thing at all and is
+/// how the check ends up unwired without anything reporting it.
+fn outcome(tool: &Tool, raw: &[String]) -> Result<(), String> {
+    // Refused before anything else, because what a bad descriptor produces is
+    // silence rather than an error: a short name no shell can spell leaves both
+    // overrides unsettable, and an empty engine binary name rebuilds the engine
+    // on every run forever. `Tool::defect` is const, so a tool can settle this
+    // at build time instead of shipping and finding out.
+    if let Some(defect) = tool.defect() {
+        return Err(format!(
+            "this launcher's descriptor is not usable: {defect}"
+        ));
+    }
+    dispatch(tool, &normalize_args(tool, raw))
 }
 
 /// Print where this checkout keeps its config and working directory, as
@@ -560,6 +567,86 @@ mod tests {
         locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
+
+    #[test]
+    fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
+        // The point of the check is that it runs, and a predicate tested only
+        // as a predicate stays green when nothing calls it. Every arm below is
+        // a descriptor that would otherwise run and misbehave quietly.
+        const BAD: [Tool; 8] = [
+            Tool {
+                short: "my-tool",
+                ..T
+            },
+            Tool {
+                config_file: "",
+                ..T
+            },
+            Tool {
+                pin_prefix: "",
+                ..T
+            },
+            Tool {
+                engine_crate: "",
+                ..T
+            },
+            Tool {
+                engine_bin: Some(""),
+                ..T
+            },
+            Tool {
+                cache_namespace: "",
+                ..T
+            },
+            Tool {
+                launcher_crate: "",
+                ..T
+            },
+            Tool {
+                anchor: Anchor::Marker(""),
+                ..T
+            },
+        ];
+        for bad in &BAD {
+            assert!(
+                bad.defect().is_some(),
+                "no defect reported for {:?}",
+                bad.short
+            );
+            let err = outcome(bad, &s(&["widget"])).expect_err("a broken launcher ran");
+            assert!(
+                err.contains("descriptor is not usable"),
+                "it failed for some other reason, so nothing checked the descriptor: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sound_descriptor_is_not_refused() {
+        // The control. Without it the test above passes for a `defect` that
+        // returns `Some` unconditionally, which would refuse every launcher
+        // ever built on this.
+        assert!(T.defect().is_none(), "the fixture itself is not usable");
+        const NAMED_BIN: Tool = Tool {
+            engine_bin: Some("engine"),
+            ..T
+        };
+        assert!(NAMED_BIN.defect().is_none());
+    }
+
+    #[test]
+    fn an_empty_engine_bin_would_have_looked_for_the_directory_itself() {
+        // Why that arm is in the list, computed rather than asserted from
+        // memory: the join produces the bin directory, and a directory is never
+        // the file the cache short-circuits on, so the engine rebuilds forever.
+        const EMPTY: Tool = Tool {
+            engine_bin: Some(""),
+            ..T
+        };
+        let looked_for = Path::new("/cache/builds/k/bin").join(EMPTY.engine_bin_name());
+        assert_eq!(looked_for, Path::new("/cache/builds/k/bin/"));
+        assert_eq!(looked_for, Path::new("/cache/builds/k/bin"));
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

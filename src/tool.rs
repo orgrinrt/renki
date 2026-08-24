@@ -225,6 +225,82 @@ impl Tool {
         }
     }
 
+    /// The first thing wrong with this descriptor, or `None`.
+    ///
+    /// Every name here ends up in a path, a command line, an environment
+    /// variable or a config key, and an empty one produces a launcher that runs
+    /// and does the wrong thing quietly rather than one that fails. The worst is
+    /// an empty [`Tool::engine_bin`]: the built binary is then looked for at the
+    /// `bin/` directory itself, which is never a file, so the engine is rebuilt
+    /// on every single run and nothing says why.
+    ///
+    /// Const, so a tool can settle it at build time:
+    ///
+    /// ```
+    /// # use renki::{Anchor, Cli, Hooks, Locate, Tool};
+    /// # const TOOL: Tool = Tool {
+    /// #     anchor: Anchor::Marker(".git"), short: "widget",
+    /// #     config_file: "w.toml", pin_prefix: "w",
+    /// #     engine_crate: "w-engine", engine_bin: None, cache_namespace: "w",
+    /// #     default_url: "u", launcher_crate: "w", workdir: None,
+    /// #     dir_flag: Cli::DIR_FLAG, engine_flag: Cli::ENGINE_FLAG,
+    /// #     locate: Locate::DEFAULT, hooks: Hooks::NONE,
+    /// # };
+    /// const _: () = assert!(TOOL.defect().is_none());
+    /// ```
+    ///
+    /// [`run`](crate::run) reports this and exits rather than starting.
+    #[must_use]
+    pub const fn defect(&self) -> Option<&'static str> {
+        if !self.short_is_usable() {
+            return Some(
+                "short is not usable as an environment variable name, so the tool's \
+                 own overrides could never be set",
+            );
+        }
+        // Every remaining name, in the order a run reaches them. The message
+        // names the field rather than describing the symptom, because the
+        // symptom is usually somewhere else entirely by the time it shows.
+        if self.config_file.is_empty() {
+            return Some("config_file is empty, so discovery has nothing to look for");
+        }
+        if self.pin_prefix.is_empty() {
+            return Some("pin_prefix is empty, so the pin keys have no names");
+        }
+        if self.engine_crate.is_empty() {
+            return Some("engine_crate is empty, so there is nothing to build");
+        }
+        if let Some(bin) = self.engine_bin
+            && bin.is_empty()
+        {
+            return Some(
+                "engine_bin is empty, so the built binary is looked for at the bin \
+                 directory itself and the engine rebuilds on every run",
+            );
+        }
+        if self.cache_namespace.is_empty() {
+            return Some(
+                "cache_namespace is empty, so this tool would share a cache with every other",
+            );
+        }
+        if self.launcher_crate.is_empty() {
+            return Some(
+                "launcher_crate is empty, so the update check can never find its own install",
+            );
+        }
+        if self.dir_flag.is_empty() || self.engine_flag.is_empty() {
+            return Some(
+                "dir_flag or engine_flag is empty, which puts a bare empty argument on the command line",
+            );
+        }
+        if let Anchor::Marker(m) = self.anchor
+            && m.is_empty()
+        {
+            return Some("the anchor marker is empty, so the root walk matches every directory");
+        }
+        None
+    }
+
     /// Whether [`Tool::short`] can survive being made into an environment
     /// variable name.
     ///
@@ -248,8 +324,9 @@ impl Tool {
     /// const _: () = assert!(TOOL.short_is_usable());
     /// ```
     ///
-    /// [`run`](crate::run) refuses a tool that fails this, rather than running
-    /// with two overrides that silently do nothing.
+    /// [`run`](crate::run) refuses a tool that fails this, through
+    /// [`Tool::defect`], rather than running with two overrides that silently
+    /// do nothing.
     #[must_use]
     pub const fn short_is_usable(&self) -> bool {
         let b = self.short.as_bytes();
