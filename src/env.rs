@@ -10,8 +10,8 @@
 //! inherited and `GIT_WORK_TREE` unset, git treats that working directory as
 //! the top of the work tree, so every index path resolves against the wrong
 //! tree; with a *relative* `GIT_DIR=.git` the same inheritance makes those
-//! invocations fail outright. Found live in mockspace: a worktree commit
-//! reported all 84 doc templates as untracked.
+//! invocations fail outright. Found live rather than reasoned about: a commit
+//! inside a worktree reported every tracked file in it as untracked.
 //!
 //! Dropping `GIT_INDEX_FILE` means a `git commit -a` temporary index is not
 //! consulted. For detection that changes nothing, since a scan covers staged,

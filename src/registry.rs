@@ -17,8 +17,10 @@
 //!
 //! - `[[consumer]]`, one per repo the launcher has run: where it is, what it
 //!   pins, and which build key that resolved to. The pin `form` (`version` /
-//!   `branch` / `rev` / `tag` / `legacy`) makes migration detection fall out of
-//!   the registry: a `legacy` consumer has not adopted an explicit pin yet.
+//!   `branch` / `rev` / `tag` / `legacy`) is recorded, so a `legacy` row is a
+//!   repo that has not adopted an explicit pin yet. Nothing outside this crate
+//!   can read that today; the file is on disk and parseable, and a query for it
+//!   is a decision nobody has made.
 //! - `[[build]]`, one per cached engine build: its key and when it was last
 //!   used. GC removes a build no live consumer resolves to.
 //!
@@ -43,7 +45,8 @@ const LRU_STALE_SECS: u64 = 30 * 24 * 60 * 60;
 /// Pin form as recorded for a consumer. `Legacy` means the pin came from the
 /// tool's [`legacy_pin`](crate::Hooks::legacy_pin) hook rather than from a pin
 /// key in the config, so the repo has not adopted an explicit pin yet. Counting
-/// those rows is how a tool knows whether its migration is finished.
+/// those rows would say whether a migration is finished, and nothing exposes
+/// them to a tool yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PinForm {
     Version,
@@ -87,7 +90,7 @@ pub(crate) struct Consumer {
     pub root: String,
     /// Repo name (the root dir basename today; a real project name later).
     pub name: String,
-    /// Absolute mock dir the pin maps.
+    /// Absolute working directory the engine is run from.
     pub workdir: String,
     /// The engine source url this repo builds from.
     pub engine_url: String,
@@ -130,7 +133,7 @@ impl Registry {
     }
 
     /// Serialize and write. Best-effort: a write failure is not worth failing a
-    /// `mock` invocation over, since the registry is only an optimisation. The
+    /// run over, since the registry is only an optimisation. The
     /// write is atomic (temp beside the target, then rename) so a concurrent
     /// launcher reading the registry never sees a half-written file.
     pub(crate) fn save(&self, path: &Path) {
@@ -138,7 +141,12 @@ impl Registry {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(text) = toml::to_string_pretty(self) {
-            let tmp = path.with_extension("toml.tmp");
+            // The pid in the name, because two launchers finishing at the same
+            // moment would otherwise write the same temporary file and rename
+            // whichever half won into place. The registry survives a torn read
+            // by wiping itself, so this is a lost history rather than a
+            // corruption, and it is one call to avoid.
+            let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
             if std::fs::write(&tmp, &text).is_ok() {
                 let _ = std::fs::rename(&tmp, path);
             }

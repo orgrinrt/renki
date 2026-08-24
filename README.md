@@ -122,7 +122,7 @@ const TOOL: Tool = Tool {
     engine_crate:    "widget-engine",
     engine_bin:      None,        // the bin is named after the package
     cache_namespace: "widget",                 // ~/.cache/widget/, yours alone
-    default_url:     "ssh://git@github.com/o/widget.git",
+    default_url:     "https://github.com/o/widget.git",
     launcher_crate:  "widget",                 // how it finds itself in cargo's install ledger
     workdir:         None,                     // no subdirectory, the engine runs against the repo root
     dir_flag:        Cli::DIR_FLAG,

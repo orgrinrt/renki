@@ -297,8 +297,8 @@ mod tests {
         hooks: Hooks::NONE,
     };
 
-    /// A tool that demands more, the way mockspace demands a lint-rules crate
-    /// its custom-lint cdylibs can link against.
+    /// A tool that demands more of a checkout than a manifest, through the
+    /// verification hook.
     const FUSSY: Tool = Tool {
         dir_flag: Cli::DIR_FLAG,
         engine_flag: Cli::ENGINE_FLAG,

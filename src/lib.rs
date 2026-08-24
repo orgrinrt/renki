@@ -12,8 +12,9 @@
 //! so the shell's cwd never matters.
 //!
 //! The point is that a repo's tooling cannot drift from what the repo asked
-//! for, and that the launcher keeps itself current so nobody has to remember
-//! to. A hand-installed binary goes stale silently and nothing reports it.
+//! for. A launcher installed from a git branch also keeps itself current; one
+//! installed from a registry, a tag or a revision is pinned to what was asked
+//! for and stays there.
 //!
 //! # Using it
 //!
@@ -30,7 +31,7 @@
 //!     engine_crate:    "widget-engine",
 //!     engine_bin:      None,
 //!     cache_namespace: "widget",
-//!     default_url:     "ssh://git@github.com/o/widget.git",
+//!     default_url:     "https://github.com/o/widget.git",
 //!     launcher_crate:  "widget",
 //!     workdir:         None,
 //!     dir_flag:        Cli::DIR_FLAG,
@@ -553,14 +554,14 @@ mod tests {
 
     const T: Tool = Tool {
         anchor: Anchor::Marker(".git"),
-        short: "mock",
+        short: "widget",
         config_file: "t.toml",
         pin_prefix: "t",
         engine_crate: "engine",
         engine_bin: None,
         cache_namespace: "t",
         default_url: "u",
-        launcher_crate: "cargo-mock",
+        launcher_crate: "cargo-widget",
         workdir: None,
         dir_flag: Cli::DIR_FLAG,
         engine_flag: Cli::ENGINE_FLAG,
@@ -679,17 +680,17 @@ mod tests {
 
     #[test]
     fn a_cargo_subcommand_drops_the_repeated_name() {
-        // cargo runs `cargo mock x` as `cargo-mock mock x`, so the engine would
-        // otherwise be handed a subcommand it does not have.
+        // cargo runs `cargo widget x` as `cargo-widget widget x`, so the engine
+        // would otherwise be handed a subcommand it does not have.
         assert_eq!(
             normalize_args(
                 &T,
-                &s(&["/root/.cargo/bin/cargo-mock", "mock", "lock", "--foo"])
+                &s(&["/root/.cargo/bin/cargo-widget", "widget", "lock", "--foo"])
             ),
             s(&["lock", "--foo"])
         );
         assert_eq!(
-            normalize_args(&T, &s(&["cargo-mock", "mock"])),
+            normalize_args(&T, &s(&["cargo-widget", "widget"])),
             Vec::<String>::new()
         );
     }
@@ -722,7 +723,7 @@ mod tests {
         assert_eq!(
             normalize_args(
                 &T,
-                &s(&["mock", "check", "--dir", "/somewhere", "--scope", "x"])
+                &s(&["widget", "check", "--dir", "/somewhere", "--scope", "x"])
             ),
             s(&["check", "--scope", "x"])
         );
@@ -737,7 +738,7 @@ mod tests {
         assert_eq!(
             normalize_args(
                 &T,
-                &s(&["mock", "check", "--dir=/somewhere", "--scope", "x"])
+                &s(&["widget", "check", "--dir=/somewhere", "--scope", "x"])
             ),
             s(&["check", "--scope", "x"])
         );
@@ -748,11 +749,11 @@ mod tests {
             ..T
         };
         assert_eq!(
-            normalize_args(&OTHER, &s(&["mock", "check", "--at=/somewhere"])),
+            normalize_args(&OTHER, &s(&["widget", "check", "--at=/somewhere"])),
             s(&["check"])
         );
         assert_eq!(
-            normalize_args(&OTHER, &s(&["mock", "check", "--dir=/somewhere"])),
+            normalize_args(&OTHER, &s(&["widget", "check", "--dir=/somewhere"])),
             s(&["check", "--dir=/somewhere"]),
             "a flag the tool did not choose was stripped anyway"
         );
@@ -765,7 +766,7 @@ mod tests {
         // naming nothing changes nothing. What must not happen is the next
         // argument being eaten as the value.
         assert_eq!(
-            normalize_args(&T, &s(&["mock", "check", "--dir", "--scope", "x"])),
+            normalize_args(&T, &s(&["widget", "check", "--dir", "--scope", "x"])),
             s(&["check", "--scope", "x"])
         );
     }
@@ -774,9 +775,8 @@ mod tests {
     fn the_locate_answer_uses_the_tools_own_key_names() {
         // All three were hardcoded here while `Locate` documented them as "a
         // contract with those callers", so a tool that set them got the
-        // conventional spellings anyway and its own shell helpers parsed
-        // nothing. Caught by mockspace, whose `lib/mock.sh` has parsed
-        // `mock_dir=` since before the launcher was extracted.
+        // conventional spellings anyway and its own shell helpers, parsing the
+        // names it had chosen, parsed nothing at all.
         const OWN: Locate = Locate {
             subcommand: Some("locate"),
             root_key: "repo",
@@ -887,7 +887,7 @@ mod tests {
     #[test]
     fn the_missing_root_message_names_what_was_looked_for() {
         assert!(no_root(&T).contains(".git"), "{}", no_root(&T));
-        assert!(no_root(&T).contains("MOCK_ROOT"), "{}", no_root(&T));
+        assert!(no_root(&T).contains("WIDGET_ROOT"), "{}", no_root(&T));
 
         const SPAN: Tool = Tool {
             anchor: Anchor::ConfigFile,
@@ -931,7 +931,7 @@ mod tests {
         // the one person this message has to serve, and telling them it is
         // unset sends them looking somewhere else entirely.
         let unset = no_root_with(&T, None);
-        assert!(unset.contains("MOCK_ROOT is unset"), "{unset}");
+        assert!(unset.contains("WIDGET_ROOT is unset"), "{unset}");
         assert!(unset.contains(".git"), "{unset}");
 
         let set = no_root_with(&T, Some("/nope/xyzzy".into()));

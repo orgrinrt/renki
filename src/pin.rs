@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn the_engine_crate_named_in_the_attempts_is_the_tools_own() {
         // the control that makes the assertions above mean anything: nothing
-        // mockspace-shaped is baked into the argument lists.
+        // is baked into the argument lists that did not come from the tool.
         let d = tempfile::tempdir().unwrap();
         const OTHER: Tool = Tool {
             engine_crate: "somethingelse",

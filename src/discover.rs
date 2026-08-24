@@ -184,7 +184,7 @@ mod tests {
     use super::*;
     use crate::tool::{Cli, Hooks, Locate, Workdir};
 
-    /// A tool whose config lives in a repo, mockspace's shape.
+    /// A tool whose config lives inside a repository.
     const REPO: Tool = Tool {
         anchor: Anchor::Marker(".git"),
         short: "mock",
@@ -205,7 +205,7 @@ mod tests {
         hooks: Hooks::NONE,
     };
 
-    /// A tool whose config sits above a pile of repos, homma's shape.
+    /// A tool whose config sits above a pile of repositories.
     const SPAN: Tool = Tool {
         anchor: Anchor::ConfigFile,
         workdir: None,

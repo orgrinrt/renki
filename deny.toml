@@ -1,8 +1,6 @@
 # cargo-deny configuration. Checks dependency advisories (RustSec), license
 # compatibility across the full transitive graph, dependency bans, and source
-# registries. Run with `cargo deny check`; mockspace's pre-push gate runs it
-# best-effort when cargo-deny is installed (opt out with `deny_check = false`
-# in mockspace.toml).
+# registries. Run with `cargo deny check`.
 
 # `targets` filters which platform's dependency tree cargo-deny analyses; it
 # takes rustc target triples, not cargo build-target names. An empty list
