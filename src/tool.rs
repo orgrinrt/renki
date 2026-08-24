@@ -193,6 +193,18 @@ pub struct Hooks {
     /// A last-resort pin for a repo that has not adopted an explicit one,
     /// given the working directory. Keeps a repo mid-migration running.
     pub legacy_pin: Option<fn(&Path) -> Option<Pin>>,
+    /// The tag a released version is under, where the repository does not name
+    /// its tags after the bare version.
+    ///
+    /// The version pin tries the registry first and a git tag second, and the
+    /// second attempt needs a name. `v0.1.0` is at least as common as `0.1.0`,
+    /// and a tool whose engine repository uses the prefix could not be built
+    /// from a version pin before publishing, with the failure reported against
+    /// the pin rather than against the spelling.
+    ///
+    /// Every string this returns is tried in order, so a repository that
+    /// changed convention partway can name both.
+    pub version_tags: Option<fn(&str) -> Vec<String>>,
     /// Refuse a repo state that would silently route the user somewhere else,
     /// given the repo root.
     ///
@@ -210,6 +222,7 @@ impl Hooks {
         engine_args: None,
         engine_args_local: None,
         verify_engine_dir: None,
+        version_tags: None,
         legacy_pin: None,
         verify_repo_state: None,
     };

@@ -473,6 +473,7 @@ mod tests {
             },
             key_rev: "r".into(),
             attempts: vec![],
+            version_tag: String::new(),
         };
         let got = ensure_built(&RENAMED, dir.path(), key, &no_attempts).unwrap();
         assert_eq!(got, binpath.join("shortname"));
@@ -506,6 +507,7 @@ mod tests {
             },
             key_rev: "r".into(),
             attempts: vec![],
+            version_tag: String::new(),
         };
         assert!(ensure_built(&T, dir.path(), key, &no_attempts).is_err());
 
