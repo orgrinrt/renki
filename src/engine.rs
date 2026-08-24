@@ -37,6 +37,17 @@ use crate::tool::Tool;
 /// the target directory is what makes the rebuild cheap and it lives here too.
 const SCRATCH_TTL_SECS: u64 = 24 * 60 * 60;
 
+/// The file whose timestamp says when a scratch build was last used.
+///
+/// A directory's own modification time changes when an entry is added to it or
+/// removed from it, and not when something inside an entry is written. cargo
+/// writes into `bin` and `target`, both of which already exist after the first
+/// run, so the root's timestamp is when it was created and never moves again.
+/// Reading it as last use meant a checkout somebody worked on daily was swept
+/// by its own process every day and rebuilt cold, which is the opposite of what
+/// keeping the target directory is for.
+const SCRATCH_MARKER: &str = ".last-used";
+
 /// Where scratch engine builds live, beside the keyed ones but never mixed with
 /// them: the keyed cache is content-addressed and shared, this is neither.
 fn scratch_dir(cache_root: &Path) -> PathBuf {
@@ -190,6 +201,7 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
     let root = scratch.join(h.hex());
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create {}: {e}", root.display()))?;
+    touch(&root);
 
     eprintln!(
         "{}: building the engine from {} (scratch, not cached by revision)",
@@ -224,6 +236,14 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
     Ok(bin)
 }
 
+/// Record that this scratch build is in use, for the sweep to read later.
+///
+/// Best-effort. A marker that cannot be written costs a rebuild a day later and
+/// nothing else, so it is not worth failing a run over.
+fn touch(root: &Path) {
+    let _ = std::fs::write(root.join(SCRATCH_MARKER), b"");
+}
+
 /// Delete scratch builds nothing has used for [`SCRATCH_TTL_SECS`].
 ///
 /// Best-effort in every direction: a scratch build is disposable, so a sweep
@@ -239,8 +259,11 @@ fn sweep(scratch: &Path) {
         if !path.is_dir() {
             continue;
         }
-        let stale = entry
-            .metadata()
+        // The marker where there is one, and the directory itself where there
+        // is not, which is a root from before the marker existed.
+        let stamp = std::fs::metadata(path.join(SCRATCH_MARKER))
+            .or_else(|_| entry.metadata());
+        let stale = stamp
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| now.duration_since(t).ok())
@@ -455,6 +478,72 @@ mod tests {
         std::fs::write(dir.path().join("Cargo.toml"), b"[package]\n").unwrap();
         let got = locate(&PLAIN, &dir.path().to_string_lossy()).unwrap();
         assert!(got.is_absolute());
+    }
+
+    /// Push a path's modification time back by `secs`, directory or file.
+    fn backdate(path: &Path, secs: u64) {
+        let f = std::fs::File::options()
+            .read(true)
+            .open(path)
+            .expect("open for backdating");
+        let then = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+        f.set_modified(then).expect("set the modification time");
+    }
+
+    #[test]
+    fn a_build_used_today_survives_however_long_ago_it_was_made() {
+        // A directory's own timestamp moves when an entry is added to it or
+        // taken out of it, and not when something inside an entry is written.
+        // cargo writes into `bin` and `target`, which exist after the first
+        // run, so the root's timestamp is when it was created. Reading that as
+        // last use swept a checkout somebody was working on daily.
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = dir.path().join("engines");
+        let root = scratch.join("aaaa");
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        touch(&root);
+        backdate(&root, SCRATCH_TTL_SECS * 3);
+
+        sweep(&scratch);
+        assert!(
+            root.is_dir(),
+            "a build used a moment ago was swept for having been created a long time ago"
+        );
+    }
+
+    #[test]
+    fn a_build_nothing_has_touched_since_the_ttl_goes() {
+        // The control for the one above, and for the sweep as a whole: with
+        // the marker backdated too, the same directory is removed. Without
+        // this the test above would pass against a sweep that had simply
+        // stopped deleting anything.
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = dir.path().join("engines");
+        let root = scratch.join("aaaa");
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        touch(&root);
+        backdate(&root.join(SCRATCH_MARKER), SCRATCH_TTL_SECS * 3);
+        backdate(&root, SCRATCH_TTL_SECS * 3);
+
+        sweep(&scratch);
+        assert!(!root.exists(), "a build nobody has used since the ttl survived");
+    }
+
+    #[test]
+    fn a_root_from_before_the_marker_falls_back_to_its_own_timestamp() {
+        // Whatever is already on disk was written by a version that left no
+        // marker, so the sweep still has to be able to judge one.
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = dir.path().join("engines");
+        let old = scratch.join("aaaa");
+        let new = scratch.join("bbbb");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        backdate(&old, SCRATCH_TTL_SECS * 3);
+
+        sweep(&scratch);
+        assert!(!old.exists(), "an unmarked stale root survived");
+        assert!(new.is_dir(), "an unmarked fresh root was swept");
     }
 
     #[test]
