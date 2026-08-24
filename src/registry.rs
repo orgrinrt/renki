@@ -8,11 +8,10 @@
 //! anymore and, forward-looking, to index every repo the launcher has seen.
 //!
 //! It lives at `<cache>/registry.toml`, beside `builds/`. Everything in it is
-//! recomputable: re-read each repo's config, re-resolve, and
-//! the same rows reappear. That is why it is cache, not config, a wipe costs
-//! only the first re-run of each repo. The durable per-developer state the v2
-//! spec places under `~/.config/<tool>/` is a
-//! separate concern this file does not touch.
+//! recomputable: re-read each repo's config, re-resolve, and the same rows
+//! reappear. That is why it is cache rather than config, and why a wipe costs
+//! only the first re-run of each repo. Durable per-developer state belongs
+//! somewhere a wipe does not reach, and this file does not hold any.
 //!
 //! Two tables:
 //!
@@ -23,9 +22,10 @@
 //! - `[[build]]`, one per cached engine build: its key and when it was last
 //!   used. GC removes a build no live consumer resolves to.
 //!
-//! The `name` / `workdir` / `engine_url` fields are kept so a later cross-repo
-//! index (the v2 `[hosts.*]` alias direction) has its data already; the launcher
-//! does not resolve cross-repo references itself yet.
+//! The `name`, `workdir` and `engine_url` fields are recorded although nothing
+//! reads them yet. They are what an index across repositories would need, and
+//! recording them from the start costs a few bytes per repo, where adding them
+//! later would leave every row written before that day incomplete.
 
 use std::path::{Path, PathBuf};
 
@@ -35,15 +35,17 @@ use serde::{Deserialize, Serialize};
 const GC_INTERVAL_SECS: u64 = 24 * 60 * 60;
 
 /// A build whose consumers have all been idle at least this long is evicted
-/// even though they still nominally pin it (the LRU overlay op asked for): an
-/// untouched repo's engine is cheap to rebuild if the repo is ever revisited.
+/// even though they still nominally pin it. An untouched repo's engine is cheap
+/// to rebuild if the repo is ever revisited, and holding it forever means a
+/// cache that only grows.
 const LRU_STALE_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// Pin form as recorded for a consumer. `Legacy` means the pin came from the
-/// working directory's lockfile rather than an explicit pin key, so
-/// the repo has not been migrated to the launcher+pin model yet.
+/// tool's [`legacy_pin`](crate::Hooks::legacy_pin) hook rather than from a pin
+/// key in the config, so the repo has not adopted an explicit pin yet. Counting
+/// those rows is how a tool knows whether its migration is finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PinForm {
+pub(crate) enum PinForm {
     Version,
     Branch,
     Rev,
@@ -65,7 +67,7 @@ impl PinForm {
 
 /// The whole registry file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Registry {
+pub(crate) struct Registry {
     /// Schema tag for forward migrations; absent on the first write.
     #[serde(default)]
     pub schema: u32,
@@ -80,7 +82,7 @@ pub struct Registry {
 
 /// One repo the launcher has run in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Consumer {
+pub(crate) struct Consumer {
     /// Absolute repo root.
     pub root: String,
     /// Repo name (the root dir basename today; a real project name later).
@@ -102,7 +104,7 @@ pub struct Consumer {
 
 /// One cached engine build.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Build {
+pub(crate) struct Build {
     pub key: String,
     pub engine_url: String,
     pub key_rev: String,
@@ -113,14 +115,14 @@ pub struct Build {
 }
 
 /// The registry file path under the cache root.
-pub fn registry_path(cache_root: &Path) -> PathBuf {
+pub(crate) fn registry_path(cache_root: &Path) -> PathBuf {
     cache_root.join("registry.toml")
 }
 
 impl Registry {
     /// Load the registry, tolerating absence or corruption by returning an empty
     /// one (it is a rebuildable cache, never a hard dependency).
-    pub fn load(path: &Path) -> Registry {
+    pub(crate) fn load(path: &Path) -> Registry {
         std::fs::read_to_string(path)
             .ok()
             .and_then(|s| toml::from_str(&s).ok())
@@ -131,7 +133,7 @@ impl Registry {
     /// `mock` invocation over, since the registry is only an optimisation. The
     /// write is atomic (temp beside the target, then rename) so a concurrent
     /// launcher reading the registry never sees a half-written file.
-    pub fn save(&self, path: &Path) {
+    pub(crate) fn save(&self, path: &Path) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -146,7 +148,7 @@ impl Registry {
     /// Upsert the current repo as a consumer (keyed by `root`) and the build it
     /// resolved to (keyed by `key`), stamping `now`.
     #[allow(clippy::too_many_arguments)]
-    pub fn record(
+    pub(crate) fn record(
         &mut self,
         root: &str,
         name: &str,
@@ -194,7 +196,7 @@ impl Registry {
     }
 
     /// Whether a GC pass is due (throttled by `last_gc`).
-    pub fn gc_due(&self, now: u64) -> bool {
+    pub(crate) fn gc_due(&self, now: u64) -> bool {
         now.saturating_sub(self.last_gc) >= GC_INTERVAL_SECS
     }
 
@@ -206,7 +208,7 @@ impl Registry {
     /// longer exists on disk are dropped first, so a deleted repo orphans its
     /// build. Removes the on-disk build dirs and the pruned `[[build]]` rows;
     /// returns the removed keys for logging.
-    pub fn gc(&mut self, cache_root: &Path, protect: &str, now: u64) -> Vec<String> {
+    pub(crate) fn gc(&mut self, cache_root: &Path, protect: &str, now: u64) -> Vec<String> {
         self.consumers.retain(|c| Path::new(&c.root).is_dir());
         self.last_gc = now;
 

@@ -20,7 +20,7 @@
 //! Declare a [`Tool`] as a `const`, and hand it over:
 //!
 //! ```no_run
-//! use renki::{Anchor, Hooks, Tool};
+//! use renki::{Anchor, Cli, Hooks, Locate, Tool};
 //!
 //! const TOOL: Tool = Tool {
 //!     anchor:          Anchor::Marker(".git"),
@@ -32,16 +32,26 @@
 //!     default_url:     "ssh://git@github.com/o/widget.git",
 //!     launcher_crate:  "widget",
 //!     workdir:         None,
+//!     dir_flag:        Cli::DIR_FLAG,
+//!     engine_flag:     Cli::ENGINE_FLAG,
+//!     locate:          Locate::DEFAULT,
 //!     hooks:           Hooks::NONE,
 //! };
 //!
 //! fn main() -> std::process::ExitCode {
-//!     renki::run(&TOOL)
+//!     // SAFETY: the first statement of main, before any thread exists.
+//!     unsafe { renki::run(&TOOL) }
 //! }
 //! ```
 //!
 //! Everything that is one tool's and no other's goes through [`Hooks`] rather
 //! than into this crate.
+
+// The crate's whole selling point is a small honest surface, and both of these
+// guard exactly that claim. `unreachable_pub` caught thirty-one items marked
+// public inside private modules, and one genuinely public type hiding in that
+// noise that the crate root had forgotten to re-export.
+#![warn(unreachable_pub, missing_docs)]
 
 mod cache;
 mod discover;
@@ -60,7 +70,7 @@ use std::process::ExitCode;
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
 pub use crate::manifest::{Header, Pin, Reference};
 pub use crate::pin::Resolved;
-pub use crate::tool::{Anchor, Hooks, Tool, Workdir};
+pub use crate::tool::{Anchor, Check, Cli, Hooks, Locate, Tool, Workdir};
 
 /// Where a resolved pin came from, so the registry can tell a repo that has
 /// adopted an explicit pin from one still on whatever legacy fallback the tool
@@ -72,15 +82,53 @@ enum PinSource {
 }
 
 /// The launcher entry. A tool's `main` is this and nothing else.
-pub fn run(tool: &Tool) -> ExitCode {
-    // The launcher runs as a child of git hooks, whose exported repo-location
-    // GIT_* variables poison every `git` this process, and the engine it
-    // spawns, invokes from a different working directory. Drop them first.
-    //
-    // SAFETY: this is the first statement of the installed binary's main; no
-    // thread has been spawned yet.
+///
+/// A launcher usually runs as a child of a git hook, whose exported
+/// repo-location `GIT_*` variables would poison every `git` this process and
+/// the engine it spawns invoke from a different working directory. This drops
+/// them, which is what makes it unsafe: the environment is process-global and
+/// unsynchronised, so the removal is sound only in a process that has not
+/// started a thread yet. That is a fact about the caller, which is why the
+/// caller states it.
+///
+/// # Safety
+///
+/// Call as the first statement of `main`, before anything spawns a thread and
+/// before anything reads the environment. See [`sanitize_git_env`], whose
+/// contract this inherits whole.
+///
+/// ```no_run
+/// # const TOOL: renki::Tool = renki::Tool {
+/// #     anchor: renki::Anchor::ConfigFile, short: "w", config_file: "w.toml",
+/// #     pin_prefix: "w", engine_crate: "w-engine", cache_namespace: "w",
+/// #     default_url: "https://example.invalid/w.git", launcher_crate: "w",
+/// #     workdir: None, dir_flag: renki::Cli::DIR_FLAG,
+/// #     engine_flag: renki::Cli::ENGINE_FLAG, locate: renki::Locate::DEFAULT,
+/// #     hooks: renki::Hooks::NONE,
+/// # };
+/// fn main() -> std::process::ExitCode {
+///     // SAFETY: the first statement of main, before any thread exists.
+///     unsafe { renki::run(&TOOL) }
+/// }
+/// ```
+///
+/// [`run_without_sanitizing`] is the safe door, for a caller that has already
+/// scrubbed or that is not a hook descendant and wants its environment left
+/// alone.
+pub unsafe fn run(tool: &Tool) -> ExitCode {
+    // SAFETY: forwarded to this function's own caller, unchanged.
     unsafe { sanitize_git_env() };
+    run_without_sanitizing(tool)
+}
 
+/// The launcher entry, without touching the environment.
+///
+/// Safe, and correspondingly narrower: a launcher reached from a git hook needs
+/// the scrub [`run`] performs, or every `git` it and its engine run reads the
+/// hook's repository rather than the one under the working directory. Reach for
+/// this when the caller has already sanitised, or when it knows it is not a
+/// hook descendant.
+pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
     let raw: Vec<String> = std::env::args().collect();
     let forwarded = normalize_args(tool, &raw);
     match dispatch(tool, &forwarded) {
@@ -164,9 +212,9 @@ fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
 /// name is `cargo-<x>`. That is cargo's convention rather than any one tool's,
 /// which is why it lives here.
 ///
-/// A user-supplied `--dir <x>` is stripped: the launcher owns `--dir` and
-/// always passes the absolute working directory.
-fn normalize_args(_tool: &Tool, raw: &[String]) -> Vec<String> {
+/// A user-supplied [`Tool::dir_flag`] is stripped, in either spelling: the
+/// launcher owns it and always passes the absolute working directory.
+fn normalize_args(tool: &Tool, raw: &[String]) -> Vec<String> {
     let prog = raw
         .first()
         .map(|p| {
@@ -183,37 +231,26 @@ fn normalize_args(_tool: &Tool, raw: &[String]) -> Vec<String> {
     {
         rest.remove(0);
     }
-    strip_dir_flag(rest)
+    strip_dir_flag(rest, tool.dir_flag)
 }
 
-/// Drop a `--dir <value>` pair anywhere in the args.
-fn strip_dir_flag(args: Vec<String>) -> Vec<String> {
-    let mut out = Vec::with_capacity(args.len());
-    let mut skip = false;
-    for a in args {
-        if skip {
-            skip = false;
-            continue;
-        }
-        if a == "--dir" {
-            skip = true;
-            continue;
-        }
-        out.push(a);
-    }
-    out
+/// Drop a user-supplied `<dir_flag> <value>` pair anywhere in the args, in
+/// either spelling. The launcher passes its own, so a second one is an
+/// ambiguity the engine should never have to resolve.
+fn strip_dir_flag(args: Vec<String>, dir_flag: &str) -> Vec<String> {
+    engine::take_flag(args, dir_flag).1
 }
 
 fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // `--engine <path>` is the launcher's, so it comes off before anything
     // reads the arguments, the same as `--dir`.
-    let (engine_override, args) = engine::take_flag(args.to_vec());
+    let (engine_override, args) = engine::take_flag(args.to_vec(), tool.engine_flag);
     let args = args.as_slice();
 
     // Answered before anything else: it is a question about this checkout
     // rather than a run of the engine, so it skips the self-update, the pin
     // resolution and the build.
-    if args.first().map(String::as_str) == Some("locate") {
+    if tool.locate.subcommand.is_some() && args.first().map(String::as_str) == tool.locate.subcommand {
         return locate_query(tool);
     }
 
@@ -241,9 +278,11 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // A repo state that would silently route the user somewhere else is refused
     // rather than tolerated. A retired cargo alias shadowing the launcher is the
     // case this exists for: the two spellings must be the same tool.
-    if located.is_some()
-        && let Some(verify) = tool.hooks.verify_repo_state
-    {
+    // Every run that found a root, config or none. A repo with no config is a
+    // repo that has not adopted the launcher, which is where a stale route left
+    // over from whatever it used before is most likely to still be in place, so
+    // gating this on a config found would skip the case it exists for.
+    if let Some(verify) = tool.hooks.verify_repo_state {
         verify(&root)?;
     }
 
@@ -446,6 +485,9 @@ mod tests {
         default_url: "u",
         launcher_crate: "cargo-mock",
         workdir: None,
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
 

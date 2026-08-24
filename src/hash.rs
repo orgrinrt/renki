@@ -15,15 +15,15 @@ const OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
 const PRIME: u64 = 0x0000_0100_0000_01B3;
 
 /// An FNV-1a 64-bit accumulator.
-pub struct Fnv(u64);
+pub(crate) struct Fnv(u64);
 
 impl Fnv {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Fnv(OFFSET)
     }
 
     /// Fold raw bytes in.
-    pub fn write(&mut self, bytes: &[u8]) {
+    pub(crate) fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.0 ^= u64::from(b);
             self.0 = self.0.wrapping_mul(PRIME);
@@ -33,13 +33,13 @@ impl Fnv {
     /// Fold a string in, followed by a NUL separator so that concatenating
     /// distinct fields cannot collide by running together (`"ab" + "c"` and
     /// `"a" + "bc"` hash differently).
-    pub fn write_field(&mut self, s: &str) {
+    pub(crate) fn write_field(&mut self, s: &str) {
         self.write(s.as_bytes());
         self.write(&[0]);
     }
 
     /// The 16-hex-digit cache-key string.
-    pub fn hex(&self) -> String {
+    pub(crate) fn hex(&self) -> String {
         format!("{:016x}", self.0)
     }
 }
@@ -49,9 +49,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn known_vector() {
-        // FNV-1a of the empty input is the offset basis.
-        assert_eq!(Fnv::new().hex(), format!("{OFFSET:016x}"));
+    fn matches_the_published_fnv_1a_64_vectors() {
+        // Known answers from outside this file, which is the whole difference
+        // between a vector test and a restatement. What stood here compared
+        // `Fnv::new().hex()` to `format!("{OFFSET:016x}")`, which is the
+        // definition against itself and holds for any offset whatsoever.
+        for (input, want) in [
+            ("", 0xcbf2_9ce4_8422_2325u64),
+            ("a", 0xaf63_dc4c_8601_ec8cu64),
+            ("foobar", 0x8594_4171_f739_67e8u64),
+        ] {
+            let mut h = Fnv::new();
+            h.write(input.as_bytes());
+            assert_eq!(h.hex(), format!("{want:016x}"), "input {input:?}");
+        }
     }
 
     #[test]
@@ -66,15 +77,20 @@ mod tests {
     }
 
     #[test]
-    fn stable_value() {
-        // Pin an exact value so a future refactor that changes the algorithm
-        // is caught (the cache would silently invalidate otherwise).
+    fn the_field_form_is_pinned_too() {
+        // `write_field` is what every caller uses and its separator is part of
+        // the persisted cache key, so the vectors above do not cover it. What
+        // stood here asserted `hex().len() == 16` and then compared a
+        // computation to the same computation, which holds for a hash function
+        // returning a constant. Changing either constant in this module
+        // invalidates every cached build on every machine and left it green.
         let mut h = Fnv::new();
         h.write_field("a stable input");
-        assert_eq!(h.hex().len(), 16);
-        // deterministic: same input, same output.
-        let mut h2 = Fnv::new();
-        h2.write_field("a stable input");
-        assert_eq!(h.hex(), h2.hex());
+        assert_eq!(h.hex(), "ccda88ec7937a739");
+
+        let mut two = Fnv::new();
+        two.write_field("a stable");
+        two.write_field("input");
+        assert_ne!(h.hex(), two.hex(), "the separator stopped separating");
     }
 }

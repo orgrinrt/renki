@@ -5,8 +5,7 @@
 
 //! The per-version build cache.
 //!
-//! Each distinct compilation input (the engine's url and rev, plus whatever
-//! repo-specific inputs the tool folds in) is built once into
+//! Each distinct compilation input (the engine's url and rev) is built once into
 //! `<cache>/builds/<key>/bin/<engine>` and shared by every repo pinned to it.
 //! `cargo install` takes its own lock on the install root and installs the
 //! binary atomically, so a racing second launcher either blocks on that lock or
@@ -24,7 +23,7 @@ use crate::pin::Resolved;
 use crate::tool::Tool;
 
 /// `$XDG_CACHE_HOME/<namespace>` or `~/.cache/<namespace>`.
-pub fn cache_root(tool: &Tool) -> Result<PathBuf, String> {
+pub(crate) fn cache_root(tool: &Tool) -> Result<PathBuf, String> {
     cache_root_from(
         tool,
         std::env::var_os("XDG_CACHE_HOME"),
@@ -57,14 +56,19 @@ fn builds_dir(root: &Path) -> PathBuf {
     root.join("builds")
 }
 
-/// The toolchain identity to fold into the cache key: `rustc -vV` (version,
-/// commit hash, host, LLVM). rustc is part of the real compilation input, so a
-/// toolchain change must re-key the cached engine, or a frozen engine binary
-/// would be paired with a freshly-built lint cdylib compiled by a different
-/// rustc, whose `Box<dyn Lint>` vtable layout may differ (UB across the dlopen
-/// boundary). Empty string when rustc cannot be run (the key then omits it; the
-/// build itself would fail downstream anyway).
-pub fn rustc_fingerprint() -> String {
+/// The toolchain identity to fold into the cache key: `rustc -vV`, which
+/// carries the version, the commit hash, the host triple and the LLVM version.
+///
+/// rustc is part of the real compilation input, so a toolchain change must
+/// re-key the cached engine. A frozen engine binary paired with anything
+/// compiled later by a different rustc is at best a rebuild nobody asked for,
+/// and at worst unsound where the two share a type across a dynamic library
+/// boundary, since neither the layout nor the vtable of a trait object is
+/// stable between compilers.
+///
+/// The empty string when rustc cannot be run at all. The key then omits it, and
+/// the build that follows would fail for the same reason anyway.
+pub(crate) fn rustc_fingerprint() -> String {
     Command::new("rustc")
         .arg("-vV")
         .output()
@@ -83,7 +87,7 @@ pub fn rustc_fingerprint() -> String {
 /// fourth field. It is not anticipated: an unreachable parameter reads as a
 /// feature the crate has, and this one carried two tests no caller could
 /// exercise.
-pub fn compute_key(url: &str, key_rev: &str, toolchain: &str) -> String {
+pub(crate) fn compute_key(url: &str, key_rev: &str, toolchain: &str) -> String {
     let mut h = Fnv::new();
     h.write_field(url);
     h.write_field(key_rev);
@@ -98,7 +102,7 @@ pub fn compute_key(url: &str, key_rev: &str, toolchain: &str) -> String {
 /// `cargo install --root` locks the install root and installs the binary
 /// atomically, so a concurrent launcher either blocks on that lock or finds
 /// the finished binary.
-pub fn ensure_built(
+pub(crate) fn ensure_built(
     tool: &Tool,
     cache_root: &Path,
     key: &str,
@@ -150,7 +154,7 @@ pub fn ensure_built(
 /// is irrelevant, then whatever the tool's hooks add, then the caller's
 /// forwarded arguments. On unix `exec` never returns on success; it returns
 /// only if the exec itself fails.
-pub fn exec_engine(
+pub(crate) fn exec_engine(
     bin: &Path,
     workdir: &Path,
     extra: &[String],
@@ -170,7 +174,7 @@ pub fn exec_engine(
 mod tests {
     use super::*;
     use crate::pin::{Pin, Reference};
-    use crate::tool::{Anchor, Hooks};
+    use crate::tool::{Anchor, Cli, Hooks, Locate};
 
     const T: Tool = Tool {
         anchor: Anchor::Marker(".git"),
@@ -182,6 +186,9 @@ mod tests {
         default_url: "u",
         launcher_crate: "t-launcher",
         workdir: None,
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
 

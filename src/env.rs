@@ -25,7 +25,8 @@
 
 /// The variables git exports into a hook to say where the repo is.
 ///
-/// Public so the removal set is testable without touching the environment.
+/// Public because a caller that reaches for [`crate::run_without_sanitizing`]
+/// has taken the scrub on itself and needs to know what it is scrubbing.
 pub const GIT_REPO_ENV: &[&str] = &[
     "GIT_DIR",
     "GIT_COMMON_DIR",
@@ -57,11 +58,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_variable_git_uses_to_say_where_the_repo_is_is_scrubbed() {
+        // Naming them is not the definition asserted against itself, because
+        // the claim here is a different one: that each of these specifically is
+        // a repo location and must go. Without it the count below detects a
+        // variable being dropped and is blind to one being swapped, which is
+        // the shape that loses `GIT_DIR` while both tests stay green.
+        for v in [
+            "GIT_DIR",
+            "GIT_COMMON_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_PREFIX",
+        ] {
+            assert!(GIT_REPO_ENV.contains(&v), "{v} is no longer scrubbed");
+        }
+    }
+
+    #[test]
     fn the_set_is_exactly_seven_and_is_the_repo_location_half_of_git_s_exports() {
-        // it fails by narrowing: a variable dropped from the list goes on being
-        // inherited and nothing reports it. Restating all seven literals here
-        // would assert the definition against itself, so the count is what does
-        // the work, and the two directions below say which half is which.
+        // With membership pinned above, the count is a real assertion in the
+        // one direction it can measure: that nothing extra crept in.
         assert_eq!(GIT_REPO_ENV.len(), 7, "the set changed without a decision");
         assert!(
             GIT_REPO_ENV.iter().all(|v| v.starts_with("GIT_")),

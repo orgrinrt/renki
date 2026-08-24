@@ -13,7 +13,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::hash::Fnv;
-pub use crate::manifest::{Pin, Reference};
+pub(crate) use crate::manifest::{Pin, Reference};
 use crate::tool::Tool;
 
 /// A branch pin re-resolves to a concrete rev at most this often; a fresh
@@ -54,7 +54,7 @@ impl Resolved {
 /// Resolve a pin to concrete build attempts. A branch resolves to its current
 /// head via `git ls-remote`, cached with a TTL; a rev, tag or version is
 /// already immutable.
-pub fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resolved, String> {
+pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resolved, String> {
     let git = |sel: &[&str]| -> Vec<String> {
         let mut a = vec!["--git".to_string(), pin.url.clone()];
         a.extend(sel.iter().map(|s| s.to_string()));
@@ -161,7 +161,7 @@ fn branch_resolution_path(cache_root: &Path, url: &str, branch: &str) -> std::pa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tool::{Anchor, Hooks};
+    use crate::tool::{Anchor, Cli, Hooks, Locate};
 
     const T: Tool = Tool {
         anchor: Anchor::Marker(".git"),
@@ -173,6 +173,9 @@ mod tests {
         default_url: "u",
         launcher_crate: "t-launcher",
         workdir: None,
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
 

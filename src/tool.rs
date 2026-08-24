@@ -19,10 +19,9 @@ use crate::pin::{Pin, Resolved};
 
 /// How the repo root is found, walking up from the working directory.
 ///
-/// A parameter rather than the `.git` constant it was in the code this crate
-/// came from, because the two shapes do not generalise to each other: one
-/// stops at the first repository and the other must walk past it. `mock` is
-/// the [`Marker`](Anchor::Marker) consumer and is the only consumer today.
+/// A parameter rather than a `.git` constant, because the two shapes do not
+/// generalise to each other: one stops at the first repository and the other
+/// must walk past it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
     /// The nearest ancestor holding an entry of this name, `.git` in practice.
@@ -48,18 +47,23 @@ pub enum Anchor {
 }
 
 /// The identity of one launcher.
+///
+/// Every field is a name the launcher has to know. Anything the launcher needs
+/// the tool to *decide* rather than to *know* is a [`Hooks`] entry instead, and
+/// that line is the whole rule for where a new member belongs.
 pub struct Tool {
     /// How the repo root is found. See [`Anchor`].
     pub anchor: Anchor,
     /// The short name this launcher answers to, used in its own diagnostics
-    /// (`mock: ...`) and as the prefix of the environment variables it reads
-    /// (`MOCK_ROOT`, `MOCK_NO_SELF_UPDATE`, uppercased).
+    /// (`widget: ...`) and, uppercased, as the prefix of the environment
+    /// variables it reads: `WIDGET_ROOT` overrides discovery, and
+    /// `WIDGET_NO_SELF_UPDATE` turns the update check off.
     pub short: &'static str,
-    /// The one config file a repo carries, e.g. `mockspace.toml`.
+    /// The one config file a repo carries, e.g. `widget.toml`.
     pub config_file: &'static str,
-    /// The prefix of the pin keys inside that config: `mockspace` reads
-    /// `mockspace_version`, `mockspace_rev`, `mockspace_branch`,
-    /// `mockspace_tag` and `mockspace_git`.
+    /// The prefix of the pin keys inside that config. A prefix of `widget`
+    /// reads `widget_version`, `widget_rev`, `widget_branch`, `widget_tag` and
+    /// `widget_git`.
     pub pin_prefix: &'static str,
     /// The engine's package name on crates.io, which is also the name of the
     /// binary its build produces.
@@ -75,8 +79,72 @@ pub struct Tool {
     /// The working subdirectory the engine is pointed at, when the tool has
     /// one. `None` runs the engine against the repo root.
     pub workdir: Option<Workdir>,
+    /// The flag the engine takes its absolute working directory on. The
+    /// launcher always passes it, and strips any copy the user wrote, so the
+    /// engine never has to decide which of two answers is right.
+    ///
+    /// [`Cli::DIR_FLAG`] is the conventional `--dir`.
+    pub dir_flag: &'static str,
+    /// The flag that points the launcher at a checkout on disk instead of the
+    /// pinned engine. Consumed by the launcher and never forwarded, so an
+    /// engine wanting a flag of this name needs a different one here.
+    ///
+    /// [`Cli::ENGINE_FLAG`] is the conventional `--engine`.
+    pub engine_flag: &'static str,
+    /// The query the launcher answers itself, and what it calls the parts of
+    /// its answer. See [`Locate`].
+    pub locate: Locate,
     /// The tool-specific parts, all optional.
     pub hooks: Hooks,
+}
+
+/// Conventional spellings for the two launcher flags.
+///
+/// Named constants rather than defaults, since [`Tool`] is a plain struct with
+/// no `Default`: a tool with no opinion writes `Cli::DIR_FLAG` and reads as
+/// having chosen it.
+pub struct Cli;
+
+impl Cli {
+    /// The conventional [`Tool::dir_flag`].
+    pub const DIR_FLAG: &'static str = "--dir";
+    /// The conventional [`Tool::engine_flag`].
+    pub const ENGINE_FLAG: &'static str = "--engine";
+}
+
+/// The query the launcher answers without building or running the engine, and
+/// the names it answers under.
+///
+/// A tool's git hooks and shell helpers typically ask this instead of walking
+/// the tree themselves, so the key names are a contract with those callers
+/// rather than an internal detail. They are fields for that reason: a tool
+/// migrating onto this crate keeps whatever names its existing readers already
+/// parse, and nothing downstream has to change on the same day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Locate {
+    /// The subcommand that triggers the query. `None` for a tool that wants no
+    /// such query, which then forwards every subcommand to the engine.
+    pub subcommand: Option<&'static str>,
+    /// What the answer calls the repo root.
+    pub root_key: &'static str,
+    /// What the answer calls the config file's path. Empty in the answer when
+    /// the repo has a working directory and no config, which is a real shape
+    /// rather than a broken one.
+    pub config_key: &'static str,
+    /// What the answer calls the working directory. Empty in the answer when
+    /// there is no such directory on disk.
+    pub workdir_key: &'static str,
+}
+
+impl Locate {
+    /// The conventional spelling: a `locate` subcommand answering under `root`,
+    /// `config` and `workdir`.
+    pub const DEFAULT: Locate = Locate {
+        subcommand: Some("locate"),
+        root_key: "root",
+        config_key: "config",
+        workdir_key: "workdir",
+    };
 }
 
 /// A check a tool runs against a directory, refusing with a message a reader
@@ -91,7 +159,7 @@ pub type Check = fn(&Path) -> Result<(), String>;
 /// a subdirectory the default is that subdirectory itself, since a config
 /// living inside the working directory is already pointing at it.
 pub struct Workdir {
-    /// The config key naming it, e.g. `mock_dir`.
+    /// The config key naming it, e.g. `widget_dir`.
     pub key: &'static str,
     /// What a root-level config means when it does not set the key.
     pub root_default: &'static str,
@@ -113,16 +181,20 @@ pub struct Hooks {
     /// The same, for the `--engine <path>` override, where there is no pin and
     /// the source is a working tree.
     pub engine_args_local: Option<fn(&Path) -> Vec<String>>,
-    /// Refuse an `--engine <path>` that is not a checkout of this engine.
-    /// Reported against the flag the user passed, rather than surfacing later
-    /// as a build failure about something else.
+    /// Refuse a [`Tool::engine_flag`] path that is not a checkout of this
+    /// engine. Reported against the flag the user passed, rather than
+    /// surfacing later as a build failure about something else.
     pub verify_engine_dir: Option<Check>,
     /// A last-resort pin for a repo that has not adopted an explicit one,
     /// given the working directory. Keeps a repo mid-migration running.
     pub legacy_pin: Option<fn(&Path) -> Option<Pin>>,
     /// Refuse a repo state that would silently route the user somewhere else,
-    /// given the repo root. A retired cargo alias shadowing the launcher is
-    /// the case this exists for.
+    /// given the repo root.
+    ///
+    /// Runs on every invocation that found a root, config or no config. That
+    /// matters: a repo with no config is a repo that has not adopted the
+    /// launcher, which is exactly where a stale route left over from whatever
+    /// came before is most likely to still be in place.
     pub verify_repo_state: Option<Check>,
 }
 
@@ -202,6 +274,9 @@ mod tests {
             key: "work_dir",
             root_default: "mock",
         }),
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
 
