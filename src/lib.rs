@@ -156,6 +156,9 @@ pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
 ///
 /// `config` is empty when the repo has a working directory but no config, which
 /// is a real shape rather than a broken one.
+///
+/// The three names come from [`Locate`], which is what lets a tool keep the
+/// spelling its existing readers already parse.
 fn locate_query(tool: &Tool) -> Result<(), String> {
     let root = discover::repo_root(tool).ok_or_else(|| no_root(tool))?;
     let located = discover::locate(tool, &root)?;
@@ -165,14 +168,29 @@ fn locate_query(tool: &Tool) -> Result<(), String> {
         // caller distinguishes by the empty `config`.
         None => (String::new(), tool.workdir_default(&root)),
     };
-    println!("root={}", root.display());
-    println!("config={config}");
-    if workdir.is_dir() {
-        println!("workdir={}", workdir.display());
-    } else {
-        println!("workdir=");
-    }
+    print!("{}", locate_answer(&tool.locate, &root, &config, &workdir));
     Ok(())
+}
+
+/// The locate answer as text, so the keys can be checked without a subprocess.
+///
+/// Separate from the printing because the keys were fields nothing read: all
+/// three were hardcoded here while [`Locate`] documented them as a contract
+/// with a tool's shell helpers, so any tool that set them got the conventional
+/// spellings and its own readers found nothing.
+fn locate_answer(locate: &Locate, root: &Path, config: &str, workdir: &Path) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("{}={}\n", locate.root_key, root.display()));
+    out.push_str(&format!("{}={config}\n", locate.config_key));
+    // An absent working directory answers with the key and no value rather than
+    // omitting the line, so a reader can tell "no such directory" from "this
+    // launcher is too old to answer".
+    if workdir.is_dir() {
+        out.push_str(&format!("{}={}\n", locate.workdir_key, workdir.display()));
+    } else {
+        out.push_str(&format!("{}=\n", locate.workdir_key));
+    }
+    out
 }
 
 fn no_root(tool: &Tool) -> String {
@@ -620,6 +638,59 @@ mod tests {
             normalize_args(&T, &s(&["mock", "check", "--dir", "--scope", "x"])),
             s(&["check", "--scope", "x"])
         );
+    }
+
+    #[test]
+    fn the_locate_answer_uses_the_tools_own_key_names() {
+        // All three were hardcoded here while `Locate` documented them as "a
+        // contract with those callers", so a tool that set them got the
+        // conventional spellings anyway and its own shell helpers parsed
+        // nothing. Caught by mockspace, whose `lib/mock.sh` has parsed
+        // `mock_dir=` since before the launcher was extracted.
+        const OWN: Locate = Locate {
+            subcommand: Some("locate"),
+            root_key: "repo",
+            config_key: "manifest",
+            workdir_key: "mock_dir",
+        };
+        let d = tempfile::tempdir().unwrap();
+        let wd = d.path().join("mock");
+        std::fs::create_dir_all(&wd).unwrap();
+
+        let got = locate_answer(&OWN, d.path(), "/c/x.toml", &wd);
+        assert_eq!(
+            got,
+            format!(
+                "repo={}\nmanifest=/c/x.toml\nmock_dir={}\n",
+                d.path().display(),
+                wd.display()
+            )
+        );
+        // and the control: the conventional names are not what came out, so
+        // this cannot be passing against a formatter that ignores its argument
+        assert!(!got.contains("root="), "{got}");
+        assert!(!got.contains("config="), "{got}");
+        assert!(!got.contains("workdir="), "{got}");
+
+        // the default still answers conventionally
+        let d2 = locate_answer(&Locate::DEFAULT, d.path(), "/c/x.toml", &wd);
+        assert!(d2.starts_with("root="), "{d2}");
+        assert!(d2.contains("\nconfig=/c/x.toml\n"), "{d2}");
+        assert!(
+            d2.contains(&format!("\nworkdir={}\n", wd.display())),
+            "{d2}"
+        );
+    }
+
+    #[test]
+    fn a_missing_workdir_answers_with_the_key_and_no_value() {
+        // The line stays, so a reader can tell an absent directory from a
+        // launcher too old to answer at all.
+        let d = tempfile::tempdir().unwrap();
+        let absent = d.path().join("nothing-here");
+        let got = locate_answer(&Locate::DEFAULT, d.path(), "", &absent);
+        assert!(got.ends_with("workdir=\n"), "{got}");
+        assert!(got.contains("\nconfig=\n"), "{got}");
     }
 
     #[test]
