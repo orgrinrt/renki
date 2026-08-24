@@ -56,12 +56,34 @@ fn scratch_dir(cache_root: &Path) -> PathBuf {
 /// A value beginning with `-` is not taken. `--engine --verbose` is a flag with
 /// its value missing, and reading `--verbose` as a path both loses the flag and
 /// produces a diagnostic about a file nobody named.
+///
+/// The joined spelling with nothing after the `=` is also missing rather than
+/// empty. An empty path resolves to the working directory, so `--engine=` and
+/// an unset variable expanding to it would have built whatever repository the
+/// command was run in.
+///
+/// Scanning stops at a bare `--`. Everything after one belongs to the engine
+/// verbatim, by the convention every command line shares, so a launcher that
+/// kept reading would take an argument the user had already said was not its.
 pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
     let joined = format!("{flag}=");
     let mut found = Flag::Absent;
     let mut rest = Vec::with_capacity(args.len());
     let mut want_value = false;
+    let mut users_from_here = false;
     for arg in args {
+        if users_from_here {
+            rest.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            users_from_here = true;
+            // A pending value stays missing: `--engine --` is the flag with
+            // nothing after it, not the flag taking a separator.
+            want_value = false;
+            rest.push(arg);
+            continue;
+        }
         if want_value {
             want_value = false;
             if !arg.starts_with('-') {
@@ -77,7 +99,11 @@ pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
             continue;
         }
         if let Some(value) = arg.strip_prefix(&joined) {
-            found = Flag::Value(value.to_string());
+            found = if value.is_empty() {
+                Flag::Missing
+            } else {
+                Flag::Value(value.to_string())
+            };
             continue;
         }
         rest.push(arg);
@@ -326,6 +352,66 @@ mod tests {
         // `-` check is for
         assert_eq!(rest, strings(&["lock", "--verbose"]));
         assert_eq!(rest2, strings(&["lock", "--verbose"]));
+    }
+
+    #[test]
+    fn the_joined_form_with_nothing_after_it_is_missing_rather_than_empty() {
+        // An empty path is not a path. `PathBuf::from("")` joined onto the
+        // working directory canonicalises back to it, and a working directory
+        // holding a `Cargo.toml` is the ordinary case for anyone running this
+        // from inside a repository, so `Flag::Value("")` builds whatever tree
+        // the command happened to be typed in and announces it as an override.
+        //
+        // The realistic way to type it is not by hand. `--engine=$SOMEWHERE`
+        // with the variable unset expands to exactly this.
+        let (path, rest) = take_flag(strings(&["lock", "--engine="]), "--engine");
+        assert_eq!(path, Flag::Missing);
+        assert_eq!(rest, strings(&["lock"]));
+
+        // The control, one character apart: a real joined value still arrives
+        // as a value, so this cannot be passing because the joined spelling
+        // stopped working altogether.
+        let (real, _) = take_flag(strings(&["lock", "--engine=/tmp/e"]), "--engine");
+        assert_eq!(real, Flag::Value("/tmp/e".into()));
+    }
+
+    #[test]
+    fn nothing_after_the_users_double_dash_belongs_to_the_launcher() {
+        // Every command line agrees that a bare `--` ends the options and hands
+        // the rest over verbatim. So an engine invoked as `widget run -- --dir
+        // /x` is being given `--dir /x` as its own argument, and a launcher
+        // that eats it has changed what the user wrote.
+        for flag in ["--engine", "--dir"] {
+            let (found, rest) = take_flag(
+                strings(&["run", "--", flag, "/x"]),
+                flag,
+            );
+            assert_eq!(found, Flag::Absent, "{flag} was taken from after `--`");
+            assert_eq!(rest, strings(&["run", "--", flag, "/x"]));
+
+            let joined = format!("{flag}=/x");
+            let (found, rest) = take_flag(strings(&["run", "--", &joined]), flag);
+            assert_eq!(found, Flag::Absent, "{flag}= was taken from after `--`");
+            assert_eq!(rest, strings(&["run", "--", &joined]));
+        }
+
+        // The control: the same flag before the separator is still the
+        // launcher's, so this is about position rather than about the parser
+        // having stopped working.
+        let (found, rest) = take_flag(
+            strings(&["run", "--engine", "/x", "--", "--engine", "/y"]),
+            "--engine",
+        );
+        assert_eq!(found, Flag::Value("/x".into()));
+        assert_eq!(rest, strings(&["run", "--", "--engine", "/y"]));
+
+        // `--engine --` is the flag with nothing after it, and stays that way.
+        // This one is covered twice over, since the separator also begins with
+        // `-`, so it holds with or without the stop above and is here for the
+        // reading rather than as the thing that pins it.
+        let (found, rest) = take_flag(strings(&["run", "--engine", "--", "x"]), "--engine");
+        assert_eq!(found, Flag::Missing);
+        assert_eq!(rest, strings(&["run", "--", "x"]));
     }
 
     #[test]
