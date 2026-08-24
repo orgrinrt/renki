@@ -364,7 +364,7 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
             .engine_args_local
             .map(|f| f(&source))
             .unwrap_or_default();
-        return cache::exec_engine(&bin, &workdir, &extra, args).map(|_never| ());
+        return cache::exec_engine(tool, &bin, &workdir, &extra, args).map(|_never| ());
     }
 
     let (pin, source) = resolve_pin(tool, located.as_ref(), &root, &workdir)?;
@@ -402,7 +402,7 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
         .engine_args
         .map(|f| f(&resolved))
         .unwrap_or_default();
-    cache::exec_engine(&bin, &workdir, &extra, args).map(|_never| ())
+    cache::exec_engine(tool, &bin, &workdir, &extra, args).map(|_never| ())
 }
 
 /// Unix seconds now, or 0 if the clock is before the epoch, which is impossible

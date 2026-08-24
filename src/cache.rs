@@ -150,11 +150,33 @@ pub(crate) fn ensure_built(
     ))
 }
 
-/// Replace this process with the engine: the absolute working directory so cwd
-/// is irrelevant, then whatever the tool's hooks add, then the caller's
-/// forwarded arguments. On unix `exec` never returns on success; it returns
-/// only if the exec itself fails.
+/// The arguments the engine is run with: the tool's own directory flag and the
+/// absolute working directory so cwd is irrelevant, then whatever the tool's
+/// hooks add, then the caller's forwarded arguments.
+///
+/// Split out of [`exec_engine`] because an `exec` cannot be observed from a
+/// test, and this is the half worth observing. The flag was hardcoded here
+/// while [`Tool::dir_flag`] documented itself as the flag the launcher always
+/// passes, so a tool that named its own got the user's copy stripped under that
+/// name and the conventional one handed to the engine.
+pub(crate) fn engine_argv(
+    tool: &Tool,
+    workdir: &Path,
+    extra: &[String],
+    args: &[String],
+) -> Vec<std::ffi::OsString> {
+    let mut argv = Vec::with_capacity(2 + extra.len() + args.len());
+    argv.push(tool.dir_flag.into());
+    argv.push(workdir.as_os_str().to_os_string());
+    argv.extend(extra.iter().map(Into::into));
+    argv.extend(args.iter().map(Into::into));
+    argv
+}
+
+/// Replace this process with the engine. On unix `exec` never returns on
+/// success; it returns only if the exec itself fails.
 pub(crate) fn exec_engine(
+    tool: &Tool,
     bin: &Path,
     workdir: &Path,
     extra: &[String],
@@ -162,10 +184,7 @@ pub(crate) fn exec_engine(
 ) -> Result<std::convert::Infallible, String> {
     use std::os::unix::process::CommandExt;
     let err = Command::new(bin)
-        .arg("--dir")
-        .arg(workdir)
-        .args(extra)
-        .args(args)
+        .args(engine_argv(tool, workdir, extra, args))
         .exec();
     Err(format!("failed to exec {}: {err}", bin.display()))
 }
@@ -191,6 +210,65 @@ mod tests {
         locate: Locate::DEFAULT,
         hooks: Hooks::NONE,
     };
+
+    #[test]
+    fn the_engine_is_handed_the_tools_own_directory_flag() {
+        // The control that makes this mean anything: a tool whose flag is NOT
+        // the conventional one. With `--dir` hardcoded at the exec site, the
+        // assertion below reads `--dir` for a tool that never named it, and the
+        // engine is handed a flag it does not take while never seeing the one
+        // it declared. A fixture using `Cli::DIR_FLAG` cannot tell the two
+        // apart, which is why the existing strip-side test could pass
+        // throughout.
+        const AT: Tool = Tool {
+            dir_flag: "--at",
+            ..T
+        };
+        let argv = engine_argv(&AT, Path::new("/w"), &[], &[]);
+        assert_eq!(argv, ["--at", "/w"]);
+        assert!(
+            !argv.iter().any(|a| a == "--dir"),
+            "the conventional flag reached a tool that named its own: {argv:?}"
+        );
+
+        // and the conventional spelling still arrives for a tool that chose it
+        assert_eq!(engine_argv(&T, Path::new("/w"), &[], &[]), ["--dir", "/w"]);
+    }
+
+    #[test]
+    fn the_directory_leads_and_the_hooks_arguments_precede_the_users() {
+        // The order is a contract: the engine reads its directory before
+        // anything, a hook's argument must not be shadowed by a user's copy of
+        // the same flag, and a `--` the user wrote has to stay last or every
+        // argument after it changes meaning.
+        let extra = vec!["--dep".to_string(), "{ path = \"x\" }".to_string()];
+        let args = vec!["lock".to_string(), "--".to_string(), "-v".to_string()];
+        assert_eq!(
+            engine_argv(&T, Path::new("/w"), &extra, &args),
+            [
+                "--dir",
+                "/w",
+                "--dep",
+                "{ path = \"x\" }",
+                "lock",
+                "--",
+                "-v"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_working_directory_that_is_not_utf8_survives_the_handover() {
+        // A path is bytes, not text. Building the argument list as `String`
+        // would replace whatever does not decode, and the engine would then be
+        // pointed at a directory that does not exist, reporting it under a name
+        // the operator cannot find on disk.
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let raw = OsStr::from_bytes(b"/w/\xff\xfe");
+        let argv = engine_argv(&T, Path::new(raw), &[], &[]);
+        assert_eq!(argv[1], raw, "the path was lossily re-encoded");
+    }
 
     #[test]
     fn the_cache_root_prefers_xdg_and_falls_back_to_home() {
