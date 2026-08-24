@@ -228,6 +228,22 @@ impl Hooks {
     };
 }
 
+/// Byte equality for two `&str` in a const context, which `==` is not.
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 impl Tool {
     /// The file name of the binary the engine's build produces.
     #[must_use]
@@ -301,9 +317,22 @@ impl Tool {
                 "launcher_crate is empty, so the update check can never find its own install",
             );
         }
+        if self.default_url.is_empty() {
+            return Some(
+                "default_url is empty, so the git attempts ask cargo to install from \
+                 nowhere and it fails naming nothing the user wrote",
+            );
+        }
         if self.dir_flag.is_empty() || self.engine_flag.is_empty() {
             return Some(
                 "dir_flag or engine_flag is empty, which puts a bare empty argument on the command line",
+            );
+        }
+        if const_str_eq(self.dir_flag, self.engine_flag) {
+            return Some(
+                "dir_flag and engine_flag are the same string, so the override is \
+                 unreachable: the directory is stripped first and nothing is left \
+                 for the engine flag to find",
             );
         }
         if let Anchor::Marker(m) = self.anchor

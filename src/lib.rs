@@ -573,7 +573,7 @@ mod tests {
         // The point of the check is that it runs, and a predicate tested only
         // as a predicate stays green when nothing calls it. Every arm below is
         // a descriptor that would otherwise run and misbehave quietly.
-        const BAD: [Tool; 8] = [
+        const BAD: [Tool; 11] = [
             Tool {
                 short: "my-tool",
                 ..T
@@ -604,6 +604,23 @@ mod tests {
             },
             Tool {
                 anchor: Anchor::Marker(""),
+                ..T
+            },
+            // Empty, so both git attempts ask cargo to install from nowhere and
+            // it fails naming a url the user never wrote.
+            Tool {
+                default_url: "",
+                ..T
+            },
+            Tool {
+                dir_flag: "",
+                ..T
+            },
+            // The same string for both, so `normalize_args` strips the user's
+            // copy as the directory flag and `dispatch` then finds no override
+            // to act on. The launcher runs and quietly ignores what was asked.
+            Tool {
+                engine_flag: Cli::DIR_FLAG,
                 ..T
             },
         ];
