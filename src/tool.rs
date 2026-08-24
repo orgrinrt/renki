@@ -19,9 +19,10 @@ use crate::pin::{Pin, Resolved};
 
 /// How the repo root is found, walking up from the working directory.
 ///
-/// The two tools that exist need different answers and neither generalises to
-/// the other, which is why this is a parameter rather than the constant it was
-/// in the code this crate came from.
+/// A parameter rather than the `.git` constant it was in the code this crate
+/// came from, because the two shapes do not generalise to each other: one
+/// stops at the first repository and the other must walk past it. `mock` is
+/// the [`Marker`](Anchor::Marker) consumer and is the only consumer today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
     /// The nearest ancestor holding an entry of this name, `.git` in practice.
@@ -49,33 +50,33 @@ pub enum Anchor {
 /// The identity of one launcher.
 pub struct Tool {
     /// How the repo root is found. See [`Anchor`].
-    pub anchor:          Anchor,
+    pub anchor: Anchor,
     /// The short name this launcher answers to, used in its own diagnostics
     /// (`mock: ...`) and as the prefix of the environment variables it reads
     /// (`MOCK_ROOT`, `MOCK_NO_SELF_UPDATE`, uppercased).
-    pub short:           &'static str,
+    pub short: &'static str,
     /// The one config file a repo carries, e.g. `mockspace.toml`.
-    pub config_file:     &'static str,
+    pub config_file: &'static str,
     /// The prefix of the pin keys inside that config: `mockspace` reads
     /// `mockspace_version`, `mockspace_rev`, `mockspace_branch`,
     /// `mockspace_tag` and `mockspace_git`.
-    pub pin_prefix:      &'static str,
+    pub pin_prefix: &'static str,
     /// The engine's package name on crates.io, which is also the name of the
     /// binary its build produces.
-    pub engine_crate:    &'static str,
+    pub engine_crate: &'static str,
     /// The directory under `$XDG_CACHE_HOME` (or `~/.cache`) this launcher
     /// owns. Distinct per tool so two tools never share a build cache.
     pub cache_namespace: &'static str,
     /// The engine's source when the config names none.
-    pub default_url:     &'static str,
+    pub default_url: &'static str,
     /// This launcher's own package name, which is how it recognises its own
     /// entry in cargo's install ledger when checking for an update.
-    pub launcher_crate:  &'static str,
+    pub launcher_crate: &'static str,
     /// The working subdirectory the engine is pointed at, when the tool has
     /// one. `None` runs the engine against the repo root.
-    pub workdir:         Option<Workdir>,
+    pub workdir: Option<Workdir>,
     /// The tool-specific parts, all optional.
-    pub hooks:           Hooks,
+    pub hooks: Hooks,
 }
 
 /// A check a tool runs against a directory, refusing with a message a reader
@@ -91,7 +92,7 @@ pub type Check = fn(&Path) -> Result<(), String>;
 /// living inside the working directory is already pointing at it.
 pub struct Workdir {
     /// The config key naming it, e.g. `mock_dir`.
-    pub key:          &'static str,
+    pub key: &'static str,
     /// What a root-level config means when it does not set the key.
     pub root_default: &'static str,
 }
@@ -104,35 +105,35 @@ pub struct Hooks {
     /// Run once the repo and its config are located, before the engine is
     /// built. Whatever a tool must keep planted in a repo goes here, and it is
     /// best-effort by contract: it cannot fail the command the user ran.
-    pub prepare_repo:       Option<fn(&Path)>,
+    pub prepare_repo: Option<fn(&Path)>,
     /// Extra arguments passed to the engine ahead of the user's, derived from
     /// the resolved pin. This is how a tool hands the engine something that
     /// must match the exact revision the engine was built from.
-    pub engine_args:        Option<fn(&Resolved) -> Vec<String>>,
+    pub engine_args: Option<fn(&Resolved) -> Vec<String>>,
     /// The same, for the `--engine <path>` override, where there is no pin and
     /// the source is a working tree.
-    pub engine_args_local:  Option<fn(&Path) -> Vec<String>>,
+    pub engine_args_local: Option<fn(&Path) -> Vec<String>>,
     /// Refuse an `--engine <path>` that is not a checkout of this engine.
     /// Reported against the flag the user passed, rather than surfacing later
     /// as a build failure about something else.
-    pub verify_engine_dir:  Option<Check>,
+    pub verify_engine_dir: Option<Check>,
     /// A last-resort pin for a repo that has not adopted an explicit one,
     /// given the working directory. Keeps a repo mid-migration running.
-    pub legacy_pin:         Option<fn(&Path) -> Option<Pin>>,
+    pub legacy_pin: Option<fn(&Path) -> Option<Pin>>,
     /// Refuse a repo state that would silently route the user somewhere else,
     /// given the repo root. A retired cargo alias shadowing the launcher is
     /// the case this exists for.
-    pub verify_repo_state:  Option<Check>,
+    pub verify_repo_state: Option<Check>,
 }
 
 impl Hooks {
     /// A tool that needs none of the extension points.
     pub const NONE: Hooks = Hooks {
-        prepare_repo:      None,
-        engine_args:       None,
+        prepare_repo: None,
+        engine_args: None,
         engine_args_local: None,
         verify_engine_dir: None,
-        legacy_pin:        None,
+        legacy_pin: None,
         verify_repo_state: None,
     };
 }
@@ -158,7 +159,11 @@ impl Tool {
         let Some(wd) = &self.workdir else {
             return root.to_path_buf();
         };
-        let default = if config_dir == root { wd.root_default } else { "." };
+        let default = if config_dir == root {
+            wd.root_default
+        } else {
+            "."
+        };
         normalize(config_dir.join(declared.unwrap_or_else(|| default.to_string())))
     }
 
@@ -185,19 +190,19 @@ mod tests {
     use super::*;
 
     const WITH: Tool = Tool {
-        anchor:          Anchor::Marker(".git"),
-        short:           "mock",
-        config_file:     "t.toml",
-        pin_prefix:      "t",
-        engine_crate:    "engine",
+        anchor: Anchor::Marker(".git"),
+        short: "mock",
+        config_file: "t.toml",
+        pin_prefix: "t",
+        engine_crate: "engine",
         cache_namespace: "t",
-        default_url:     "u",
-        launcher_crate:  "t-launcher",
-        workdir:         Some(Workdir {
-            key:          "work_dir",
+        default_url: "u",
+        launcher_crate: "t-launcher",
+        workdir: Some(Workdir {
+            key: "work_dir",
             root_default: "mock",
         }),
-        hooks:           Hooks::NONE,
+        hooks: Hooks::NONE,
     };
 
     const WITHOUT: Tool = Tool {

@@ -57,34 +57,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_set_is_the_repo_location_variables_and_not_the_identity_ones() {
-        // pinned against accidental narrowing, which is the way this fails: a
-        // variable dropped from the list goes on being inherited and nothing
-        // reports it.
-        for want in [
-            "GIT_DIR",
-            "GIT_COMMON_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-            "GIT_PREFIX",
-        ] {
-            assert!(GIT_REPO_ENV.contains(&want), "{want} is no longer scrubbed");
-        }
-        assert_eq!(GIT_REPO_ENV.len(), 7, "something was added without a test");
+    fn the_set_is_exactly_seven_and_is_the_repo_location_half_of_git_s_exports() {
+        // it fails by narrowing: a variable dropped from the list goes on being
+        // inherited and nothing reports it. Restating all seven literals here
+        // would assert the definition against itself, so the count is what does
+        // the work, and the two directions below say which half is which.
+        assert_eq!(GIT_REPO_ENV.len(), 7, "the set changed without a decision");
+        assert!(
+            GIT_REPO_ENV.iter().all(|v| v.starts_with("GIT_")),
+            "everything scrubbed is git's"
+        );
     }
 
     #[test]
-    fn the_authoring_variables_are_left_alone() {
+    fn the_authoring_and_configuration_variables_are_left_alone() {
         // the control, and the reason this is a list rather than a `GIT_*`
-        // sweep: a hook's author and committer identity is not a repo location
-        // and scrubbing it would rewrite who a commit came from.
+        // sweep: a hook's author and committer identity is not a repo location,
+        // and scrubbing it would rewrite who a commit came from. The
+        // configuration pair is here because it is the other thing a `GIT_*`
+        // sweep would take, and taking it would drop the caller's own git
+        // settings on the floor.
         for keep in [
             "GIT_AUTHOR_NAME",
             "GIT_AUTHOR_EMAIL",
+            "GIT_AUTHOR_DATE",
             "GIT_COMMITTER_NAME",
             "GIT_COMMITTER_EMAIL",
+            "GIT_COMMITTER_DATE",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_SSH_COMMAND",
+            "GIT_EDITOR",
         ] {
             assert!(!GIT_REPO_ENV.contains(&keep), "{keep} must survive");
         }

@@ -12,8 +12,8 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub use crate::manifest::{Pin, Reference};
 use crate::hash::Fnv;
+pub use crate::manifest::{Pin, Reference};
 use crate::tool::Tool;
 
 /// A branch pin re-resolves to a concrete rev at most this often; a fresh
@@ -28,10 +28,10 @@ pub struct Resolved {
     /// The pin this came from, kept so a tool's hooks can derive whatever they
     /// need to hand the engine without re-reading the config. A dependency that
     /// must match the exact revision the engine was built from is the case.
-    pub pin:      Pin,
+    pub pin: Pin,
     /// The stable component of the cache key: `v:<version>` for a release, the
     /// concrete rev for a rev or branch pin, `tag:<t>` for a tag.
-    pub key_rev:  String,
+    pub key_rev: String,
     /// One or more `cargo install` argument lists, source selectors and package
     /// name included, tried in order until one succeeds. `--root` and `--force`
     /// are added by the cache. A version pin tries the registry first, then the
@@ -63,24 +63,27 @@ pub fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resolved, St
     };
     let (key_rev, attempts) = match &pin.reference {
         Reference::Version(v) => {
-            (format!("v:{v}"), vec![
-                // the registry release first, which is the fast path once the
-                // engine publishes. Before that it fails on a cold build and
-                // falls through to the tag below, silently, since a failure is
-                // only reported when every attempt fails.
-                vec![tool.engine_crate.to_string(), "--version".into(), v.clone()],
-                // the matching git tag: works before the engine is published,
-                // and for git-only consumers after.
-                git(&["--tag", v]),
-            ])
-        },
+            (
+                format!("v:{v}"),
+                vec![
+                    // the registry release first, which is the fast path once the
+                    // engine publishes. Before that it fails on a cold build and
+                    // falls through to the tag below, silently, since a failure is
+                    // only reported when every attempt fails.
+                    vec![tool.engine_crate.to_string(), "--version".into(), v.clone()],
+                    // the matching git tag: works before the engine is published,
+                    // and for git-only consumers after.
+                    git(&["--tag", v]),
+                ],
+            )
+        }
         Reference::Rev(r) => (r.clone(), vec![git(&["--rev", r])]),
         Reference::Tag(t) => (format!("tag:{t}"), vec![git(&["--tag", t])]),
         Reference::Branch(b) => {
             let sha = resolve_branch(pin, b, cache_root)?;
             let attempts = vec![git(&["--rev", &sha])];
             (sha, attempts)
-        },
+        }
     };
     Ok(Resolved {
         pin: pin.clone(),
@@ -161,21 +164,21 @@ mod tests {
     use crate::tool::{Anchor, Hooks};
 
     const T: Tool = Tool {
-        anchor:          Anchor::Marker(".git"),
-        short:           "mock",
-        config_file:     "t.toml",
-        pin_prefix:      "t",
-        engine_crate:    "engine",
+        anchor: Anchor::Marker(".git"),
+        short: "mock",
+        config_file: "t.toml",
+        pin_prefix: "t",
+        engine_crate: "engine",
         cache_namespace: "t",
-        default_url:     "u",
-        launcher_crate:  "t-launcher",
-        workdir:         None,
-        hooks:           Hooks::NONE,
+        default_url: "u",
+        launcher_crate: "t-launcher",
+        workdir: None,
+        hooks: Hooks::NONE,
     };
 
     fn pin(r: Reference) -> Pin {
         Pin {
-            url:       "u".into(),
+            url: "u".into(),
             reference: r,
         }
     }
@@ -185,10 +188,13 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let r = resolve(&T, &pin(Reference::Version("0.0.0-d05".into())), d.path()).unwrap();
         assert_eq!(r.key_rev, "v:0.0.0-d05");
-        assert_eq!(r.attempts, vec![
-            vec!["engine", "--version", "0.0.0-d05"],
-            vec!["--git", "u", "--tag", "0.0.0-d05", "engine"],
-        ]);
+        assert_eq!(
+            r.attempts,
+            vec![
+                vec!["engine", "--version", "0.0.0-d05"],
+                vec!["--git", "u", "--tag", "0.0.0-d05", "engine"],
+            ]
+        );
         // and the dep a hook would build points at the tag, not the version
         assert_eq!(r.git_ref(), ("tag", "0.0.0-d05"));
     }
@@ -203,13 +209,10 @@ mod tests {
             ..T
         };
         let r = resolve(&OTHER, &pin(Reference::Tag("v1".into())), d.path()).unwrap();
-        assert_eq!(r.attempts, vec![vec![
-            "--git",
-            "u",
-            "--tag",
-            "v1",
-            "somethingelse"
-        ]]);
+        assert_eq!(
+            r.attempts,
+            vec![vec!["--git", "u", "--tag", "v1", "somethingelse"]]
+        );
     }
 
     #[test]
@@ -217,9 +220,10 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let r = resolve(&T, &pin(Reference::Rev("sha1".into())), d.path()).unwrap();
         assert_eq!(r.key_rev, "sha1");
-        assert_eq!(r.attempts, vec![vec![
-            "--git", "u", "--rev", "sha1", "engine"
-        ]]);
+        assert_eq!(
+            r.attempts,
+            vec![vec!["--git", "u", "--rev", "sha1", "engine"]]
+        );
         assert_eq!(r.git_ref(), ("rev", "sha1"));
     }
 
@@ -228,10 +232,37 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let r = resolve(&T, &pin(Reference::Tag("nightly".into())), d.path()).unwrap();
         assert_eq!(r.key_rev, "tag:nightly");
-        assert_eq!(r.attempts, vec![vec![
-            "--git", "u", "--tag", "nightly", "engine"
-        ]]);
+        assert_eq!(
+            r.attempts,
+            vec![vec!["--git", "u", "--tag", "nightly", "engine"]]
+        );
         assert_eq!(r.git_ref(), ("tag", "nightly"));
+    }
+
+    #[test]
+    fn a_branch_resolves_to_its_rev_and_the_git_ref_carries_the_rev_not_the_name() {
+        // the case a hook actually depends on. A dependency pinned to `dev`
+        // resolves again an hour later to a different head, and then links a
+        // different revision than the engine it loads into. So `git_ref` must
+        // hand back the concrete rev, and a fixture whose rev equals the branch
+        // name cannot tell the two apart.
+        let d = tempfile::tempdir().unwrap();
+        let path = branch_resolution_path(d.path(), "u", "dev");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("{}\nfeedface99c0ffee\n", unix_now())).unwrap();
+
+        let r = resolve(&T, &pin(Reference::Branch("dev".into())), d.path()).unwrap();
+        assert_eq!(
+            r.key_rev, "feedface99c0ffee",
+            "the cached resolution was ignored"
+        );
+        assert_eq!(r.git_ref(), ("rev", "feedface99c0ffee"));
+        assert_eq!(
+            r.attempts,
+            vec![vec!["--git", "u", "--rev", "feedface99c0ffee", "engine"]]
+        );
+        // and the branch name is nowhere in what a hook would build from
+        assert!(!r.git_ref().1.contains("dev"));
     }
 
     #[test]
@@ -243,7 +274,11 @@ mod tests {
         std::fs::write(&path, format!("{now}\nfeedface99\n")).unwrap();
         assert_eq!(fresh_resolution(&path), Some("feedface99".into()));
 
-        std::fs::write(&path, format!("{}\nfeedface99\n", now - BRANCH_TTL.as_secs() - 1)).unwrap();
+        std::fs::write(
+            &path,
+            format!("{}\nfeedface99\n", now - BRANCH_TTL.as_secs() - 1),
+        )
+        .unwrap();
         assert_eq!(fresh_resolution(&path), None);
     }
 
@@ -254,7 +289,12 @@ mod tests {
         // branch instead of the pin.
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("m");
-        for bad in ["", "notanumber\nabc\n", &format!("{}\n\n", unix_now()), "123\n"] {
+        for bad in [
+            "",
+            "notanumber\nabc\n",
+            &format!("{}\n\n", unix_now()),
+            "123\n",
+        ] {
             std::fs::write(&path, bad).unwrap();
             assert_eq!(fresh_resolution(&path), None, "{bad:?}");
         }

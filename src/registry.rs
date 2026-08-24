@@ -68,48 +68,48 @@ impl PinForm {
 pub struct Registry {
     /// Schema tag for forward migrations; absent on the first write.
     #[serde(default)]
-    pub schema:    u32,
+    pub schema: u32,
     /// Unix seconds of the last GC pass, throttling the next one.
     #[serde(default)]
-    pub last_gc:   u64,
+    pub last_gc: u64,
     #[serde(default, rename = "consumer")]
     pub consumers: Vec<Consumer>,
     #[serde(default, rename = "build")]
-    pub builds:    Vec<Build>,
+    pub builds: Vec<Build>,
 }
 
 /// One repo the launcher has run in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Consumer {
     /// Absolute repo root.
-    pub root:       String,
+    pub root: String,
     /// Repo name (the root dir basename today; a real project name later).
-    pub name:       String,
+    pub name: String,
     /// Absolute mock dir the pin maps.
-    pub workdir:    String,
+    pub workdir: String,
     /// The engine source url this repo builds from.
     pub engine_url: String,
     /// `version` / `branch` / `rev` / `tag` / `legacy`.
-    pub pin_form:   String,
+    pub pin_form: String,
     /// The pin value (version string, branch name, rev, tag), empty for legacy.
     #[serde(default)]
-    pub pin_value:  String,
+    pub pin_value: String,
     /// The build key this consumer last resolved to.
-    pub key:        String,
+    pub key: String,
     /// Unix seconds of the last run in this repo.
-    pub last_seen:  u64,
+    pub last_seen: u64,
 }
 
 /// One cached engine build.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Build {
-    pub key:        String,
+    pub key: String,
     pub engine_url: String,
-    pub key_rev:    String,
+    pub key_rev: String,
     #[serde(default)]
-    pub toolchain:  String,
-    pub built_at:   u64,
-    pub last_used:  u64,
+    pub toolchain: String,
+    pub built_at: u64,
+    pub last_used: u64,
 }
 
 /// The registry file path under the cache root.
@@ -168,32 +168,28 @@ impl Registry {
                 c.pin_value = pin_value.to_string();
                 c.key = key.to_string();
                 c.last_seen = now;
-            },
-            None => {
-                self.consumers.push(Consumer {
-                    root:       root.to_string(),
-                    name:       name.to_string(),
-                    workdir:    workdir.to_string(),
-                    engine_url: engine_url.to_string(),
-                    pin_form:   form.as_str().to_string(),
-                    pin_value:  pin_value.to_string(),
-                    key:        key.to_string(),
-                    last_seen:  now,
-                })
-            },
+            }
+            None => self.consumers.push(Consumer {
+                root: root.to_string(),
+                name: name.to_string(),
+                workdir: workdir.to_string(),
+                engine_url: engine_url.to_string(),
+                pin_form: form.as_str().to_string(),
+                pin_value: pin_value.to_string(),
+                key: key.to_string(),
+                last_seen: now,
+            }),
         }
         match self.builds.iter_mut().find(|b| b.key == key) {
             Some(b) => b.last_used = now,
-            None => {
-                self.builds.push(Build {
-                    key:        key.to_string(),
-                    engine_url: engine_url.to_string(),
-                    key_rev:    key_rev.to_string(),
-                    toolchain:  toolchain.to_string(),
-                    built_at:   now,
-                    last_used:  now,
-                })
-            },
+            None => self.builds.push(Build {
+                key: key.to_string(),
+                engine_url: engine_url.to_string(),
+                key_rev: key_rev.to_string(),
+                toolchain: toolchain.to_string(),
+                built_at: now,
+                last_used: now,
+            }),
         }
     }
 
@@ -229,12 +225,34 @@ impl Registry {
                 return true;
             }
             // orphan (no pinners) or all pinners stale: evict.
-            let _ = std::fs::remove_dir_all(builds_dir.join(&b.key));
+            //
+            // The key is read verbatim out of a file on disk, and what it
+            // reaches here is a recursive delete. A key carrying a separator or
+            // a `..` would put that delete outside the cache entirely, so it is
+            // checked against the only shape this crate ever writes rather than
+            // trusted for having come from our own file. A registry somebody
+            // hand-edited is exactly the case, and it is the cheap check.
+            if is_build_key(&b.key) {
+                let _ = std::fs::remove_dir_all(builds_dir.join(&b.key));
+            }
             removed.push(b.key.clone());
             false
         });
         removed
     }
+}
+
+/// Whether `key` is a key this crate wrote: exactly the 16 lowercase hex
+/// characters [`crate::cache::compute_key`] produces, and nothing else.
+///
+/// The point is not the length. It is that a value failing this cannot contain
+/// a path separator, a `..`, a leading `/`, or anything else that makes
+/// `builds_dir.join(key)` denote a directory outside the cache.
+fn is_build_key(key: &str) -> bool {
+    key.len() == 16
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
@@ -349,13 +367,17 @@ mod tests {
 
     #[test]
     fn gc_removes_orphan_build_but_keeps_pinned() {
+        // real key shapes: the delete is guarded on them, so a made-up
+        // name would be spared and this would measure the guard instead.
+        const PINNED: &str = "1111111111111111";
+        const ORPHAN: &str = "2222222222222222";
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         // a real repo dir so its consumer is not dropped.
         let repo = root.join("repo");
         fs::create_dir_all(&repo).unwrap();
-        touch_build_dir(root, "pinned");
-        touch_build_dir(root, "orphan");
+        touch_build_dir(root, PINNED);
+        touch_build_dir(root, ORPHAN);
 
         let mut r = Registry::default();
         r.record(
@@ -365,25 +387,25 @@ mod tests {
             "u",
             PinForm::Branch,
             "dev",
-            "pinned",
+            PINNED,
             "r",
             "tc",
             1000,
         );
         // an orphan build with no consumer at all.
         r.builds.push(Build {
-            key:        "orphan".into(),
+            key: ORPHAN.into(),
             engine_url: "u".into(),
-            key_rev:    "r".into(),
-            toolchain:  "tc".into(),
-            built_at:   1,
-            last_used:  1,
+            key_rev: "r".into(),
+            toolchain: "tc".into(),
+            built_at: 1,
+            last_used: 1,
         });
 
-        let removed = r.gc(root, "pinned", 2000);
-        assert_eq!(removed, vec!["orphan".to_string()]);
-        assert!(root.join("builds").join("pinned").is_dir());
-        assert!(!root.join("builds").join("orphan").exists());
+        let removed = r.gc(root, PINNED, 2000);
+        assert_eq!(removed, vec![ORPHAN.to_string()]);
+        assert!(root.join("builds").join(PINNED).is_dir());
+        assert!(!root.join("builds").join(ORPHAN).exists());
     }
 
     #[test]
@@ -471,5 +493,69 @@ mod tests {
         };
         assert!(!r.gc_due(1000 + GC_INTERVAL_SECS - 1));
         assert!(r.gc_due(1000 + GC_INTERVAL_SECS));
+    }
+
+    #[test]
+    fn a_key_that_is_not_ours_never_reaches_the_delete() {
+        // the shape `compute_key` writes, and nothing else. Anything that fails
+        // this could make `builds_dir.join(key)` denote a directory outside the
+        // cache, and what happens there is a recursive delete.
+        assert!(is_build_key("0123456789abcdef"));
+        assert!(is_build_key(&crate::cache::compute_key("u", "r", "tc")));
+
+        for bad in [
+            "../../../etc",
+            "a/b",
+            "/absolute",
+            "..",
+            "",
+            "0123456789ABCDEF",  // uppercase is not what we write
+            "0123456789abcde",   // one short
+            "0123456789abcdef0", // one long
+            "0123456789abcdeg",  // not hex
+            "0123456789abcde/",
+        ] {
+            assert!(!is_build_key(bad), "{bad:?} passed as a build key");
+        }
+    }
+
+    #[test]
+    fn the_guard_spares_a_directory_outside_the_cache_and_still_evicts_a_real_one() {
+        // the property the predicate exists for, exercised through `gc` rather
+        // than asserted about the predicate, so a `gc` that stopped calling it
+        // is what fails.
+        let d = tempfile::tempdir().unwrap();
+        let builds = d.path().join("builds");
+        let outside = d.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keepme"), b"x").unwrap();
+
+        let real = crate::cache::compute_key("u", "r", "tc");
+        fs::create_dir_all(builds.join(&real)).unwrap();
+
+        let build = |key: String| Build {
+            key,
+            engine_url: "u".into(),
+            key_rev: "r".into(),
+            toolchain: "tc".into(),
+            built_at: 0,
+            last_used: 0,
+        };
+        let mut reg = Registry {
+            builds: vec![build("../outside".into()), build(real.clone())],
+            ..Default::default()
+        };
+        // no consumers, so both rows are orphans and both are evicted.
+        let removed = reg.gc(d.path(), "", 10_000_000);
+
+        assert!(
+            outside.join("keepme").exists(),
+            "a hand-edited key walked out of the cache and deleted a directory"
+        );
+        assert!(
+            !builds.join(&real).exists(),
+            "control: a key we actually wrote must still be evicted"
+        );
+        assert_eq!(removed.len(), 2, "both rows leave the registry either way");
     }
 }

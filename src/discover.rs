@@ -23,7 +23,7 @@ pub struct Located {
     /// The config to read the pin from.
     pub config_path: PathBuf,
     /// The absolute directory the engine runs against.
-    pub workdir:     PathBuf,
+    pub workdir: PathBuf,
 }
 
 /// The repo root.
@@ -39,20 +39,34 @@ pub fn repo_root(tool: &Tool) -> Option<PathBuf> {
 /// Pure core of [`repo_root`]: the override and the starting directory are
 /// passed in so resolution is testable without mutating process env, where
 /// cargo's parallel test threads make `set_var` a data race.
-fn repo_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>, cwd: &Path) -> Option<PathBuf> {
+fn repo_root_with(
+    tool: &Tool,
+    from_env: Option<std::ffi::OsString>,
+    cwd: &Path,
+) -> Option<PathBuf> {
     if let Some(r) = from_env {
         let p = PathBuf::from(r);
         if p.is_dir() {
             return Some(p);
         }
     }
+    // A marker is whatever the tool named and may be a directory, `.git`
+    // being one. A config file is a file, and it is checked as one here for
+    // the same reason `locate` checks it below: anchoring on a *directory* of
+    // that name would return a root that then reports no config, which reads
+    // as the config being absent rather than as the directory being in the
+    // way.
+    let found: fn(&Path) -> bool = match tool.anchor {
+        Anchor::Marker(_) => |p| p.exists(),
+        Anchor::ConfigFile => |p| p.is_file(),
+    };
     let wanted = match tool.anchor {
         Anchor::Marker(name) => name,
         Anchor::ConfigFile => tool.config_file,
     };
     let mut d = cwd.to_path_buf();
     loop {
-        if d.join(wanted).exists() {
+        if found(&d.join(wanted)) {
             return Some(d);
         }
         if !d.pop() {
@@ -105,7 +119,7 @@ pub fn locate(tool: &Tool, root: &Path) -> Result<Option<Located>, String> {
         1 => {
             let (config_path, dir) = found.into_iter().next().unwrap();
             Ok(Some(located(tool, root, &dir, config_path)))
-        },
+        }
         _ => {
             let list = found
                 .iter()
@@ -117,7 +131,7 @@ pub fn locate(tool: &Tool, root: &Path) -> Result<Option<Located>, String> {
                  repo root, or in a single subdir). Remove the extras, keep one:\n{list}",
                 tool.config_file
             ))
-        },
+        }
     }
 }
 
@@ -133,6 +147,11 @@ fn located(tool: &Tool, root: &Path, config_dir: &Path, config_path: PathBuf) ->
 
 /// Immediate subdirs of `root`, hidden ones first, each group sorted, skipping
 /// dirs that never hold a workspace.
+///
+/// Only ever reached under [`Anchor::Marker`], since a config-anchored tool
+/// found its config by finding its root. The three skipped names are a fixed
+/// convention rather than a tool parameter: none of them holds a config under
+/// any anchor, so nothing is gained by letting a tool restate them.
 fn ordered_subdirs(root: &Path) -> Vec<PathBuf> {
     let mut hidden = Vec::new();
     let mut plain = Vec::new();
@@ -167,24 +186,24 @@ mod tests {
 
     /// A tool whose config lives in a repo, mockspace's shape.
     const REPO: Tool = Tool {
-        anchor:          Anchor::Marker(".git"),
-        short:           "mock",
-        config_file:     "t.toml",
-        pin_prefix:      "t",
-        engine_crate:    "engine",
+        anchor: Anchor::Marker(".git"),
+        short: "mock",
+        config_file: "t.toml",
+        pin_prefix: "t",
+        engine_crate: "engine",
         cache_namespace: "t",
-        default_url:     "u",
-        launcher_crate:  "t-launcher",
-        workdir:         Some(Workdir {
-            key:          "work_dir",
+        default_url: "u",
+        launcher_crate: "t-launcher",
+        workdir: Some(Workdir {
+            key: "work_dir",
             root_default: "mock",
         }),
-        hooks:           Hooks::NONE,
+        hooks: Hooks::NONE,
     };
 
     /// A tool whose config sits above a pile of repos, homma's shape.
     const SPAN: Tool = Tool {
-        anchor:  Anchor::ConfigFile,
+        anchor: Anchor::ConfigFile,
         workdir: None,
         ..REPO
     };
@@ -192,7 +211,11 @@ mod tests {
     #[test]
     fn the_env_override_wins_when_it_is_a_directory() {
         let d = tempfile::tempdir().unwrap();
-        let got = repo_root_with(&REPO, Some(d.path().as_os_str().to_os_string()), Path::new("/"));
+        let got = repo_root_with(
+            &REPO,
+            Some(d.path().as_os_str().to_os_string()),
+            Path::new("/"),
+        );
         assert_eq!(got.as_deref(), Some(d.path()));
     }
 
@@ -313,6 +336,56 @@ mod tests {
         assert_eq!(loc.workdir, d.path());
         // the control, on the identical tree
         assert!(locate(&REPO, d.path()).is_err());
+    }
+
+    #[test]
+    fn a_config_anchored_tool_with_a_workdir_maps_it_under_the_root() {
+        // the cell nothing named: `ConfigFile` and `Some(Workdir)` together.
+        // The config's directory is the root under this anchor, so the
+        // root-level default applies and the in-subdirectory `.` branch is
+        // unreachable here by construction rather than by omission.
+        const SPAN_WD: Tool = Tool {
+            anchor: Anchor::ConfigFile,
+            ..REPO
+        };
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("t.toml"), "").unwrap();
+        assert_eq!(
+            locate(&SPAN_WD, d.path()).unwrap().unwrap().workdir,
+            d.path().join("mock")
+        );
+        // and the config may still name another
+        fs::write(d.path().join("t.toml"), "work_dir = \"design\"\n").unwrap();
+        assert_eq!(
+            locate(&SPAN_WD, d.path()).unwrap().unwrap().workdir,
+            d.path().join("design")
+        );
+    }
+
+    #[test]
+    fn a_directory_named_like_the_config_does_not_anchor_a_config_anchored_tool() {
+        // it would return a root whose config is then absent, which reads as
+        // "no config here" rather than as "that is a directory". The walk
+        // continues instead, and finds the real one above.
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        let decoy = real.join("member");
+        fs::create_dir_all(decoy.join("t.toml")).unwrap();
+        fs::write(real.join("t.toml"), "").unwrap();
+
+        assert_eq!(
+            repo_root_with(&SPAN, None, &decoy).as_deref(),
+            Some(real.as_path()),
+            "a directory of that name anchored the walk"
+        );
+        // the control: a marker anchor is not a file, so `.git` as a directory
+        // must go on anchoring, which is the ordinary case.
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir(d.path().join(".git")).unwrap();
+        assert_eq!(
+            repo_root_with(&REPO, None, d.path()).as_deref(),
+            Some(d.path())
+        );
     }
 
     #[test]

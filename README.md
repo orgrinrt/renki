@@ -2,11 +2,7 @@
 
 <div align="center" style="text-align: center;">
 
-[![GitHub Stars](https://img.shields.io/github/stars/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/stargazers)
-[![Crates.io](https://img.shields.io/crates/v/renki)](https://crates.io/crates/renki)
-[![docs.rs](https://img.shields.io/docsrs/renki)](https://docs.rs/renki)
-[![GitHub Issues](https://img.shields.io/github/issues/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/issues)
-![License](https://img.shields.io/github/license/orgrinrt/renki?color=%23009689)
+![License](https://img.shields.io/badge/license-MPL--2.0-%23009689)
 
 > The launcher half of a pinned-engine command-line tool. One const describes your tool, and the pin, cache, build and exec are handled.
 
@@ -16,6 +12,9 @@
 
 Pre-release, and the api hasn't settled. It works and it is used, but expect
 breaking changes and don't build anything load-bearing on it just yet.
+
+Not on crates.io yet, so the only way to depend on it is the git line under
+Installation.
 
 ## What it is
 
@@ -83,9 +82,13 @@ Six of them, all optional, and `Hooks::NONE` is a perfectly good answer.
 You don't install `renki`. It's a library, and what goes on `PATH` is your own
 launcher built with it.
 
-```bash
-cargo add renki
+```toml
+[dependencies]
+renki = { git = "https://github.com/orgrinrt/renki.git", branch = "dev" }
 ```
+
+`cargo add renki` will be the line once it is on crates.io. It isn't yet, so
+that one would fail and this one is what works.
 
 ## Usage
 
