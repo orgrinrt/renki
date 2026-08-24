@@ -1,0 +1,25 @@
+[package]
+name = "renki"
+version = "0.0.0"
+edition = "2024"
+publish = true
+description = "The launcher half of a pinned-engine command-line tool: resolves the engine version a repo pins, builds it once per version into a shared cache, and runs it from any working directory."
+license = "MPL-2.0"
+repository = "https://github.com/orgrinrt/renki"
+readme = "README.md"
+categories = ["development-tools", "command-line-utilities"]
+keywords = ["launcher", "pinning", "reproducible", "toolchain", "cli"]
+
+# Curated-minimal, because every dependency is paid at `cargo install` time by
+# a user who only wanted the tool this launches. The pin header is hand-read
+# (a handful of top-level keys), cargo's own install-root lock and atomic
+# binary install cover concurrency, and the cache key uses a vendored stable
+# FNV. The one structured file the launcher owns, the build registry, is real
+# TOML with several tables, so it uses serde and toml, both pulled with
+# default features off.
+[dependencies]
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
+
+[dev-dependencies]
+tempfile = "3"
