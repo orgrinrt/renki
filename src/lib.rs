@@ -54,6 +54,13 @@
 // noise that the crate root had forgotten to re-export.
 #![warn(unreachable_pub, missing_docs)]
 
+// The README's example is compiled as a doctest, so the two cannot drift. It
+// went out of date once already: the `Tool` grew fields and the block in the
+// README kept the old shape, which read as correct and did not build.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;
+
 mod cache;
 mod discover;
 mod engine;
