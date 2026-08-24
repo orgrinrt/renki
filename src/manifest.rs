@@ -36,7 +36,7 @@ pub enum Reference {
 /// A pinned engine source: where it lives, and which revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pin {
-    pub url:       String,
+    pub url: String,
     pub reference: Reference,
 }
 
@@ -47,9 +47,9 @@ pub struct Header {
     /// names it.
     pub workdir: Option<String>,
     /// The declared engine source, if any.
-    pub url:     Option<String>,
+    pub url: Option<String>,
     /// The declared revision, in whichever form the config used.
-    pub pin:     Option<Reference>,
+    pub pin: Option<Reference>,
 }
 
 impl Header {
@@ -88,7 +88,7 @@ impl Header {
     /// when it names no url of its own.
     pub fn to_pin(&self, tool: &Tool) -> Option<Pin> {
         Some(Pin {
-            url:       self
+            url: self
                 .url
                 .clone()
                 .unwrap_or_else(|| tool.default_url.to_string()),
@@ -103,19 +103,19 @@ mod tests {
     use crate::tool::{Anchor, Hooks, Workdir};
 
     const T: Tool = Tool {
-        anchor:          Anchor::Marker(".git"),
-        short:           "mock",
-        config_file:     "t.toml",
-        pin_prefix:      "eng",
-        engine_crate:    "engine",
+        anchor: Anchor::Marker(".git"),
+        short: "mock",
+        config_file: "t.toml",
+        pin_prefix: "eng",
+        engine_crate: "engine",
         cache_namespace: "t",
-        default_url:     "ssh://default",
-        launcher_crate:  "t-launcher",
-        workdir:         Some(Workdir {
-            key:          "work_dir",
+        default_url: "ssh://default",
+        launcher_crate: "t-launcher",
+        workdir: Some(Workdir {
+            key: "work_dir",
             root_default: "mock",
         }),
-        hooks:           Hooks::NONE,
+        hooks: Hooks::NONE,
     };
 
     #[test]
@@ -181,7 +181,9 @@ mod tests {
     #[test]
     fn the_workdir_key_is_the_tools_own() {
         assert_eq!(
-            Header::parse(&T, "work_dir = \"design\"\n").workdir.as_deref(),
+            Header::parse(&T, "work_dir = \"design\"\n")
+                .workdir
+                .as_deref(),
             Some("design")
         );
         assert_eq!(Header::parse(&T, "mock_dir = \"design\"\n").workdir, None);

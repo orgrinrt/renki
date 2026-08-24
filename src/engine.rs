@@ -189,16 +189,16 @@ mod tests {
 
     /// A tool that demands nothing of a checkout beyond a manifest.
     const PLAIN: Tool = Tool {
-        anchor:          Anchor::Marker(".git"),
-        short:           "t",
-        config_file:     "t.toml",
-        pin_prefix:      "t",
-        engine_crate:    "engine",
+        anchor: Anchor::Marker(".git"),
+        short: "t",
+        config_file: "t.toml",
+        pin_prefix: "t",
+        engine_crate: "engine",
         cache_namespace: "t",
-        default_url:     "u",
-        launcher_crate:  "t-launcher",
-        workdir:         None,
-        hooks:           Hooks::NONE,
+        default_url: "u",
+        launcher_crate: "t-launcher",
+        workdir: None,
+        hooks: Hooks::NONE,
     };
 
     /// A tool that demands more, the way mockspace demands a lint-rules crate
@@ -249,7 +249,10 @@ mod tests {
     #[test]
     fn a_trailing_flag_with_no_value_takes_nothing() {
         let (path, rest) = take_flag(strings(&["lock", "--engine"]));
-        assert!(path.is_none(), "a value was invented for a flag that had none");
+        assert!(
+            path.is_none(),
+            "a value was invented for a flag that had none"
+        );
         assert_eq!(rest, strings(&["lock"]));
     }
 

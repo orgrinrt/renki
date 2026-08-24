@@ -88,7 +88,7 @@ pub fn run(tool: &Tool) -> ExitCode {
         Err(e) => {
             eprintln!("{}: {e}", tool.short);
             ExitCode::FAILURE
-        },
+        }
     }
 }
 
@@ -128,14 +128,32 @@ fn locate_query(tool: &Tool) -> Result<(), String> {
 }
 
 fn no_root(tool: &Tool) -> String {
+    no_root_with(tool, std::env::var_os(tool.root_env()))
+}
+
+/// Pure core of [`no_root`]. The override is passed in so both arms are
+/// testable without mutating process env.
+///
+/// The distinction is the whole of it. A set-but-wrong override is the case an
+/// operator can actually fix, and telling them the variable is unset when they
+/// just exported it sends them looking in the wrong place. The walk falls
+/// through rather than failing on a bad override, deliberately, so a stale
+/// export in a shell does not make the tool unusable; that is what leaves this
+/// message the only place the operator hears about it.
+fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
     let what = match tool.anchor {
         Anchor::Marker(m) => m.to_string(),
         Anchor::ConfigFile => tool.config_file.to_string(),
     };
-    format!(
-        "no {what} found in this directory or any above it, and {} is unset",
-        tool.root_env()
-    )
+    let env = tool.root_env();
+    match from_env {
+        Some(v) => format!(
+            "no {what} found in this directory or any above it. {env} is set to {}, which is \
+             not a directory, so it was ignored",
+            Path::new(&v).display()
+        ),
+        None => format!("no {what} found in this directory or any above it, and {env} is unset"),
+    }
 }
 
 /// The user-facing arguments to forward to the engine.
@@ -269,7 +287,7 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     let (pin, source) = resolve_pin(tool, located.as_ref(), &root, &workdir)?;
     let resolved = pin::resolve(tool, &pin, &cache_root)?;
     let toolchain = cache::rustc_fingerprint();
-    let key = cache::compute_key(&pin.url, &resolved.key_rev, &toolchain, &[]);
+    let key = cache::compute_key(&pin.url, &resolved.key_rev, &toolchain);
     let bin = cache::ensure_built(tool, &cache_root, &key, &resolved)?;
 
     // Record this repo and build in the registry, then at most once a day
@@ -320,17 +338,15 @@ fn pin_form_and_value(pin: &Pin, source: PinSource) -> (registry::PinForm, Strin
     let value = match &pin.reference {
         Reference::Version(v) | Reference::Branch(v) | Reference::Rev(v) | Reference::Tag(v) => {
             v.clone()
-        },
+        }
     };
     let form = match source {
         PinSource::Legacy => registry::PinForm::Legacy,
-        PinSource::Config => {
-            match &pin.reference {
-                Reference::Version(_) => registry::PinForm::Version,
-                Reference::Branch(_) => registry::PinForm::Branch,
-                Reference::Rev(_) => registry::PinForm::Rev,
-                Reference::Tag(_) => registry::PinForm::Tag,
-            }
+        PinSource::Config => match &pin.reference {
+            Reference::Version(_) => registry::PinForm::Version,
+            Reference::Branch(_) => registry::PinForm::Branch,
+            Reference::Rev(_) => registry::PinForm::Rev,
+            Reference::Tag(_) => registry::PinForm::Tag,
         },
     };
     (form, value)
@@ -421,16 +437,16 @@ mod tests {
     use super::*;
 
     const T: Tool = Tool {
-        anchor:          Anchor::Marker(".git"),
-        short:           "mock",
-        config_file:     "t.toml",
-        pin_prefix:      "t",
-        engine_crate:    "engine",
+        anchor: Anchor::Marker(".git"),
+        short: "mock",
+        config_file: "t.toml",
+        pin_prefix: "t",
+        engine_crate: "engine",
         cache_namespace: "t",
-        default_url:     "u",
-        launcher_crate:  "cargo-mock",
-        workdir:         None,
-        hooks:           Hooks::NONE,
+        default_url: "u",
+        launcher_crate: "cargo-mock",
+        workdir: None,
+        hooks: Hooks::NONE,
     };
 
     fn s(v: &[&str]) -> Vec<String> {
@@ -450,10 +466,16 @@ mod tests {
         // cargo runs `cargo mock x` as `cargo-mock mock x`, so the engine would
         // otherwise be handed a subcommand it does not have.
         assert_eq!(
-            normalize_args(&T, &s(&["/root/.cargo/bin/cargo-mock", "mock", "lock", "--foo"])),
+            normalize_args(
+                &T,
+                &s(&["/root/.cargo/bin/cargo-mock", "mock", "lock", "--foo"])
+            ),
             s(&["lock", "--foo"])
         );
-        assert_eq!(normalize_args(&T, &s(&["cargo-mock", "mock"])), Vec::<String>::new());
+        assert_eq!(
+            normalize_args(&T, &s(&["cargo-mock", "mock"])),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -461,7 +483,10 @@ mod tests {
         // the control, and the reason the rule is written against the program
         // name rather than the first argument. `mock mock` is a user asking the
         // engine for a subcommand called `mock`, and eating it would be wrong.
-        assert_eq!(normalize_args(&T, &s(&["/usr/bin/mock", "mock"])), s(&["mock"]));
+        assert_eq!(
+            normalize_args(&T, &s(&["/usr/bin/mock", "mock"])),
+            s(&["mock"])
+        );
         // and a cargo-shaped launcher whose first argument is something else
         assert_eq!(
             normalize_args(&T, &s(&["cargo-mock", "lock"])),
@@ -479,7 +504,10 @@ mod tests {
         // the launcher owns `--dir`, and two of them would leave the engine
         // reading whichever it parsed last.
         assert_eq!(
-            normalize_args(&T, &s(&["mock", "check", "--dir", "/somewhere", "--scope", "x"])),
+            normalize_args(
+                &T,
+                &s(&["mock", "check", "--dir", "/somewhere", "--scope", "x"])
+            ),
             s(&["check", "--scope", "x"])
         );
     }
@@ -491,7 +519,7 @@ mod tests {
 
         const SPAN: Tool = Tool {
             anchor: Anchor::ConfigFile,
-            short:  "widget",
+            short: "widget",
             ..T
         };
         // a config-anchored tool has no marker, so naming one would send the
@@ -504,7 +532,7 @@ mod tests {
     #[test]
     fn a_legacy_pin_registers_as_legacy_whatever_its_reference_is() {
         let p = Pin {
-            url:       "u".into(),
+            url: "u".into(),
             reference: Reference::Rev("abc".into()),
         };
         assert_eq!(
@@ -523,5 +551,36 @@ mod tests {
         let err = resolve_pin(&T, None, d.path(), d.path()).unwrap_err();
         assert!(err.contains("t_version"), "{err}");
         assert!(err.contains("t.toml"), "{err}");
+    }
+
+    #[test]
+    fn the_refusal_says_whether_the_override_was_set() {
+        // an operator who has just exported the variable and got it wrong is
+        // the one person this message has to serve, and telling them it is
+        // unset sends them looking somewhere else entirely.
+        let unset = no_root_with(&T, None);
+        assert!(unset.contains("MOCK_ROOT is unset"), "{unset}");
+        assert!(unset.contains(".git"), "{unset}");
+
+        let set = no_root_with(&T, Some("/nope/xyzzy".into()));
+        assert!(set.contains("/nope/xyzzy"), "{set}");
+        assert!(set.contains("not a directory"), "{set}");
+        assert!(
+            !set.contains("is unset"),
+            "the set case still claims unset: {set}"
+        );
+    }
+
+    #[test]
+    fn the_refusal_names_the_anchor_the_tool_actually_looks_for() {
+        // a config-anchored tool never looked for `.git`, so naming it would
+        // send the reader to create one.
+        const SPAN: Tool = Tool {
+            anchor: Anchor::ConfigFile,
+            ..T
+        };
+        let m = no_root_with(&SPAN, None);
+        assert!(m.contains(T.config_file), "{m}");
+        assert!(!m.contains(".git"), "{m}");
     }
 }

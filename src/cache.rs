@@ -48,7 +48,9 @@ fn cache_root_from(
     let home = home
         .filter(|h| !h.is_empty())
         .ok_or_else(|| "neither XDG_CACHE_HOME nor HOME is set".to_string())?;
-    Ok(PathBuf::from(home).join(".cache").join(tool.cache_namespace))
+    Ok(PathBuf::from(home)
+        .join(".cache")
+        .join(tool.cache_namespace))
 }
 
 fn builds_dir(root: &Path) -> PathBuf {
@@ -72,29 +74,20 @@ pub fn rustc_fingerprint() -> String {
         .unwrap_or_default()
 }
 
-/// The cache key: a hash of the full compilation input. The engine's url and
-/// resolved rev, the toolchain identity (see [`rustc_fingerprint`]), and
-/// `extra` inputs the tool folds in, so a repo whose engine build depends on
-/// its own sources keys its own binary. A change in any re-keys and forces a
-/// coherent rebuild.
-pub fn compute_key(
-    url: &str,
-    key_rev: &str,
-    toolchain: &str,
-    extra: &[(String, Vec<u8>)],
-) -> String {
+/// The cache key: a hash of the full compilation input. The engine's url, the
+/// resolved rev, and the toolchain identity (see [`rustc_fingerprint`]). A
+/// change in any of the three re-keys and forces a coherent rebuild.
+///
+/// Nothing else goes in. A tool whose engine build depends on inputs of its own
+/// would need them here, and when one exists it arrives as a hook and as a
+/// fourth field. It is not anticipated: an unreachable parameter reads as a
+/// feature the crate has, and this one carried two tests no caller could
+/// exercise.
+pub fn compute_key(url: &str, key_rev: &str, toolchain: &str) -> String {
     let mut h = Fnv::new();
     h.write_field(url);
     h.write_field(key_rev);
     h.write_field(toolchain);
-    // order-independent: sort by path first.
-    let mut sorted: Vec<&(String, Vec<u8>)> = extra.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-    for (path, bytes) in sorted {
-        h.write_field(path);
-        h.write(bytes);
-        h.write(&[0]);
-    }
     h.hex()
 }
 
@@ -180,16 +173,16 @@ mod tests {
     use crate::tool::{Anchor, Hooks};
 
     const T: Tool = Tool {
-        anchor:          Anchor::Marker(".git"),
-        short:           "t",
-        config_file:     "t.toml",
-        pin_prefix:      "t",
-        engine_crate:    "engine",
+        anchor: Anchor::Marker(".git"),
+        short: "t",
+        config_file: "t.toml",
+        pin_prefix: "t",
+        engine_crate: "engine",
         cache_namespace: "tns",
-        default_url:     "u",
-        launcher_crate:  "t-launcher",
-        workdir:         None,
-        hooks:           Hooks::NONE,
+        default_url: "u",
+        launcher_crate: "t-launcher",
+        workdir: None,
+        hooks: Hooks::NONE,
     };
 
     #[test]
@@ -225,36 +218,14 @@ mod tests {
 
     #[test]
     fn the_key_is_deterministic_and_sensitive_to_every_input() {
-        let a = compute_key("u", "r1", "tc", &[]);
-        assert_eq!(a, compute_key("u", "r1", "tc", &[]));
-        assert_ne!(a, compute_key("u", "r2", "tc", &[]));
-        assert_ne!(a, compute_key("v", "r1", "tc", &[]));
+        let a = compute_key("u", "r1", "tc");
+        assert_eq!(a, compute_key("u", "r1", "tc"));
+        assert_ne!(a, compute_key("u", "r2", "tc"));
+        assert_ne!(a, compute_key("v", "r1", "tc"));
         // a toolchain change re-keys, or a frozen engine binary gets paired
         // with something built by a different rustc
-        assert_ne!(a, compute_key("u", "r1", "tc2", &[]));
+        assert_ne!(a, compute_key("u", "r1", "tc2"));
         assert_eq!(a.len(), 16);
-    }
-
-    #[test]
-    fn the_extra_inputs_are_order_independent_and_content_sensitive() {
-        let l1 = vec![
-            ("a.rs".to_string(), b"aa".to_vec()),
-            ("b.rs".to_string(), b"bb".to_vec()),
-        ];
-        let l2 = vec![
-            ("b.rs".to_string(), b"bb".to_vec()),
-            ("a.rs".to_string(), b"aa".to_vec()),
-        ];
-        assert_eq!(compute_key("u", "r", "tc", &l1), compute_key("u", "r", "tc", &l2));
-
-        let l3 = vec![("a.rs".to_string(), b"XX".to_vec())];
-        assert_ne!(compute_key("u", "r", "tc", &l1), compute_key("u", "r", "tc", &l3));
-        // and a rename with identical bytes is a different input
-        let l4 = vec![("z.rs".to_string(), b"aa".to_vec())];
-        assert_ne!(
-            compute_key("u", "r", "tc", &[l1[0].clone()]),
-            compute_key("u", "r", "tc", &l4)
-        );
     }
 
     #[test]
@@ -269,7 +240,7 @@ mod tests {
         let resolved = crate::pin::resolve(
             &T,
             &Pin {
-                url:       "u".into(),
+                url: "u".into(),
                 reference: Reference::Rev("r".into()),
             },
             dir.path(),
@@ -296,11 +267,11 @@ mod tests {
         std::fs::write(binpath.join("somethingelse"), b"#!/bin/sh\n").unwrap();
 
         let no_attempts = Resolved {
-            pin:      Pin {
-                url:       "u".into(),
+            pin: Pin {
+                url: "u".into(),
                 reference: Reference::Rev("r".into()),
             },
-            key_rev:  "r".into(),
+            key_rev: "r".into(),
             attempts: vec![],
         };
         assert!(ensure_built(&T, dir.path(), key, &no_attempts).is_err());
