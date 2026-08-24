@@ -14,7 +14,42 @@
 //! would fix the spelling at compile time, which is the one thing that has to
 //! vary.
 
+use std::path::Path;
+
 use crate::tool::Tool;
+
+/// The package a `Cargo.toml` in `dir` declares itself to be.
+///
+/// For a tool's [`verify_engine_dir`](crate::Hooks::verify_engine_dir) hook,
+/// which has to answer whether a directory somebody pointed `--engine` at is a
+/// checkout of the right engine. Every tool that shipped that hook has written
+/// its own reader for this and got it wrong in the same two ways: scanning the
+/// text for the name anywhere accepts a package under another name declaring a
+/// `[[bin]]` under the engine's, or merely mentioning it in a comment, and a
+/// scan that knows one of TOML's spellings of an assignment refuses a manifest
+/// that uses another.
+///
+/// Reading the document as a document is what makes both go away, and this
+/// crate already parses TOML for the build registry.
+///
+/// # Errors
+///
+/// When the manifest cannot be read, cannot be parsed, or declares no
+/// `[package] name`. A virtual manifest is the last of those, and it is the
+/// ordinary case for a workspace root, which is exactly what somebody reaches
+/// for first.
+pub fn package_name(dir: &Path) -> Result<String, String> {
+    let path = dir.join("Cargo.toml");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let doc: toml::Value =
+        toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    doc.get("package")
+        .and_then(|p| p.get("name"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{} declares no [package] name", path.display()))
+}
 
 /// Which revision of an engine a repo pins.
 ///
@@ -207,5 +242,84 @@ mod tests {
         // toml is typed, so a number here is a config error rather than a pin,
         // and taking it as one would key the cache on nothing.
         assert_eq!(Header::parse(&T, "eng_version = 12\n").pin, None);
+    }
+}
+
+#[cfg(test)]
+mod package_name_tests {
+    use super::package_name;
+
+    fn dir_with(manifest: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("Cargo.toml"), manifest).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_package_is_named_however_the_manifest_spells_the_assignment() {
+        // TOML has more than one way to write the same thing, and a reader that
+        // scans for one of them refuses manifests that are perfectly valid.
+        for manifest in [
+            "[package]\nname = \"engine\"\n",
+            "[package]\nname='engine'\n",
+            "[package]\n  name   =   \"engine\"   # the engine\n",
+            "package = { name = \"engine\" }\n",
+            "[package]\nversion = \"1\"\nname = \"engine\"\n",
+        ] {
+            let d = dir_with(manifest);
+            assert_eq!(
+                package_name(d.path()).as_deref(),
+                Ok("engine"),
+                "{manifest:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_manifest_that_merely_mentions_the_name_is_not_that_package() {
+        // Every one of these was accepted by a hand-rolled scan somewhere. Each
+        // contains the string and declares something else, or declares nothing.
+        for manifest in [
+            // another package shipping a binary under that name, on both sides
+            // of the package section: a scan that takes the first `name =` it
+            // sees is right about one of these by the order alone.
+            "[package]\nname = \"other\"\n\n[[bin]]\nname = \"engine\"\n",
+            "[[bin]]\nname = \"engine\"\npath = \"src/main.rs\"\n\n[package]\nname = \"other\"\n",
+            // a comment
+            "[package]\nname = \"other\"  # not the engine\n",
+            // a renamed dependency on it
+            "[package]\nname = \"other\"\n\n[dependencies]\ne = { package = \"engine\" }\n",
+            // the workspace root, which is what anyone points at first
+            "[workspace]\nmembers = [\"engine\"]\n",
+        ] {
+            let d = dir_with(manifest);
+            assert_ne!(
+                package_name(d.path()).as_deref(),
+                Ok("engine"),
+                "{manifest:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_virtual_manifest_says_so_rather_than_failing_somewhere_else() {
+        // The case that matters most, because a workspace root is what somebody
+        // reaches for and cargo's own complaint about it names neither the flag
+        // that caused it nor the directory that would have worked.
+        let d = dir_with("[workspace]\nmembers = [\"a\"]\n");
+        let err = package_name(d.path()).unwrap_err();
+        assert!(err.contains("no [package] name"), "{err}");
+        assert!(err.contains("Cargo.toml"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_or_unparseable_manifest_names_the_path() {
+        let empty = tempfile::tempdir().unwrap();
+        let err = package_name(empty.path()).unwrap_err();
+        assert!(err.contains("Cargo.toml"), "{err}");
+
+        let broken = dir_with("[package\nname =\n");
+        let err = package_name(broken.path()).unwrap_err();
+        assert!(err.contains("Cargo.toml"), "{err}");
     }
 }

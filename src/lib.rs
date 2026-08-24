@@ -80,7 +80,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
-pub use crate::manifest::{Header, Pin, Reference};
+pub use crate::manifest::{Header, Pin, Reference, package_name};
 pub use crate::pin::Resolved;
 pub use crate::tool::{Anchor, Check, Cli, Hooks, Locate, Tool, Workdir};
 
