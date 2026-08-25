@@ -218,6 +218,43 @@ impl Locate {
         config_key: "config",
         workdir_key: "workdir",
     };
+
+    /// The first thing wrong with the query, or `None`.
+    ///
+    /// An empty subcommand is matched by every bare argument, so the launcher
+    /// answers the query instead of passing the argument to the engine. An
+    /// empty answer key prints a line that is only a separator. Two keys the
+    /// same prints the name twice with different values behind it, which a
+    /// reader of the answer parses into whichever of the two comes last.
+    const fn defect(&self) -> Option<&'static str> {
+        if self.subcommand.is_empty() {
+            return Some(
+                "locate.subcommand is empty, so the query answers an empty argument \
+                 and the engine never sees it",
+            );
+        }
+        if self.root_key.is_empty() {
+            return Some("locate.root_key is empty, so the root is answered under no name");
+        }
+        if self.config_key.is_empty() {
+            return Some("locate.config_key is empty, so the config is answered under no name");
+        }
+        if self.workdir_key.is_empty() {
+            return Some(
+                "locate.workdir_key is empty, so the working directory is answered under no name",
+            );
+        }
+        if const_str_eq(self.root_key, self.config_key)
+            || const_str_eq(self.root_key, self.workdir_key)
+            || const_str_eq(self.config_key, self.workdir_key)
+        {
+            return Some(
+                "two of locate's answer keys are the same string, so the answer \
+                 names one of them twice and a reader takes whichever came last",
+            );
+        }
+        None
+    }
 }
 
 /// What the pin keys inside a repo's config are called.
@@ -339,10 +376,46 @@ pub struct Workdir {
     pub root_default: &'static str,
 }
 
+impl Workdir {
+    /// The first thing wrong with this, or `None`.
+    const fn defect(&self) -> Option<&'static str> {
+        if self.key.is_empty() {
+            return Some(
+                "workdir.key is empty, so a repo can never declare where its \
+                 working directory is and every one of them falls back to the \
+                 default",
+            );
+        }
+        if self.root_default.is_empty() {
+            return Some(
+                "workdir.root_default is empty, so a root-level config that does \
+                 not set the key puts the working directory at the root itself, \
+                 which is the repo rather than a directory inside it",
+            );
+        }
+        None
+    }
+}
+
 /// The places a launcher does something only its own tool needs.
 ///
 /// Every field is optional and defaults to doing nothing, so a tool that needs
 /// none of this writes `Hooks::NONE`.
+///
+/// **Spread [`Hooks::NONE`] rather than naming every field.** This is a struct
+/// literal, so a hook added later breaks a tool that wrote all seven out, and
+/// one is expected: the cache key hashes the engine url, the resolved rev and
+/// the toolchain, and a tool whose engine build depends on an input of its own
+/// arrives here as an eighth field. The spread is what makes that a minor
+/// release instead of a breaking one.
+///
+/// ```
+/// # use renki::Hooks;
+/// const HOOKS: Hooks = Hooks {
+///     prepare_repo: Some(|_root| { /* plant whatever this tool keeps in a repo */ }),
+///     ..Hooks::NONE
+/// };
+/// ```
 pub struct Hooks {
     /// Run once the repo and its config are located, before the engine is
     /// built. Whatever a tool must keep planted in a repo goes here, and it is
@@ -385,7 +458,8 @@ pub struct Hooks {
 }
 
 impl Hooks {
-    /// A tool that needs none of the extension points.
+    /// A tool that needs none of the extension points, and the base every other
+    /// tool spreads.
     pub const NONE: Hooks = Hooks {
         prepare_repo: None,
         engine_args: None,
@@ -571,6 +645,80 @@ impl Tool {
             && m.is_empty()
         {
             return Some("the anchor marker is empty, so the root walk matches every directory");
+        }
+        // The two optional descriptors. Absent is a shape rather than a defect:
+        // a tool with no working directory and no locate query is ordinary.
+        // Present and empty is not.
+        if let Some(w) = self.workdir
+            && let Some(bad) = w.defect()
+        {
+            return Some(bad);
+        }
+        if let Some(l) = self.locate
+            && let Some(bad) = l.defect()
+        {
+            return Some(bad);
+        }
+        if let Some(bad) = self.config_keys_collide() {
+            return Some(bad);
+        }
+        None
+    }
+
+    /// Whether two of the names read out of the repo's config are the same
+    /// string.
+    ///
+    /// Six names come out of one `toml::Table`: the five pin keys and the
+    /// working directory's. A collision between two of them is not a
+    /// duplicated line in a config, it is one line answering two questions,
+    /// and which answer wins is decided by the order the reader happens to try
+    /// them in rather than by anything a descriptor said.
+    ///
+    /// Both halves do real damage. Two pin keys the same and the more specific
+    /// form wins, so `version` spelled the same as `tag` is read as a tag,
+    /// which skips the registry attempt and the `version_tags` rewrite and
+    /// fetches a different artifact under the same config. The working
+    /// directory sharing a pin key means one string is both a path and a
+    /// revision.
+    ///
+    /// Separate from the emptiness checks above because it is a different
+    /// question: those ask whether a name can be used at all, this asks
+    /// whether two of them mean the same thing.
+    const fn config_keys_collide(&self) -> Option<&'static str> {
+        let k = &self.pin_keys;
+        // Written out rather than looped, because a `const fn` cannot build the
+        // array of `&str` this would iterate over, and the pairs are few.
+        let names: [&'static str; 6] = [
+            k.version,
+            k.rev,
+            k.tag,
+            k.branch,
+            k.git,
+            match self.workdir {
+                // A tool with no working directory has five names to compare,
+                // and repeating one of them against itself is the cheapest way
+                // to say so in a const context: it collides with nothing new.
+                Some(w) => w.key,
+                None => k.version,
+            },
+        ];
+        let mut i = 0;
+        while i < names.len() {
+            let mut j = i + 1;
+            while j < names.len() {
+                // The workdir slot standing in as `version` is the one pair
+                // that must not count, and it is exactly `i == 0, j == 5`.
+                let stand_in = i == 0 && j == 5 && self.workdir.is_none();
+                if !stand_in && const_str_eq(names[i], names[j]) {
+                    return Some(
+                        "two of the names read out of a repo's config are the same string, \
+                         so one line answers two questions and which one wins is decided by \
+                         the order they are tried in",
+                    );
+                }
+                j += 1;
+            }
+            i += 1;
         }
         None
     }

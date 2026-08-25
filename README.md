@@ -88,6 +88,10 @@ const TOOL: Tool = Tool {
                                    // no hooks, and it chases its own branch
 };
 
+// checked at build time, not on the first run: every name here ends up in a
+// path, a command line or a config key, and an empty one runs and misbehaves
+const _: () = assert!(TOOL.defect().is_none());
+
 fn main() -> std::process::ExitCode {
     // SAFETY: first statement of main, before any thread exists
     unsafe { renki::run(&TOOL) }

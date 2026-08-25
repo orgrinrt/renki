@@ -159,9 +159,16 @@ fn include_ships_the_crate_tests_and_none_of_the_repository_ones() {
 
     let shipped: BTreeSet<String> = entries.into_iter().map(str::to_owned).collect();
 
-    // What an unpacked tarball does not have: `ante.toml` is excluded on
-    // purpose, and neither the repository nor a rustup toolchain list is in
-    // there at all.
+    // The reaches outside the package that this repository's tests actually
+    // make, not an account of every reach a test could make. `ante.toml` is
+    // excluded from the package on purpose, and neither the repository nor a
+    // rustup toolchain list is in a tarball at all.
+    //
+    // A test reaching outside some other way is classified as a crate test and
+    // ships, and the failure shows up as that test going red on a consumer's
+    // first `cargo test` rather than here. Adding the reach to this list is the
+    // repair, and the control below is what keeps the list from rotting into
+    // needles that match nothing.
     const ABSENT: [&str; 3] = ["ante.toml", "\"git\"", "\"rustup\""];
 
     let mut every = Vec::new();
@@ -234,5 +241,13 @@ fn include_ships_the_crate_tests_and_none_of_the_repository_ones() {
         !repository_only.is_empty(),
         "nothing classified as a repository check, so the first assertion held \
          over an empty intersection and checked nothing"
+    );
+    // And the other side of it. A classifier that answered "repository check"
+    // for everything would pass every assertion above too, and the second one
+    // in particular would hold over an empty set.
+    assert!(
+        every.iter().any(|n| !repository_only.contains(n)),
+        "every test classified as a repository check, so nothing was ever \
+         expected in `include` and the second assertion checked nothing"
     );
 }

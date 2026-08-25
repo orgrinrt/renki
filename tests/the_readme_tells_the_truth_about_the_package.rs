@@ -74,7 +74,7 @@ fn the_readme_does_not_promise_a_binary_this_crate_has_none_of() {
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("no manifest");
     let readme = std::fs::read_to_string(root.join("README.md")).expect("no readme");
 
-    let ships_a_binary = manifest.contains("[[bin]]") || root.join("src/main.rs").exists();
+    let ships_a_binary = declares_a_bin(&manifest) || root.join("src/main.rs").exists();
     assert!(
         !ships_a_binary,
         "this crate ships a binary now, so the readme may say so and this check \
@@ -84,6 +84,63 @@ fn the_readme_does_not_promise_a_binary_this_crate_has_none_of() {
         !readme.contains("cargo install renki"),
         "the readme tells a reader to `cargo install renki`, which installs \
          nothing: there is no binary target"
+    );
+}
+
+/// Whether the manifest declares a binary target.
+///
+/// The table header at the start of a line, not the string anywhere. A comment
+/// explaining that there is no binary here contains the spelling, and a
+/// `contains` reads that comment as the declaration it denies. That is not
+/// hypothetical: adding the comment is what turned this red.
+fn declares_a_bin(manifest: &str) -> bool {
+    manifest
+        .lines()
+        .any(|l| l.trim_start().starts_with("[[bin]]"))
+}
+
+/// The value of the first `key = "..."` in the manifest.
+///
+/// Not a TOML parse, and it does not know what table it is in. Every key it is
+/// asked for here is declared once, in `[package]`, above every other table, so
+/// the first match is the right one. A manifest that grew a second `description`
+/// under some other table would need a real parse instead.
+fn package_str<'a>(manifest: &'a str, key: &str) -> &'a str {
+    let needle = format!("\n{key} = \"");
+    let (_, rest) = manifest
+        .split_once(&needle)
+        .unwrap_or_else(|| panic!("the manifest has no {key}"));
+    rest.split_once('"').expect("the value is not closed").0
+}
+
+#[test]
+fn the_manifest_does_not_sell_a_binary_either() {
+    // The readme is not the only place a stranger reads before installing. The
+    // description is the line crates.io puts under the name in a search result,
+    // and the categories are what they arrive through. Both said utility, which
+    // is what `cargo install renki` failing with `no packages found with
+    // binaries or examples` was the consequence of.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("no manifest");
+
+    // The word rather than the opening phrase. The point is that the sentence
+    // says what the package is, and pinning where it says it makes an ordinary
+    // rewording fail a test that has nothing to say about the rewording.
+    let description = package_str(&manifest, "description");
+    assert!(
+        description.contains("library"),
+        "the description does not say this is a library, and a reader who takes \
+         it for a tool reaches for `cargo install`: {description}"
+    );
+
+    let (_, categories) = manifest
+        .split_once("\ncategories = [")
+        .expect("the manifest names no categories");
+    let categories = categories.split_once(']').expect("unclosed categories").0;
+    assert!(
+        !categories.contains("command-line-utilities"),
+        "`command-line-utilities` is where a reader looks for something to \
+         install, and there is no binary here: {categories}"
     );
 }
 
@@ -100,4 +157,15 @@ fn the_checks_above_can_fail() {
         vec!["1.2", "3.4"]
     );
     assert!(versions_the_readme_names("nothing here").is_empty());
+    assert_eq!(
+        package_str("\nname = \"x\"\ndescription = \"a thing\"\n", "description"),
+        "a thing"
+    );
+    assert!(declares_a_bin(
+        "[package]\nname = \"x\"\n\n[[bin]]\nname = \"x\"\n"
+    ));
+    assert!(
+        !declares_a_bin("# no [[bin]] here, and that is the point\nname = \"x\"\n"),
+        "a comment naming the table read as the table"
+    );
 }

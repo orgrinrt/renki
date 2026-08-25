@@ -23,7 +23,7 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
     // The point of the check is that it runs, and a predicate tested only
     // as a predicate stays green when nothing calls it. Every arm below is
     // a descriptor that would otherwise run and misbehave quietly.
-    const BAD: [Tool; 17] = [
+    const BAD: [Tool; 30] = [
         Tool {
             short: "my-tool",
             ..T
@@ -118,6 +118,119 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
         // single run.
         Tool {
             cache_retention: std::time::Duration::from_secs(59 * 60),
+            ..T
+        },
+        // The two optional descriptors, which the check reached for a while and
+        // did not read. Absent is a shape rather than a defect; present and
+        // empty is what these are.
+        Tool {
+            workdir: Some(Workdir {
+                key: "",
+                root_default: "src",
+            }),
+            ..T
+        },
+        Tool {
+            workdir: Some(Workdir {
+                key: "t_dir",
+                root_default: "",
+            }),
+            ..T
+        },
+        // One arm per answer key, for the reason the pin keys get one each: a
+        // single empty name would leave the other three unenforced.
+        Tool {
+            locate: Some(Locate {
+                subcommand: "",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                root_key: "",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                config_key: "",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                workdir_key: "",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        // Not empty, and still unusable: the answer names `root` twice with
+        // two values behind it and a reader takes whichever came last. One arm
+        // per pair rather than one for the set, because a check written as two
+        // comparisons instead of three passes every arm but one of these.
+        Tool {
+            locate: Some(Locate {
+                config_key: "root",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                workdir_key: "root",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                workdir_key: "config",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        // The same shape one namespace over, and the one that does damage
+        // rather than confusion. Six names come out of one table, and two of
+        // them spelled the same makes one line answer two questions.
+        //
+        // `tag` spelled as `version` is the worst of them: the reader tries
+        // the more specific form first, so a version resolves as a tag, which
+        // skips the registry attempt and the `version_tags` rewrite and fetches
+        // a different artifact under a config that looks correct.
+        Tool {
+            pin_keys: PinKeys {
+                tag: "t_version",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        Tool {
+            pin_keys: PinKeys {
+                rev: "t_branch",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        // The url key sharing a pin key, which makes one string both where the
+        // engine comes from and which revision of it.
+        Tool {
+            pin_keys: PinKeys {
+                git: "t_tag",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        // Across the two namespaces rather than inside one, which is the pair
+        // a check written per-struct cannot see: the working directory and a
+        // revision are read out of the same table.
+        Tool {
+            workdir: Some(Workdir {
+                key: "t_branch",
+                root_default: "sub",
+            }),
             ..T
         },
     ];
@@ -250,6 +363,19 @@ fn a_sound_descriptor_is_not_refused() {
         ..T
     };
     assert!(NAMED_BIN.defect().is_none());
+
+    // A working directory with a name of its own, because the collision check
+    // compares six names and a tool that declares no working directory has
+    // five. Something has to stand in for the sixth in a const context, and
+    // this is what says the stand-in is not itself read as a collision.
+    const WITH_WORKDIR: Tool = Tool {
+        workdir: Some(Workdir {
+            key: "t_dir",
+            root_default: "sub",
+        }),
+        ..T
+    };
+    assert!(WITH_WORKDIR.defect().is_none());
 }
 
 #[test]
@@ -480,4 +606,49 @@ fn the_missing_pin_message_names_the_tools_own_key() {
     let err = resolve_pin(&T, None, d.path(), d.path()).unwrap_err();
     assert!(err.contains("t_version"), "{err}");
     assert!(err.contains("t.toml"), "{err}");
+}
+
+#[test]
+fn a_config_that_is_not_toml_is_reported_as_that_and_not_as_a_missing_pin() {
+    // A parse failure hands back an empty header, which is the same value a
+    // config naming no pin hands back. Told to add `t_version = "0.1.0"` to a
+    // file whose first line is already `t_version = "0.1.0"`, a reader goes
+    // looking anywhere but at the unclosed quote three lines down.
+    let d = tempfile::tempdir().unwrap();
+    let config = d.path().join("t.toml");
+    std::fs::write(&config, "t_version = \"0.1.0\"\nbroken = [1, 2\n").unwrap();
+    let located = crate::discover::Located {
+        workdir: d.path().to_path_buf(),
+        config_path: config.clone(),
+    };
+    let err = resolve_pin(&T, Some(&located), d.path(), d.path()).unwrap_err();
+    assert!(
+        err.contains("not readable as TOML"),
+        "the parse failure was reported as something else: {err}"
+    );
+    assert!(err.contains("t.toml"), "the file is not named: {err}");
+    assert!(
+        !err.contains("add one to"),
+        "still telling the reader to add a key the file already has: {err}"
+    );
+}
+
+#[test]
+fn a_config_that_is_toml_and_names_no_pin_still_says_to_add_one() {
+    // The control on the arm above. Both reach `resolve_pin` with an empty
+    // header, so an arm that fired on both would have replaced one wrong
+    // message with another.
+    let d = tempfile::tempdir().unwrap();
+    let config = d.path().join("t.toml");
+    std::fs::write(&config, "unrelated = \"value\"\n").unwrap();
+    let located = crate::discover::Located {
+        workdir: d.path().to_path_buf(),
+        config_path: config.clone(),
+    };
+    let err = resolve_pin(&T, Some(&located), d.path(), d.path()).unwrap_err();
+    assert!(err.contains("t_version"), "{err}");
+    assert!(
+        !err.contains("not readable as TOML"),
+        "valid TOML reported as a parse failure: {err}"
+    );
 }

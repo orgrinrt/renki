@@ -199,6 +199,20 @@ pub(crate) fn locate(tool: &Tool, raw: &OsStr) -> Result<PathBuf, String> {
     Ok(abs)
 }
 
+/// The scratch directory name for one `--engine` source path.
+///
+/// The path's bytes, not a rendering of them. On unix a path is arbitrary bytes
+/// and `to_string_lossy` maps every invalid sequence onto one replacement
+/// character, so two unrelated sources collided into one directory and built
+/// over each other. Named rather than written inline in [`build`], because the
+/// test that pins the collision has to hash the same way the build does and a
+/// second copy of two lines is a test that guards a copy.
+pub(crate) fn scratch_key(source: &Path) -> String {
+    let mut h = Fnv::new();
+    h.write_bytes(source.as_os_str().as_encoded_bytes());
+    h.hex()
+}
+
 /// Build the engine from `source`, always, and return the binary.
 ///
 /// Always, rather than when something looks stale: the reason to pass this flag
@@ -210,9 +224,7 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
     let scratch = scratch_dir(cache_root);
     sweep(cache_root);
 
-    let mut h = Fnv::new();
-    h.write_bytes(source.as_os_str().as_encoded_bytes());
-    let root = scratch.join(h.hex());
+    let root = scratch.join(scratch_key(source));
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create {}: {e}", root.display()))?;
     touch(&root);

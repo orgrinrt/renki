@@ -69,11 +69,16 @@ impl PinForm {
 }
 
 /// The whole registry file.
+///
+/// No schema tag. One was declared here and never written, so every file on
+/// disk carried the same absent value and a migration reading it would have
+/// learned nothing it did not already know from the field being missing. A
+/// version that needs to tell two shapes apart adds the tag then and reads its
+/// absence as the shape that came before, which is what it would have had to do
+/// anyway. Unknown keys are ignored on load, so a file written by such a
+/// version still parses here.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Registry {
-    /// Schema tag for forward migrations; absent on the first write.
-    #[serde(default)]
-    pub schema: u32,
     /// Unix seconds of the last GC pass, throttling the next one.
     #[serde(default)]
     pub last_gc: u64,
@@ -84,6 +89,17 @@ pub(crate) struct Registry {
 }
 
 /// One repo the launcher has run in.
+///
+/// Six of these fields the collector never reads: `name`, `workdir`,
+/// `engine_url`, `pin_form`, `pin_value`, and `key` outside the sweep. They are
+/// here for the person who opens the file, which is a real reader and the only
+/// one there is: the registry sits at a known path under the cache root and
+/// answers "why did this rebuild" in a way no log line does. Dropping them
+/// would shrink the file and leave that question unanswerable.
+///
+/// So this is a record, not internal state, and a field is added here when it
+/// answers something a reader would otherwise have to guess. A field nothing
+/// reads and nobody would look for does not belong.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Consumer {
     /// Absolute repo root.
@@ -131,6 +147,10 @@ fn yes() -> bool {
 }
 
 /// One cached engine build.
+///
+/// `last_used` is what the collector decides on. The rest, like [`Consumer`]'s,
+/// is for whoever opens the file: which engine and revision a directory of
+/// build output came from, under which toolchain, and when.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Build {
     pub key: String,
