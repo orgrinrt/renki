@@ -23,7 +23,7 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
     // The point of the check is that it runs, and a predicate tested only
     // as a predicate stays green when nothing calls it. Every arm below is
     // a descriptor that would otherwise run and misbehave quietly.
-    const BAD: [Tool; 17] = [
+    const BAD: [Tool; 24] = [
         Tool {
             short: "my-tool",
             ..T
@@ -118,6 +118,62 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
         // single run.
         Tool {
             cache_retention: std::time::Duration::from_secs(59 * 60),
+            ..T
+        },
+        // The two optional descriptors, which the check reached for a while and
+        // did not read. Absent is a shape rather than a defect; present and
+        // empty is what these are.
+        Tool {
+            workdir: Some(Workdir {
+                key: "",
+                root_default: "src",
+            }),
+            ..T
+        },
+        Tool {
+            workdir: Some(Workdir {
+                key: "t_dir",
+                root_default: "",
+            }),
+            ..T
+        },
+        // One arm per answer key, for the reason the pin keys get one each: a
+        // single empty name would leave the other three unenforced.
+        Tool {
+            locate: Some(Locate {
+                subcommand: "",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                root_key: "",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                config_key: "",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                workdir_key: "",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        // Not empty, and still unusable: the answer names `root` twice with
+        // two values behind it and a reader takes whichever came last.
+        Tool {
+            locate: Some(Locate {
+                config_key: "root",
+                ..Locate::DEFAULT
+            }),
             ..T
         },
     ];

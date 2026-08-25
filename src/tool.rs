@@ -218,6 +218,43 @@ impl Locate {
         config_key: "config",
         workdir_key: "workdir",
     };
+
+    /// The first thing wrong with the query, or `None`.
+    ///
+    /// An empty subcommand is matched by every bare argument, so the launcher
+    /// answers the query instead of passing the argument to the engine. An
+    /// empty answer key prints a line that is only a separator. Two keys the
+    /// same prints the name twice with different values behind it, which a
+    /// reader of the answer parses into whichever of the two comes last.
+    const fn defect(&self) -> Option<&'static str> {
+        if self.subcommand.is_empty() {
+            return Some(
+                "locate.subcommand is empty, so the query answers an empty argument \
+                 and the engine never sees it",
+            );
+        }
+        if self.root_key.is_empty() {
+            return Some("locate.root_key is empty, so the root is answered under no name");
+        }
+        if self.config_key.is_empty() {
+            return Some("locate.config_key is empty, so the config is answered under no name");
+        }
+        if self.workdir_key.is_empty() {
+            return Some(
+                "locate.workdir_key is empty, so the working directory is answered under no name",
+            );
+        }
+        if const_str_eq(self.root_key, self.config_key)
+            || const_str_eq(self.root_key, self.workdir_key)
+            || const_str_eq(self.config_key, self.workdir_key)
+        {
+            return Some(
+                "two of locate's answer keys are the same string, so the answer \
+                 names one of them twice and a reader takes whichever came last",
+            );
+        }
+        None
+    }
 }
 
 /// What the pin keys inside a repo's config are called.
@@ -339,10 +376,46 @@ pub struct Workdir {
     pub root_default: &'static str,
 }
 
+impl Workdir {
+    /// The first thing wrong with this, or `None`.
+    const fn defect(&self) -> Option<&'static str> {
+        if self.key.is_empty() {
+            return Some(
+                "workdir.key is empty, so a repo can never declare where its \
+                 working directory is and every one of them falls back to the \
+                 default",
+            );
+        }
+        if self.root_default.is_empty() {
+            return Some(
+                "workdir.root_default is empty, so a root-level config that does \
+                 not set the key puts the working directory at the root itself, \
+                 which is the repo rather than a directory inside it",
+            );
+        }
+        None
+    }
+}
+
 /// The places a launcher does something only its own tool needs.
 ///
 /// Every field is optional and defaults to doing nothing, so a tool that needs
 /// none of this writes `Hooks::NONE`.
+///
+/// **Spread [`Hooks::NONE`] rather than naming every field.** This is a struct
+/// literal, so a hook added later breaks a tool that wrote all seven out, and
+/// one is expected: the cache key hashes the engine url, the resolved rev and
+/// the toolchain, and a tool whose engine build depends on an input of its own
+/// arrives here as an eighth field. The spread is what makes that a minor
+/// release instead of a breaking one.
+///
+/// ```
+/// # use renki::Hooks;
+/// const HOOKS: Hooks = Hooks {
+///     prepare_repo: Some(|_root| { /* plant whatever this tool keeps in a repo */ }),
+///     ..Hooks::NONE
+/// };
+/// ```
 pub struct Hooks {
     /// Run once the repo and its config are located, before the engine is
     /// built. Whatever a tool must keep planted in a repo goes here, and it is
@@ -385,7 +458,8 @@ pub struct Hooks {
 }
 
 impl Hooks {
-    /// A tool that needs none of the extension points.
+    /// A tool that needs none of the extension points, and the base every other
+    /// tool spreads.
     pub const NONE: Hooks = Hooks {
         prepare_repo: None,
         engine_args: None,
@@ -571,6 +645,19 @@ impl Tool {
             && m.is_empty()
         {
             return Some("the anchor marker is empty, so the root walk matches every directory");
+        }
+        // The two optional descriptors. Absent is a shape rather than a defect:
+        // a tool with no working directory and no locate query is ordinary.
+        // Present and empty is not.
+        if let Some(w) = self.workdir
+            && let Some(bad) = w.defect()
+        {
+            return Some(bad);
+        }
+        if let Some(l) = self.locate
+            && let Some(bad) = l.defect()
+        {
+            return Some(bad);
         }
         None
     }

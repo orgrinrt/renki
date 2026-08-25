@@ -3,7 +3,7 @@ name = "renki"
 version = "0.0.2"
 edition = "2024"
 publish = true
-description = "The launcher half of a command-line tool whose engine each repo pins. Reads the pinned version, builds it once into a shared cache, and runs it from any working directory."
+description = "A library for writing the launcher half of a command-line tool whose engine each repo pins. The launcher reads the pin, builds that engine once into a shared cache, and runs it from any working directory."
 license = "MPL-2.0"
 homepage = "https://github.com/orgrinrt/renki"
 repository = "https://github.com/orgrinrt/renki"
@@ -12,7 +12,10 @@ readme = "README.md"
 # runs the whole suite clean; 1.87 refuses the let-chains this uses throughout,
 # with `let expressions in this position are unstable` at every one of them.
 rust-version = "1.88"
-categories = ["development-tools", "command-line-utilities"]
+# `command-line-interface` rather than `command-line-utilities`: this is a
+# library a launcher is written against, not a utility anybody installs.
+# There is no `[[bin]]` here and `cargo install renki` installs nothing.
+categories = ["development-tools", "command-line-interface"]
 # The sources, and the two files a reader of the package needs. The lint configs and the ignore file are ours and are paid for by
 # everyone who downloads the crate if they are left in.
 #

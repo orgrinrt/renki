@@ -34,6 +34,12 @@
 //!     ..Tool::CONVENTIONS
 //! };
 //!
+//! // The descriptor is checked at build time rather than on the first run.
+//! // Every name in it ends up in a path, a command line or a config key, and
+//! // an empty one produces a launcher that runs and does the wrong thing
+//! // quietly. Put this beside the descriptor.
+//! const _: () = assert!(TOOL.defect().is_none());
+//!
 //! fn main() -> std::process::ExitCode {
 //!     // SAFETY: the first statement of main, before any thread exists.
 //!     unsafe { renki::run(&TOOL) }
