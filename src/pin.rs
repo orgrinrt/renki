@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::hash::Fnv;
 pub(crate) use crate::manifest::{Pin, Reference};
-use crate::tool::Tool;
+use crate::tool::{Tool, VersionSource};
 
 /// A branch pin re-resolves to a concrete rev at most this often; a fresh
 /// resolution within the window is reused without a network round-trip. Kept
@@ -83,15 +83,19 @@ pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resol
     let (key_rev, attempts) = match &pin.reference {
         Reference::Version(v) => {
             let key = format!("v:{v}");
-            // the registry release first, which is the fast path once the
-            // engine publishes. Before that it fails on a cold build and falls
-            // through to the tags below, silently, since a failure is only
-            // reported when every attempt fails.
-            let mut attempts = vec![vec![
-                tool.engine_crate.to_string(),
-                "--version".into(),
-                v.clone(),
-            ]];
+            // The registry release first, when the tool has said its engine
+            // crate name is one it owns. `cargo install` resolves by name, and
+            // nothing here ties that name to `pin.url`, so for a tool that has
+            // not said so the registry is a different artifact wearing the same
+            // name and this list must not contain it. See `VersionSource`.
+            let mut attempts = Vec::new();
+            if matches!(tool.version_source, VersionSource::RegistryThenGitTag) {
+                attempts.push(vec![
+                    tool.engine_crate.to_string(),
+                    "--version".into(),
+                    v.clone(),
+                ]);
+            }
             // the matching git tags: work before the engine is published, and
             // for git-only consumers after. The bare version unless the tool
             // says its repository spells them differently.

@@ -61,10 +61,10 @@ Or in your `Cargo.toml`:
 renki = "0.0.2"
 ```
 
-Do pin the exact version rather than a range. `Tool` is a struct literal, so a
-new field on it is technically breaking even with `..Tool::CONVENTIONS` in
-between, and `0.0.x` releases are incompatible with each other by semver's own
-rules anyway.
+Do pin the exact version rather than a range. `0.0.x` releases are incompatible
+with each other by semver's own rules anyway, and `Tool` is a struct literal, so
+a new field on it breaks you unless you spread `..Tool::CONVENTIONS` and let the
+base answer the ones you have no opinion on. Spread it.
 
 You don't install `renki` itself as a command. It's a library, and what goes on
 `PATH` is your own launcher built with it.
@@ -123,22 +123,35 @@ spread with `..` so only the fields that differ get named. Around it sit `Anchor
 for how the repo root gets found, `PinKeys` and the `pin_keys!` macro for what
 the pin keys are called, `SelfUpdate`, `Hooks` and `Check` for the seven optional
 places a tool does something no other tool needs, `Workdir`, `Cli` and `Locate`
-for the flag and key spellings, `Pin` and `Reference` for what a repo pinned, and
-`Resolved` for what that turned into. A `main` is `run` or
+for the flag and key spellings, `VersionSource` for where a version pin may
+resolve from, `Pin` and `Reference` for what a repo pinned, and `Resolved` for
+what that turned into. A `main` is `run` or
 `run_without_sanitizing` and not much else.
 
 The full surface with working links is on [docs.rs](https://docs.rs/renki),
 which is a better place for it than a table here that goes stale the first time
 something moves.
 
-The one thing genuinely worth deciding rather than taking the default of is the
-anchor, since it's the one thing that really differs between tools.
+Two things are worth actually deciding rather than taking the default of.
+
+The anchor, since it's the one thing that really differs between tools.
 `Anchor::Marker(".git")` walks up to the nearest directory holding that name, and
 suits a config living inside a repository. `Anchor::ConfigFile` walks up to the
 nearest directory holding the config itself, and suits a config sitting above a
 pile of repositories, where a marker anchor would stop at the first repo on the
 way up and never reach it. If I picked one, the other kind of tool would just end
 up working around it, so it stays a parameter.
+
+And `version_source`, which says where a `version` pin may look. A rev, a tag or
+a branch all name something inside the url you pinned. A version could mean that
+repo's tag of the same name, or it could mean a crates.io release of your
+`engine_crate`, and `cargo install` resolves that one by name with nothing tying
+the name to your url. So the default is `VersionSource::GitTag`, the tag and
+nothing else. If the name isn't yours on crates.io, and it isn't when you're
+starting out, then whoever does take it gets to decide what your engine is.
+Switch to `RegistryThenGitTag` once you own the name and want the faster cold
+build, and know that it's a promise you're making about the name rather than
+something anybody can check for you.
 
 ## What the launcher answers on its own
 
@@ -169,10 +182,12 @@ small TOML registry.
 The registry is worth knowing about, since it's the one thing here that records
 something about you and not about a build. One row per repo that's run the tool
 on this machine, and the row holds the lot of it: the repo root, its directory
-name, whether that root was found exactly or by walking up, the working
-directory the engine gets pointed at, the engine's source url, what was pinned
-and in which form, the build key that resolved to, and when it last ran. That's what lets the collector tell a build nothing points at any more
-from one that's still wanted. Nothing but the launcher writes it and nothing
+name, whether that root survived being written down as text without anything in
+it getting replaced, the working directory the engine gets pointed at, the
+engine's source url, what was pinned and in which form, the build key that
+resolved to, and when it last ran. That's what lets the collector tell a build
+nothing points at any more from one that's still wanted. Nothing but the
+launcher writes it and nothing
 sends it anywhere. It's plain TOML in your own cache directory, so go and read it
 if you like, and deleting the whole cache directory is always safe.
 

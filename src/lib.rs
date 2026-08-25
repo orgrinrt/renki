@@ -99,7 +99,9 @@ use crate::args::{is_the_locate_query, normalize_args};
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
 pub use crate::manifest::{Header, Pin, Reference, package_name};
 pub use crate::pin::Resolved;
-pub use crate::tool::{Anchor, Check, Cli, Hooks, Locate, PinKeys, SelfUpdate, Tool, Workdir};
+pub use crate::tool::{
+    Anchor, Check, Cli, Hooks, Locate, PinKeys, SelfUpdate, Tool, VersionSource, Workdir,
+};
 
 /// Where a resolved pin came from, so the registry can tell a repo that has
 /// adopted an explicit pin from one still on whatever legacy fallback the tool

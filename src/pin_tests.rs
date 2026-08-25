@@ -25,10 +25,47 @@ fn pin(r: Reference) -> Pin {
 }
 
 #[test]
-fn a_version_tries_the_registry_then_the_matching_tag() {
+fn a_version_resolves_to_the_pinned_repository_and_nowhere_else() {
+    // The whole of what a version pin means by default. `cargo install engine
+    // --version x` resolves `engine` by name against crates.io, and nothing
+    // ties that name to the url the config pinned, so a name somebody else
+    // holds would install their code and run it as the engine. The url is the
+    // only source the repository actually named.
     let d = tempfile::tempdir().unwrap();
     let r = resolve(&T, &pin(Reference::Version("0.0.0-d05".into())), d.path()).unwrap();
     assert_eq!(r.key_rev, "v:0.0.0-d05");
+    assert_eq!(
+        r.attempts,
+        vec![vec!["--git", "u", "--tag", "0.0.0-d05", "engine"]]
+    );
+    // and the dep a hook would build points at the tag, not the version
+    assert_eq!(r.git_ref(), ("tag", "0.0.0-d05"));
+
+    // Stated as a property too, because the assertion above passes for any
+    // reordering that still happens to put the git attempt first.
+    for a in &r.attempts {
+        assert!(
+            a.contains(&"--git".to_string()),
+            "an attempt with no source selector resolves by name: {a:?}"
+        );
+    }
+}
+
+#[test]
+fn a_tool_that_owns_its_crate_name_can_take_the_registry_first() {
+    // The opt in, and the only shape in which the registry attempt is
+    // correct: the tool has said the name on crates.io is its own.
+    const PUBLISHED: Tool = Tool {
+        version_source: VersionSource::RegistryThenGitTag,
+        ..T
+    };
+    let d = tempfile::tempdir().unwrap();
+    let r = resolve(
+        &PUBLISHED,
+        &pin(Reference::Version("0.0.0-d05".into())),
+        d.path(),
+    )
+    .unwrap();
     assert_eq!(
         r.attempts,
         vec![
@@ -36,8 +73,31 @@ fn a_version_tries_the_registry_then_the_matching_tag() {
             vec!["--git", "u", "--tag", "0.0.0-d05", "engine"],
         ]
     );
-    // and the dep a hook would build points at the tag, not the version
+    // the fallback is the point of the ordering: a version the registry has
+    // not got is still buildable from the tag.
     assert_eq!(r.git_ref(), ("tag", "0.0.0-d05"));
+}
+
+#[test]
+fn the_source_choice_reaches_only_the_version_form() {
+    // A rev, a tag and a branch all name something inside the pinned
+    // repository already, so there was never a second source for them to
+    // resolve from and the flag must not invent one.
+    const PUBLISHED: Tool = Tool {
+        version_source: VersionSource::RegistryThenGitTag,
+        ..T
+    };
+    let d = tempfile::tempdir().unwrap();
+    for r in [
+        Reference::Rev("abc123".into()),
+        Reference::Tag("v1.2.3".into()),
+    ] {
+        for t in [&T, &PUBLISHED] {
+            let got = resolve(t, &pin(r.clone()), d.path()).unwrap();
+            assert_eq!(got.attempts.len(), 1, "{r:?}");
+            assert!(got.attempts[0].contains(&"--git".to_string()), "{r:?}");
+        }
+    }
 }
 
 #[test]
@@ -61,10 +121,7 @@ fn a_repository_that_prefixes_its_tags_can_say_so() {
     .unwrap();
     assert_eq!(
         r.attempts,
-        vec![
-            vec!["engine", "--version", "0.1.0"],
-            vec!["--git", "u", "--tag", "v0.1.0", "engine"],
-        ]
+        vec![vec!["--git", "u", "--tag", "v0.1.0", "engine"]]
     );
     assert_eq!(r.git_ref(), ("tag", "v0.1.0"));
 }
@@ -83,13 +140,13 @@ fn every_tag_a_tool_names_is_tried_in_order() {
     };
     let d = tempfile::tempdir().unwrap();
     let r = resolve(&BOTH, &pin(Reference::Version("0.1.0".into())), d.path()).unwrap();
-    assert_eq!(r.attempts.len(), 3);
+    assert_eq!(r.attempts.len(), 2);
     assert_eq!(
-        r.attempts[1],
+        r.attempts[0],
         vec!["--git", "u", "--tag", "v0.1.0", "engine"]
     );
     assert_eq!(
-        r.attempts[2],
+        r.attempts[1],
         vec!["--git", "u", "--tag", "0.1.0", "engine"]
     );
 }

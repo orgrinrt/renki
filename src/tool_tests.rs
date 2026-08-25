@@ -5,6 +5,13 @@
 
 use super::*;
 
+/// Every field written out, deliberately.
+///
+/// This is the consumer shape `Tool::CONVENTIONS` does **not** protect, and it
+/// sits here so that a field added to `Tool` breaks the build right at the
+/// sentence saying so. Nothing else in the suite would notice: the descriptors
+/// in `pin_tests.rs` and `lib_tests.rs` all spread the base, which is exactly
+/// what buys them the compatibility this one does not have.
 const WITH: Tool = Tool {
     anchor: Anchor::Marker(".git"),
     short: "widget",
@@ -16,6 +23,7 @@ const WITH: Tool = Tool {
     cache_retention: std::time::Duration::from_secs(30 * 24 * 60 * 60),
     scan_skip: &[".git", "target", "node_modules"],
     default_url: "u",
+    version_source: VersionSource::GitTag,
     launcher_crate: "t-launcher",
     workdir: Some(Workdir {
         key: "work_dir",
