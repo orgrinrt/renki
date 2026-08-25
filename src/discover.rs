@@ -108,7 +108,7 @@ pub(crate) fn locate(tool: &Tool, root: &Path) -> Result<Option<Located>, String
     if root_cfg.is_file() {
         found.push((root_cfg, root.to_path_buf()));
     }
-    for sub in ordered_subdirs(root) {
+    for sub in ordered_subdirs(root, tool.scan_skip) {
         let cfg = sub.join(tool.config_file);
         if cfg.is_file() {
             found.push((cfg, sub));
@@ -146,13 +146,15 @@ fn located(tool: &Tool, root: &Path, config_dir: &Path, config_path: PathBuf) ->
 }
 
 /// Immediate subdirs of `root`, hidden ones first, each group sorted, skipping
-/// dirs that never hold a workspace.
+/// the names in `skip`.
 ///
 /// Only ever reached under [`Anchor::Marker`], since a config-anchored tool
-/// found its config by finding its root. The three skipped names are a fixed
-/// convention rather than a tool parameter: none of them holds a config under
-/// any anchor, so nothing is gained by letting a tool restate them.
-fn ordered_subdirs(root: &Path) -> Vec<PathBuf> {
+/// found its config by finding its root. The skip list is the tool's, because
+/// the cost of a name missing from it is not a slower scan: a file with this
+/// tool's config name anywhere in scope is a hard error that blocks every run,
+/// and a vendored tree or a build output directory can hold one without
+/// anybody putting it there.
+fn ordered_subdirs(root: &Path, skip: &[&str]) -> Vec<PathBuf> {
     let mut hidden = Vec::new();
     let mut plain = Vec::new();
     let Ok(rd) = std::fs::read_dir(root) else {
@@ -163,7 +165,7 @@ fn ordered_subdirs(root: &Path) -> Vec<PathBuf> {
             continue;
         }
         let name = e.file_name().to_string_lossy().to_string();
-        if matches!(name.as_str(), ".git" | "target" | "node_modules") {
+        if skip.contains(&name.as_str()) {
             continue;
         }
         if name.starts_with('.') {
@@ -175,6 +177,36 @@ fn ordered_subdirs(root: &Path) -> Vec<PathBuf> {
     hidden.sort_by(|a, b| a.0.cmp(&b.0));
     plain.sort_by(|a, b| a.0.cmp(&b.0));
     hidden.into_iter().chain(plain).map(|(_, p)| p).collect()
+}
+
+/// Why the root walk found nothing, as a message an operator can act on.
+pub(crate) fn no_root(tool: &Tool) -> String {
+    no_root_with(tool, std::env::var_os(tool.root_env()))
+}
+
+/// Pure core of [`no_root`]. The override is passed in so both arms are
+/// testable without mutating process env.
+///
+/// The distinction is the whole of it. A set-but-wrong override is the case an
+/// operator can actually fix, and telling them the variable is unset when they
+/// just exported it sends them looking in the wrong place. The walk falls
+/// through rather than failing on a bad override, deliberately, so a stale
+/// export in a shell does not make the tool unusable; that is what leaves this
+/// message the only place the operator hears about it.
+fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
+    let what = match tool.anchor {
+        Anchor::Marker(m) => m.to_string(),
+        Anchor::ConfigFile => tool.config_file.to_string(),
+    };
+    let env = tool.root_env();
+    match from_env {
+        Some(v) => format!(
+            "no {what} found in this directory or any above it. {env} is set to {}, which is \
+             not a directory, so it was ignored",
+            Path::new(&v).display()
+        ),
+        None => format!("no {what} found in this directory or any above it, and {env} is unset"),
+    }
 }
 
 #[cfg(test)]

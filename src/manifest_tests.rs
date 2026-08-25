@@ -4,26 +4,21 @@
 //--------------------------------------------------------------------------------------------------
 
 use super::*;
-use crate::tool::{Anchor, Cli, Hooks, Locate, Workdir};
+use crate::tool::Workdir;
 
 const T: Tool = Tool {
-    anchor: Anchor::Marker(".git"),
-    short: "mock",
+    short: "widget",
     config_file: "t.toml",
-    pin_prefix: "eng",
+    pin_keys: crate::pin_keys!("eng"),
     engine_crate: "engine",
-    engine_bin: None,
     cache_namespace: "t",
     default_url: "ssh://default",
     launcher_crate: "t-launcher",
     workdir: Some(Workdir {
         key: "work_dir",
-        root_default: "mock",
+        root_default: "work",
     }),
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
-    hooks: Hooks::NONE,
+    ..Tool::CONVENTIONS
 };
 
 #[test]
@@ -42,7 +37,7 @@ fn each_form_is_read_under_the_tools_prefix() {
 fn another_tools_prefix_is_not_this_tools_pin() {
     // the control that makes the test above mean anything: the reader is
     // keyed on the prefix, so a differently-prefixed key is invisible.
-    let h = Header::parse(&T, "mockspace_version = \"1.2\"\n");
+    let h = Header::parse(&T, "otherthing_version = \"1.2\"\n");
     assert_eq!(h.pin, None);
     assert!(h.to_pin(&T).is_none());
 }
@@ -94,7 +89,7 @@ fn the_workdir_key_is_the_tools_own() {
             .as_deref(),
         Some("design")
     );
-    assert_eq!(Header::parse(&T, "mock_dir = \"design\"\n").workdir, None);
+    assert_eq!(Header::parse(&T, "other_dir = \"design\"\n").workdir, None);
 }
 
 #[test]

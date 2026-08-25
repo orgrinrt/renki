@@ -28,7 +28,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::tool::Tool;
+use crate::tool::{SelfUpdate, Tool};
 
 /// Re-check the launcher's branch at most this often.
 const SELF_UPDATE_TTL_SECS: u64 = 60 * 60;
@@ -44,6 +44,13 @@ struct InstalledSource {
 /// Check for and apply a launcher update. May reinstall and re-exec, in which
 /// case it never returns; otherwise returns having done nothing user-visible.
 pub(crate) fn maybe_self_update(tool: &Tool, cache_root: &Path) {
+    // The tool's own call comes first. A user turning it off for themselves is
+    // the second door and the narrower one: it cannot be the only door, or the
+    // default for a tool whose author wants none of this is the behaviour they
+    // rejected.
+    if tool.self_update == SelfUpdate::Never {
+        return;
+    }
     if std::env::var_os(tool.no_self_update_env()).is_some() {
         return;
     }

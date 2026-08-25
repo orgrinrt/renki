@@ -7,6 +7,17 @@ use std::fs;
 
 use super::*;
 
+/// The retention the conventions carry, which is what these cases are written
+/// against. Passed explicitly now that it is the tool's rather than the
+/// launcher's.
+const RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// A key of the shape this crate actually writes: sixteen lowercase hex
+/// characters. `gc` refuses to delete anything else, by design, so a made-up
+/// key makes every assertion about a deletion vacuous.
+const KEY: &str = "00112233445566aa";
+
 fn touch_build_dir(cache_root: &Path, key: &str) {
     let d = cache_root.join("builds").join(key).join("bin");
     fs::create_dir_all(&d).unwrap();
@@ -16,30 +27,32 @@ fn touch_build_dir(cache_root: &Path, key: &str) {
 #[test]
 fn record_upserts_consumer_and_build() {
     let mut r = Registry::default();
-    r.record(
-        "/r",
-        "r",
-        "/r/mock",
-        "u",
-        PinForm::Branch,
-        "dev",
-        "k1",
-        "rev1",
-        "tc",
-        100,
-    );
-    r.record(
-        "/r",
-        "r",
-        "/r/mock",
-        "u",
-        PinForm::Branch,
-        "dev",
-        "k1",
-        "rev1",
-        "tc",
-        200,
-    );
+    r.record(&Recording {
+        root: "/r",
+        root_exact: true,
+        name: "r",
+        workdir: "/r/widget",
+        engine_url: "u",
+        form: PinForm::Branch,
+        pin_value: "dev",
+        key: "k1",
+        key_rev: "rev1",
+        toolchain: "tc",
+        now: 100,
+    });
+    r.record(&Recording {
+        root: "/r",
+        root_exact: true,
+        name: "r",
+        workdir: "/r/widget",
+        engine_url: "u",
+        form: PinForm::Branch,
+        pin_value: "dev",
+        key: "k1",
+        key_rev: "rev1",
+        toolchain: "tc",
+        now: 200,
+    });
     assert_eq!(r.consumers.len(), 1);
     assert_eq!(r.consumers[0].last_seen, 200);
     assert_eq!(r.builds.len(), 1);
@@ -50,31 +63,33 @@ fn record_upserts_consumer_and_build() {
 #[test]
 fn record_repin_leaves_old_build_orphaned() {
     let mut r = Registry::default();
-    r.record(
-        "/r",
-        "r",
-        "/r/mock",
-        "u",
-        PinForm::Branch,
-        "dev",
-        "old",
-        "r1",
-        "tc",
-        100,
-    );
+    r.record(&Recording {
+        root: "/r",
+        root_exact: true,
+        name: "r",
+        workdir: "/r/widget",
+        engine_url: "u",
+        form: PinForm::Branch,
+        pin_value: "dev",
+        key: "old",
+        key_rev: "r1",
+        toolchain: "tc",
+        now: 100,
+    });
     // same repo re-pins to a new key: consumer moves, old build stays.
-    r.record(
-        "/r",
-        "r",
-        "/r/mock",
-        "u",
-        PinForm::Version,
-        "0.0.1",
-        "new",
-        "r2",
-        "tc",
-        200,
-    );
+    r.record(&Recording {
+        root: "/r",
+        root_exact: true,
+        name: "r",
+        workdir: "/r/widget",
+        engine_url: "u",
+        form: PinForm::Version,
+        pin_value: "0.0.1",
+        key: "new",
+        key_rev: "r2",
+        toolchain: "tc",
+        now: 200,
+    });
     assert_eq!(r.consumers.len(), 1);
     assert_eq!(r.consumers[0].key, "new");
     assert_eq!(r.builds.len(), 2); // old is now orphaned, GC removes it
@@ -83,18 +98,19 @@ fn record_repin_leaves_old_build_orphaned() {
 #[test]
 fn roundtrips_through_toml() {
     let mut r = Registry::default();
-    r.record(
-        "/r",
-        "r",
-        "/r/mock",
-        "u",
-        PinForm::Rev,
-        "abc",
-        "k",
-        "abc",
-        "tc",
-        100,
-    );
+    r.record(&Recording {
+        root: "/r",
+        root_exact: true,
+        name: "r",
+        workdir: "/r/widget",
+        engine_url: "u",
+        form: PinForm::Rev,
+        pin_value: "abc",
+        key: "k",
+        key_rev: "abc",
+        toolchain: "tc",
+        now: 100,
+    });
     let dir = tempfile::tempdir().unwrap();
     let path = registry_path(dir.path());
     r.save(&path);
@@ -126,18 +142,19 @@ fn gc_removes_orphan_build_but_keeps_pinned() {
     touch_build_dir(root, ORPHAN);
 
     let mut r = Registry::default();
-    r.record(
-        repo.to_str().unwrap(),
-        "repo",
-        "/m",
-        "u",
-        PinForm::Branch,
-        "dev",
-        PINNED,
-        "r",
-        "tc",
-        1000,
-    );
+    r.record(&Recording {
+        root: repo.to_str().unwrap(),
+        root_exact: true,
+        name: "repo",
+        workdir: "/m",
+        engine_url: "u",
+        form: PinForm::Branch,
+        pin_value: "dev",
+        key: PINNED,
+        key_rev: "r",
+        toolchain: "tc",
+        now: 1000,
+    });
     // an orphan build with no consumer at all.
     r.builds.push(Build {
         key: ORPHAN.into(),
@@ -148,7 +165,7 @@ fn gc_removes_orphan_build_but_keeps_pinned() {
         last_used: 1,
     });
 
-    let removed = r.gc(root, PINNED, 2000);
+    let removed = r.gc(root, PINNED, RETENTION, 2000);
     assert_eq!(removed, vec![ORPHAN.to_string()]);
     assert!(root.join("builds").join(PINNED).is_dir());
     assert!(!root.join("builds").join(ORPHAN).exists());
@@ -164,20 +181,21 @@ fn gc_evicts_build_whose_consumers_are_all_stale() {
 
     let mut r = Registry::default();
     // last_seen far in the past relative to `now`.
-    r.record(
-        repo.to_str().unwrap(),
-        "repo",
-        "/m",
-        "u",
-        PinForm::Branch,
-        "dev",
-        "stalekey",
-        "r",
-        "tc",
-        1,
-    );
-    let now = LRU_STALE_SECS + 1000;
-    let removed = r.gc(root, "somethingelse", now);
+    r.record(&Recording {
+        root: repo.to_str().unwrap(),
+        root_exact: true,
+        name: "repo",
+        workdir: "/m",
+        engine_url: "u",
+        form: PinForm::Branch,
+        pin_value: "dev",
+        key: "stalekey",
+        key_rev: "r",
+        toolchain: "tc",
+        now: 1,
+    });
+    let now = RETENTION_SECS + 1000;
+    let removed = r.gc(root, "somethingelse", RETENTION, now);
     assert_eq!(removed, vec!["stalekey".to_string()]);
 }
 
@@ -189,20 +207,21 @@ fn gc_protects_current_key_even_if_stale() {
     fs::create_dir_all(&repo).unwrap();
     touch_build_dir(root, "current");
     let mut r = Registry::default();
-    r.record(
-        repo.to_str().unwrap(),
-        "repo",
-        "/m",
-        "u",
-        PinForm::Branch,
-        "dev",
-        "current",
-        "r",
-        "tc",
-        1,
-    );
-    let now = LRU_STALE_SECS + 1000;
-    let removed = r.gc(root, "current", now);
+    r.record(&Recording {
+        root: repo.to_str().unwrap(),
+        root_exact: true,
+        name: "repo",
+        workdir: "/m",
+        engine_url: "u",
+        form: PinForm::Branch,
+        pin_value: "dev",
+        key: "current",
+        key_rev: "r",
+        toolchain: "tc",
+        now: 1,
+    });
+    let now = RETENTION_SECS + 1000;
+    let removed = r.gc(root, "current", RETENTION, now);
     assert!(removed.is_empty());
     assert!(root.join("builds").join("current").is_dir());
 }
@@ -214,19 +233,20 @@ fn gc_drops_consumer_whose_root_is_gone() {
     touch_build_dir(root, "k");
     let mut r = Registry::default();
     // consumer root does not exist on disk.
-    r.record(
-        "/no/such/repo",
-        "gone",
-        "/m",
-        "u",
-        PinForm::Branch,
-        "dev",
-        "k",
-        "r",
-        "tc",
-        1000,
-    );
-    let removed = r.gc(root, "protect-nothing", 2000);
+    r.record(&Recording {
+        root: "/no/such/repo",
+        root_exact: true,
+        name: "gone",
+        workdir: "/m",
+        engine_url: "u",
+        form: PinForm::Branch,
+        pin_value: "dev",
+        key: "k",
+        key_rev: "r",
+        toolchain: "tc",
+        now: 1000,
+    });
+    let removed = r.gc(root, "protect-nothing", RETENTION, 2000);
     assert!(r.consumers.is_empty());
     assert_eq!(removed, vec!["k".to_string()]); // its build is now orphaned
 }
@@ -292,7 +312,7 @@ fn the_guard_spares_a_directory_outside_the_cache_and_still_evicts_a_real_one() 
         ..Default::default()
     };
     // no consumers, so both rows are orphans and both are evicted.
-    let removed = reg.gc(d.path(), "", 10_000_000);
+    let removed = reg.gc(d.path(), "", RETENTION, 10_000_000);
 
     assert!(
         outside.join("keepme").exists(),
@@ -303,4 +323,113 @@ fn the_guard_spares_a_directory_outside_the_cache_and_still_evicts_a_real_one() 
         "control: a key we actually wrote must still be evicted"
     );
     assert_eq!(removed.len(), 2, "both rows leave the registry either way");
+}
+
+#[test]
+fn a_root_that_could_not_be_written_exactly_is_not_dropped_for_being_absent() {
+    // A path is bytes and this file is TOML. A root that is not valid UTF-8
+    // can only be written with the bytes replaced, and the replacement names
+    // no file, so the not-a-directory rule dropped the row on every pass.
+    // The repo's build then had no pinner, so any other repo's collection
+    // deleted it while it was still pinned, and the repo paid a full cold
+    // rebuild. Every time, silently, under a message that says "once per
+    // version".
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    touch_build_dir(root, KEY);
+
+    let mut r = Registry::default();
+    r.record(&Recording {
+        root: "/r/\u{fffd}\u{fffd}",
+        root_exact: false,
+        name: "r",
+        workdir: "/r/w",
+        engine_url: "u",
+        form: PinForm::Version,
+        pin_value: "0.1.0",
+        key: KEY,
+        key_rev: "rev1",
+        toolchain: "tc",
+        now: 1000,
+    });
+
+    // Somebody else's run is what collects, so nothing here is protected.
+    let removed = r.gc(root, "another-key", RETENTION, 2000);
+    assert!(
+        removed.is_empty(),
+        "a pinned build was evicted because its repo's path is not text: {removed:?}"
+    );
+    assert_eq!(r.consumers.len(), 1, "the row was dropped");
+    assert!(
+        root.join("builds").join(KEY).is_dir(),
+        "the build was deleted"
+    );
+
+    // and the control, one field apart: a row claiming to be exact, holding
+    // the same absent path, is dropped and its build collected. Without this
+    // the assertions above pass against a collector that stopped dropping
+    // anything at all.
+    let mut r = Registry::default();
+    r.record(&Recording {
+        root: "/r/\u{fffd}\u{fffd}",
+        root_exact: true,
+        name: "r",
+        workdir: "/r/w",
+        engine_url: "u",
+        form: PinForm::Version,
+        pin_value: "0.1.0",
+        key: KEY,
+        key_rev: "rev1",
+        toolchain: "tc",
+        now: 1000,
+    });
+    let removed = r.gc(root, "another-key", RETENTION, 2000);
+    assert_eq!(removed, vec![KEY.to_string()]);
+    assert!(r.consumers.is_empty());
+}
+
+#[test]
+fn an_exempt_row_still_ages_out_through_the_retention_window() {
+    // The exemption is from one rule, not from collection. A repo that is
+    // genuinely gone stops moving `last_seen`, and that is what eventually
+    // frees its build, which is the same thing that happens to a repo whose
+    // path is ordinary and which nobody has opened in a month.
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    touch_build_dir(root, KEY);
+
+    let mut r = Registry::default();
+    r.record(&Recording {
+        root: "/r/\u{fffd}\u{fffd}",
+        root_exact: false,
+        name: "r",
+        workdir: "/r/w",
+        engine_url: "u",
+        form: PinForm::Version,
+        pin_value: "0.1.0",
+        key: KEY,
+        key_rev: "rev1",
+        toolchain: "tc",
+        now: 1000,
+    });
+
+    let removed = r.gc(root, "another-key", RETENTION, 1000 + RETENTION_SECS + 1);
+    assert_eq!(removed, vec![KEY.to_string()]);
+    assert!(!root.join("builds").join(KEY).exists());
+}
+
+#[test]
+fn a_legacy_pin_registers_as_legacy_whatever_its_reference_is() {
+    let p = Pin {
+        url: "u".into(),
+        reference: Reference::Rev("abc".into()),
+    };
+    assert_eq!(
+        pin_form_and_value(&p, PinSource::Config),
+        (PinForm::Rev, "abc".to_string())
+    );
+    assert_eq!(
+        pin_form_and_value(&p, PinSource::Legacy),
+        (PinForm::Legacy, "abc".to_string())
+    );
 }

@@ -7,9 +7,19 @@
 //!
 //! Each distinct compilation input (the engine's url and rev) is built once into
 //! `<cache>/builds/<key>/bin/<engine>` and shared by every repo pinned to it.
-//! `cargo install` takes its own lock on the install root and installs the
-//! binary atomically, so a racing second launcher either blocks on that lock or
-//! finds the finished binary; the launcher needs no lock of its own.
+//! This crate holds no lock of its own. What it relies on is narrower than
+//! that sounds and is worth stating exactly: `cargo install --root` takes
+//! cargo's own lock on the install root and moves the finished binary into
+//! place, so two launchers resolving the *same* key either serialise on that
+//! lock or find the binary already there. Keys differ per url, revision and
+//! toolchain, and two launchers on different keys share no install root, so
+//! they do not contend at all.
+//!
+//! What has not been established is that no interleaving anywhere fails, and
+//! nothing here tests two launchers running at once. The one interleaving that
+//! is known and handled is a collection pass evicting a build between the
+//! build and the exec, which the run re-materialises a bounded number of
+//! times.
 //!
 //! The cache lives under `~/.cache`, honouring `XDG_CACHE_HOME`. Never under
 //! `~/.config`, which is per-developer configuration rather than machine
@@ -22,10 +32,12 @@ use crate::hash::Fnv;
 use crate::pin::Resolved;
 use crate::tool::Tool;
 
-/// `$XDG_CACHE_HOME/<namespace>` or `~/.cache/<namespace>`.
+/// `<SHORT>_CACHE`, else `$XDG_CACHE_HOME/<namespace>`, else
+/// `~/.cache/<namespace>`.
 pub(crate) fn cache_root(tool: &Tool) -> Result<PathBuf, String> {
     cache_root_from(
         tool,
+        std::env::var_os(tool.cache_env()),
         std::env::var_os("XDG_CACHE_HOME"),
         std::env::var_os("HOME"),
     )
@@ -36,9 +48,23 @@ pub(crate) fn cache_root(tool: &Tool) -> Result<PathBuf, String> {
 /// is a data race).
 fn cache_root_from(
     tool: &Tool,
+    own: Option<std::ffi::OsString>,
     xdg: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
 ) -> Result<PathBuf, String> {
+    // The tool's own variable is the whole path rather than a parent to join
+    // the namespace onto, because the request it answers is "put this tool's
+    // builds here" and a namespace appended is the launcher arguing with it.
+    // The root discovery override reads the same way, which is the asymmetry
+    // this closes: a user could say which repository to work on and not where
+    // several hundred megabytes of engines were going to land. Setting
+    // `XDG_CACHE_HOME` works and moves every other program's cache too, which
+    // is a different request.
+    if let Some(o) = own
+        && !o.is_empty()
+    {
+        return Ok(PathBuf::from(o));
+    }
     if let Some(x) = xdg
         && !x.is_empty()
     {
@@ -99,9 +125,9 @@ pub(crate) fn compute_key(url: &str, key_rev: &str, toolchain: &str) -> String {
 ///
 /// The resolved pin carries one or more install attempts (a `version` pin
 /// tries crates.io first, then the git tag); the first that succeeds wins.
-/// `cargo install --root` locks the install root and installs the binary
-/// atomically, so a concurrent launcher either blocks on that lock or finds
-/// the finished binary.
+/// `cargo install --root` locks the install root and moves the finished binary
+/// into place, so a second launcher on the same key either blocks on that lock
+/// or finds the binary already there.
 pub(crate) fn ensure_built(
     tool: &Tool,
     cache_root: &Path,

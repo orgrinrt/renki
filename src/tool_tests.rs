@@ -7,21 +7,24 @@ use super::*;
 
 const WITH: Tool = Tool {
     anchor: Anchor::Marker(".git"),
-    short: "mock",
+    short: "widget",
     config_file: "t.toml",
-    pin_prefix: "t",
+    pin_keys: crate::pin_keys!("t"),
     engine_crate: "engine",
     engine_bin: None,
     cache_namespace: "t",
+    cache_retention: std::time::Duration::from_secs(30 * 24 * 60 * 60),
+    scan_skip: &[".git", "target", "node_modules"],
     default_url: "u",
     launcher_crate: "t-launcher",
     workdir: Some(Workdir {
         key: "work_dir",
-        root_default: "mock",
+        root_default: "work",
     }),
     dir_flag: Cli::DIR_FLAG,
     engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
+    locate: Some(Locate::DEFAULT),
+    self_update: SelfUpdate::ChaseTheBranch,
     hooks: Hooks::NONE,
 };
 
@@ -79,14 +82,14 @@ fn a_refused_short_name_would_have_produced_an_unusable_variable() {
 
 #[test]
 fn env_names_come_from_the_short_name() {
-    assert_eq!(WITH.root_env(), "MOCK_ROOT");
-    assert_eq!(WITH.no_self_update_env(), "MOCK_NO_SELF_UPDATE");
+    assert_eq!(WITH.root_env(), "WIDGET_ROOT");
+    assert_eq!(WITH.no_self_update_env(), "WIDGET_NO_SELF_UPDATE");
 }
 
 #[test]
 fn a_root_config_defaults_to_the_subdirectory_beside_it() {
     let root = Path::new("/r");
-    assert_eq!(WITH.workdir_for(root, root, None), Path::new("/r/mock"));
+    assert_eq!(WITH.workdir_for(root, root, None), Path::new("/r/work"));
 }
 
 #[test]
@@ -100,8 +103,8 @@ fn a_root_config_may_name_another() {
 fn a_config_inside_the_workdir_defaults_to_its_own_directory() {
     // and the trailing `/.` that default produces is collapsed, or every
     // path derived from it carries it.
-    let got = WITH.workdir_for(Path::new("/r"), Path::new("/r/mock"), None);
-    assert_eq!(got, Path::new("/r/mock"));
+    let got = WITH.workdir_for(Path::new("/r"), Path::new("/r/work"), None);
+    assert_eq!(got, Path::new("/r/work"));
 }
 
 #[test]
@@ -112,5 +115,5 @@ fn a_tool_without_a_workdir_runs_against_the_root() {
     assert_eq!(WITHOUT.workdir_for(root, root, None), root);
     assert_eq!(WITHOUT.workdir_for(root, root, Some("design".into())), root);
     assert_eq!(WITHOUT.workdir_default(root), root);
-    assert_eq!(WITH.workdir_default(root), Path::new("/r/mock"));
+    assert_eq!(WITH.workdir_default(root), Path::new("/r/work"));
 }

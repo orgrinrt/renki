@@ -4,23 +4,17 @@
 //--------------------------------------------------------------------------------------------------
 
 use super::*;
-use crate::tool::{Anchor, Cli, Hooks, Locate};
+use crate::tool::Hooks;
 
 const T: Tool = Tool {
-    anchor: Anchor::Marker(".git"),
-    short: "mock",
+    short: "widget",
     config_file: "t.toml",
-    pin_prefix: "t",
+    pin_keys: crate::pin_keys!("t"),
     engine_crate: "engine",
-    engine_bin: None,
     cache_namespace: "t",
     default_url: "u",
     launcher_crate: "t-launcher",
-    workdir: None,
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
-    hooks: Hooks::NONE,
+    ..Tool::CONVENTIONS
 };
 
 fn pin(r: Reference) -> Pin {

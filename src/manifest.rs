@@ -9,10 +9,9 @@
 //! table is not a pin, and reading the document as a table rather than
 //! scanning lines is what makes that true without a rule about it.
 //!
-//! The key names carry the tool's prefix, so this is read as a table with
-//! names built at runtime rather than deserialised into a struct: a derive
-//! would fix the spelling at compile time, which is the one thing that has to
-//! vary.
+//! The key names come from the tool, so this is read as a table looked up by
+//! name rather than deserialised into a struct: a derive would fix the
+//! spelling at compile time, which is the one thing that has to vary.
 
 use std::path::Path;
 
@@ -56,13 +55,13 @@ pub fn package_name(dir: &Path) -> Result<String, String> {
 /// branch moves, and is the only one that has to be re-resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reference {
-    /// A released version: `<prefix>_version`.
+    /// A released version.
     Version(String),
-    /// An exact commit: `<prefix>_rev`.
+    /// An exact commit.
     Rev(String),
-    /// A tag: `<prefix>_tag`.
+    /// A tag.
     Tag(String),
-    /// A moving branch head: `<prefix>_branch`.
+    /// A moving branch head.
     Branch(String),
 }
 
@@ -95,19 +94,15 @@ impl Header {
         let Ok(table) = text.parse::<toml::Table>() else {
             return Header::default();
         };
-        let key = |suffix: &str| -> Option<String> {
-            table
-                .get(&format!("{}_{suffix}", tool.pin_prefix))?
-                .as_str()
-                .map(str::to_string)
-        };
+        let keys = &tool.pin_keys;
+        let key = |name: &str| -> Option<String> { table.get(name)?.as_str().map(str::to_string) };
         // Ordered most specific first, so a config carrying more than one has
         // a defined answer rather than whichever the reader happened to see.
-        let pin = key("rev")
+        let pin = key(keys.rev)
             .map(Reference::Rev)
-            .or_else(|| key("tag").map(Reference::Tag))
-            .or_else(|| key("branch").map(Reference::Branch))
-            .or_else(|| key("version").map(Reference::Version));
+            .or_else(|| key(keys.tag).map(Reference::Tag))
+            .or_else(|| key(keys.branch).map(Reference::Branch))
+            .or_else(|| key(keys.version).map(Reference::Version));
         Header {
             workdir: tool
                 .workdir
@@ -115,7 +110,7 @@ impl Header {
                 .and_then(|w| table.get(w.key))
                 .and_then(toml::Value::as_str)
                 .map(str::to_string),
-            url: key("git"),
+            url: key(keys.git),
             pin,
         }
     }

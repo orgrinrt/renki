@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MPL-2.0     https://mozilla.org/MPL/2.0        contact@hiisi.digital
 //--------------------------------------------------------------------------------------------------
 
-//! The launcher half of a pinned-engine command-line tool.
+//! The launcher half of a command-line tool whose engine each repo pins.
 //!
 //! A tool built this way has two pieces. The **engine** does the work and is
 //! version-pinned by each repo that uses it. The **launcher** is what sits on
@@ -21,23 +21,17 @@
 //! Declare a [`Tool`] as a `const`, and hand it over:
 //!
 //! ```no_run
-//! use renki::{Anchor, Cli, Hooks, Locate, Tool};
+//! use renki::{pin_keys, Tool};
 //!
 //! const TOOL: Tool = Tool {
-//!     anchor:          Anchor::Marker(".git"),
 //!     short:           "widget",
 //!     config_file:     "widget.toml",
-//!     pin_prefix:      "widget",
+//!     pin_keys:        pin_keys!("widget"),
 //!     engine_crate:    "widget-engine",
-//!     engine_bin:      None,
 //!     cache_namespace: "widget",
 //!     default_url:     "https://github.com/o/widget.git",
 //!     launcher_crate:  "widget",
-//!     workdir:         None,
-//!     dir_flag:        Cli::DIR_FLAG,
-//!     engine_flag:     Cli::ENGINE_FLAG,
-//!     locate:          Locate::DEFAULT,
-//!     hooks:           Hooks::NONE,
+//!     ..Tool::CONVENTIONS
 //! };
 //!
 //! fn main() -> std::process::ExitCode {
@@ -90,7 +84,9 @@ mod registry;
 mod selfupdate;
 mod tool;
 
-use std::path::Path;
+use std::io::Write as _;
+use std::os::unix::ffi::OsStrExt as _;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::args::{is_the_locate_query, normalize_args};
@@ -98,7 +94,7 @@ use crate::args::{is_the_locate_query, normalize_args};
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
 pub use crate::manifest::{Header, Pin, Reference, package_name};
 pub use crate::pin::Resolved;
-pub use crate::tool::{Anchor, Check, Cli, Hooks, Locate, Tool, Workdir};
+pub use crate::tool::{Anchor, Check, Cli, Hooks, Locate, PinKeys, SelfUpdate, Tool, Workdir};
 
 /// Where a resolved pin came from, so the registry can tell a repo that has
 /// adopted an explicit pin from one still on whatever legacy fallback the tool
@@ -128,11 +124,9 @@ enum PinSource {
 /// ```no_run
 /// # const TOOL: renki::Tool = renki::Tool {
 /// #     anchor: renki::Anchor::ConfigFile, short: "w", config_file: "w.toml",
-/// #     pin_prefix: "w", engine_crate: "w-engine", engine_bin: None, cache_namespace: "w",
-/// #     default_url: "https://example.invalid/w.git", launcher_crate: "w",
-/// #     workdir: None, dir_flag: renki::Cli::DIR_FLAG,
-/// #     engine_flag: renki::Cli::ENGINE_FLAG, locate: renki::Locate::DEFAULT,
-/// #     hooks: renki::Hooks::NONE,
+/// #     pin_keys: renki::pin_keys!("w"), engine_crate: "w-engine",
+/// #     cache_namespace: "w", default_url: "https://example.invalid/w.git",
+/// #     launcher_crate: "w", ..renki::Tool::CONVENTIONS
 /// # };
 /// fn main() -> std::process::ExitCode {
 ///     // SAFETY: the first statement of main, before any thread exists.
@@ -200,7 +194,7 @@ fn outcome(tool: &Tool, raw: &[String]) -> Result<(), String> {
 /// ```text
 /// root=/path/to/repo
 /// config=/path/to/repo/widget.toml
-/// workdir=/path/to/repo/mock
+/// workdir=/path/to/repo/work
 /// ```
 ///
 /// `config` is empty when the repo has a working directory but no config, which
@@ -208,17 +202,31 @@ fn outcome(tool: &Tool, raw: &[String]) -> Result<(), String> {
 ///
 /// The three names come from [`Locate`], which is what lets a tool keep the
 /// spelling its existing readers already parse.
-fn locate_query(tool: &Tool) -> Result<(), String> {
-    let root = discover::repo_root(tool).ok_or_else(|| no_root(tool))?;
+///
+/// One value per line, in the tool's own bytes, with no quoting and no
+/// escaping. That is the whole format, and it is injective over every path it
+/// accepts: the first `=` separates, so a later one in a directory name is
+/// unambiguous, and a reader splitting on the first `=` is correct. A newline
+/// is the one legal path byte the format cannot carry, since a reader would
+/// see two records and the second would have no `=`, so a path containing one
+/// is refused by name rather than answered wrongly.
+fn locate_query(tool: &Tool, locate: &Locate) -> Result<(), String> {
+    let root = discover::repo_root(tool).ok_or_else(|| discover::no_root(tool))?;
     let located = discover::locate(tool, &root)?;
     let (config, workdir) = match located {
-        Some(l) => (l.config_path.display().to_string(), l.workdir),
+        Some(l) => (l.config_path, l.workdir),
         // No config, so the conventional directory if it is there at all. The
         // caller distinguishes by the empty `config`.
-        None => (String::new(), tool.workdir_default(&root)),
+        None => (PathBuf::new(), tool.workdir_default(&root)),
     };
-    print!("{}", locate_answer(&tool.locate, &root, &config, &workdir));
-    Ok(())
+    let answer = locate_answer(locate, &root, &config, &workdir)?;
+    // Written as bytes rather than printed, because a path is bytes and
+    // `Display` replaces whatever is not text with a character that names no
+    // file. A reader `cd`ing into the answer has to get the directory that is
+    // there.
+    std::io::stdout()
+        .write_all(&answer)
+        .map_err(|e| format!("could not write the answer: {e}"))
 }
 
 /// The locate answer as text, so the keys can be checked without a subprocess.
@@ -227,49 +235,48 @@ fn locate_query(tool: &Tool) -> Result<(), String> {
 /// three were hardcoded here while [`Locate`] documented them as a contract
 /// with a tool's shell helpers, so any tool that set them got the conventional
 /// spellings and its own readers found nothing.
-fn locate_answer(locate: &Locate, root: &Path, config: &str, workdir: &Path) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("{}={}\n", locate.root_key, root.display()));
-    out.push_str(&format!("{}={config}\n", locate.config_key));
+fn locate_answer(
+    locate: &Locate,
+    root: &Path,
+    config: &Path,
+    workdir: &Path,
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut line = |key: &str, value: &Path| -> Result<(), String> {
+        let bytes = value.as_os_str().as_bytes();
+        if bytes.contains(&b'\n') {
+            return Err(format!(
+                "{key} is a path containing a newline, which this answer has no way to \
+                 carry: a reader would see it as two records. {}",
+                value.display()
+            ));
+        }
+        out.extend_from_slice(key.as_bytes());
+        out.push(b'=');
+        out.extend_from_slice(bytes);
+        out.push(b'\n');
+        Ok(())
+    };
+    line(locate.root_key, root)?;
+    line(locate.config_key, config)?;
     // An absent working directory answers with the key and no value rather than
     // omitting the line, so a reader can tell "no such directory" from "this
     // launcher is too old to answer".
     if workdir.is_dir() {
-        out.push_str(&format!("{}={}\n", locate.workdir_key, workdir.display()));
+        line(locate.workdir_key, workdir)?;
     } else {
-        out.push_str(&format!("{}=\n", locate.workdir_key));
+        line(locate.workdir_key, Path::new(""))?;
     }
-    out
+    Ok(out)
 }
 
-fn no_root(tool: &Tool) -> String {
-    no_root_with(tool, std::env::var_os(tool.root_env()))
-}
-
-/// Pure core of [`no_root`]. The override is passed in so both arms are
-/// testable without mutating process env.
+/// How many times a build evicted out from under us is re-materialised before
+/// the run gives up.
 ///
-/// The distinction is the whole of it. A set-but-wrong override is the case an
-/// operator can actually fix, and telling them the variable is unset when they
-/// just exported it sends them looking in the wrong place. The walk falls
-/// through rather than failing on a bad override, deliberately, so a stale
-/// export in a shell does not make the tool unusable; that is what leaves this
-/// message the only place the operator hears about it.
-fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
-    let what = match tool.anchor {
-        Anchor::Marker(m) => m.to_string(),
-        Anchor::ConfigFile => tool.config_file.to_string(),
-    };
-    let env = tool.root_env();
-    match from_env {
-        Some(v) => format!(
-            "no {what} found in this directory or any above it. {env} is set to {}, which is \
-             not a directory, so it was ignored",
-            Path::new(&v).display()
-        ),
-        None => format!("no {what} found in this directory or any above it, and {env} is unset"),
-    }
-}
+/// Each attempt is a full `cargo install` when it fires at all, so this is not
+/// a busy loop; it is the number of collection passes that would have to land
+/// in the same narrow gap for a run to fail.
+const EVICTION_RETRIES: usize = 3;
 
 fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // `--engine <path>` is the launcher's, so it comes off before anything
@@ -290,12 +297,22 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // Answered before anything else: it is a question about this checkout
     // rather than a run of the engine, so it skips the self-update, the pin
     // resolution and the build.
-    if is_the_locate_query(&tool.locate, args) {
-        return locate_query(tool);
+    if let Some(locate) = tool.locate.as_ref()
+        && is_the_locate_query(Some(locate), args)
+    {
+        return locate_query(tool, locate);
     }
+
+    let root = discover::repo_root(tool).ok_or_else(|| discover::no_root(tool))?;
 
     // Keep the launcher itself current: branch installs only, hourly, opt-out.
     // May reinstall and re-exec into the new binary, never returning.
+    //
+    // After the root, deliberately. Typing the tool's name somewhere that is
+    // not a repository is the fastest-failing invocation it has, and running
+    // this first made it one of the slowest: a network round trip, and
+    // possibly a full reinstall and re-exec, before failing with "no .git
+    // found in this directory or any above it".
     //
     // Skipped under `--engine`, which says which engine to run: replacing the
     // launcher underneath a deliberate override is the one moment an automatic
@@ -306,7 +323,6 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
         selfupdate::maybe_self_update(tool, &cache_root);
     }
 
-    let root = discover::repo_root(tool).ok_or_else(|| no_root(tool))?;
     // `locate` hard-errors, blocking the run, when a marker-anchored repo has
     // more than one config. `None` means none, `Some` exactly one.
     let located = discover::locate(tool, &root)?;
@@ -372,7 +388,7 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // Record this repo and build in the registry, then at most once a day
     // collect engine builds nothing pins anymore. Best-effort throughout: the
     // registry is a cache, never a reason to fail a run.
-    record_and_gc(
+    registry::record_and_collect(
         tool,
         &cache_root,
         &root,
@@ -386,12 +402,32 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
 
     // A concurrent launcher's collection pass protects only its own resolved
     // key, so it could have evicted this build between our build and this exec.
-    // Re-materialise if so, so a background collection never fails a run.
-    let bin = if bin.is_file() {
-        bin
-    } else {
-        cache::ensure_built(tool, &cache_root, &key, &resolved)?
-    };
+    // Re-materialise if so.
+    //
+    // Bounded rather than unbounded, and bounded rather than the single retry
+    // this used to be. One retry narrows the window and the comment above it
+    // claimed the window was closed: the same collection can evict the rebuilt
+    // binary between the retry and the exec, and then the run fails. A few
+    // attempts make that need a collection pass landing in the same gap
+    // repeatedly, which is not something to keep trying forever either, since
+    // a build that keeps vanishing is a fault rather than a race.
+    let mut bin = bin;
+    for _ in 0..EVICTION_RETRIES {
+        if bin.is_file() {
+            break;
+        }
+        bin = cache::ensure_built(tool, &cache_root, &key, &resolved)?;
+    }
+    if !bin.is_file() {
+        return Err(format!(
+            "{}: the engine was rebuilt {EVICTION_RETRIES} times and was gone again \
+             each time, at {}. A collection pass landing in that gap once is a race; \
+             landing in it repeatedly is a fault, so this stops rather than \
+             rebuilding forever.",
+            tool.short,
+            bin.display()
+        ));
+    }
 
     let extra = tool
         .hooks
@@ -408,76 +444,6 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-/// The registry pin form and value for a resolved pin. Legacy overrides the
-/// reference variant: a legacy pin is always a rev, but must register as legacy
-/// for migration detection.
-fn pin_form_and_value(pin: &Pin, source: PinSource) -> (registry::PinForm, String) {
-    let value = match &pin.reference {
-        Reference::Version(v) | Reference::Branch(v) | Reference::Rev(v) | Reference::Tag(v) => {
-            v.clone()
-        }
-    };
-    let form = match source {
-        PinSource::Legacy => registry::PinForm::Legacy,
-        PinSource::Config => match &pin.reference {
-            Reference::Version(_) => registry::PinForm::Version,
-            Reference::Branch(_) => registry::PinForm::Branch,
-            Reference::Rev(_) => registry::PinForm::Rev,
-            Reference::Tag(_) => registry::PinForm::Tag,
-        },
-    };
-    (form, value)
-}
-
-/// Record this repo and its resolved build, then run a throttled collection
-/// pass protecting the just-resolved key. Every step is best-effort; a registry
-/// failure never blocks the exec.
-#[allow(clippy::too_many_arguments)]
-fn record_and_gc(
-    tool: &Tool,
-    cache_root: &Path,
-    root: &Path,
-    workdir: &Path,
-    pin: &Pin,
-    source: PinSource,
-    resolved: &Resolved,
-    toolchain: &str,
-    key: &str,
-) {
-    let path = registry::registry_path(cache_root);
-    let mut reg = registry::Registry::load(&path);
-    let now = now_secs();
-    let name = root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
-    let (form, value) = pin_form_and_value(pin, source);
-    reg.record(
-        &root.display().to_string(),
-        &name,
-        &workdir.display().to_string(),
-        &pin.url,
-        form,
-        &value,
-        key,
-        &resolved.key_rev,
-        toolchain,
-        now,
-    );
-    if reg.gc_due(now) {
-        let removed = reg.gc(cache_root, key, now);
-        if !removed.is_empty() {
-            eprintln!(
-                "{}: cache gc removed {} unused engine build(s)",
-                tool.short,
-                removed.len()
-            );
-        }
-    }
-    reg.save(&path);
 }
 
 /// The pin: the config's own key, then whatever legacy fallback the tool
@@ -503,11 +469,11 @@ fn resolve_pin(
         .map(|l| l.config_path.clone())
         .unwrap_or_else(|| root.join(tool.config_file));
     Err(format!(
-        "no {} pin found. add one to {}:\n\n    {}_version = \"0.1.0\"   # the released engine \
+        "no {} pin found. add one to {}:\n\n    {} = \"0.1.0\"   # the released engine \
          version\n",
         tool.engine_crate,
         where_to.display(),
-        tool.pin_prefix
+        tool.pin_keys.version
     ))
 }
 

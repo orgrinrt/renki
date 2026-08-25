@@ -6,27 +6,22 @@
 use std::fs;
 
 use super::*;
-use crate::tool::{Cli, Hooks, Locate, Workdir};
+use crate::tool::{Anchor, Workdir};
 
 /// A tool whose config lives inside a repository.
 const REPO: Tool = Tool {
-    anchor: Anchor::Marker(".git"),
-    short: "mock",
+    short: "widget",
     config_file: "t.toml",
-    pin_prefix: "t",
+    pin_keys: crate::pin_keys!("t"),
     engine_crate: "engine",
-    engine_bin: None,
     cache_namespace: "t",
     default_url: "u",
     launcher_crate: "t-launcher",
     workdir: Some(Workdir {
         key: "work_dir",
-        root_default: "mock",
+        root_default: "work",
     }),
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
-    hooks: Hooks::NONE,
+    ..Tool::CONVENTIONS
 };
 
 /// A tool whose config sits above a pile of repositories.
@@ -107,7 +102,7 @@ fn a_root_config_maps_the_conventional_subdirectory() {
     fs::write(d.path().join("t.toml"), "project_name = \"x\"\n").unwrap();
     let loc = locate(&REPO, d.path()).unwrap().unwrap();
     assert_eq!(loc.config_path, d.path().join("t.toml"));
-    assert_eq!(loc.workdir, d.path().join("mock"));
+    assert_eq!(loc.workdir, d.path().join("work"));
 }
 
 #[test]
@@ -123,26 +118,26 @@ fn a_root_config_may_name_another() {
 #[test]
 fn a_subdir_config_maps_its_own_directory() {
     let d = tempfile::tempdir().unwrap();
-    fs::create_dir(d.path().join("mock")).unwrap();
-    fs::write(d.path().join("mock/t.toml"), "project_name = \"x\"\n").unwrap();
+    fs::create_dir(d.path().join("work")).unwrap();
+    fs::write(d.path().join("work/t.toml"), "project_name = \"x\"\n").unwrap();
     let loc = locate(&REPO, d.path()).unwrap().unwrap();
-    assert_eq!(loc.config_path, d.path().join("mock/t.toml"));
-    assert_eq!(loc.workdir, d.path().join("mock"));
+    assert_eq!(loc.config_path, d.path().join("work/t.toml"));
+    assert_eq!(loc.workdir, d.path().join("work"));
 }
 
 #[test]
 fn two_configs_in_scope_is_an_error_naming_both() {
     let d = tempfile::tempdir().unwrap();
     fs::write(d.path().join("t.toml"), "project_name = \"root\"\n").unwrap();
-    fs::create_dir(d.path().join("mock")).unwrap();
-    fs::write(d.path().join("mock/t.toml"), "project_name = \"sub\"\n").unwrap();
+    fs::create_dir(d.path().join("work")).unwrap();
+    fs::write(d.path().join("work/t.toml"), "project_name = \"sub\"\n").unwrap();
     let err = locate(&REPO, d.path()).unwrap_err();
     assert!(err.contains("t.toml"), "{err}");
-    assert!(err.contains("mock"), "{err}");
+    assert!(err.contains("work"), "{err}");
 
     // and two subdirs, neither of which is the root
     let d = tempfile::tempdir().unwrap();
-    for sub in ["mock", ".config"] {
+    for sub in ["work", ".config"] {
         fs::create_dir(d.path().join(sub)).unwrap();
         fs::write(d.path().join(sub).join("t.toml"), "x = 1\n").unwrap();
     }
@@ -180,7 +175,7 @@ fn a_config_anchored_tool_with_a_workdir_maps_it_under_the_root() {
     fs::write(d.path().join("t.toml"), "").unwrap();
     assert_eq!(
         locate(&SPAN_WD, d.path()).unwrap().unwrap().workdir,
-        d.path().join("mock")
+        d.path().join("work")
     );
     // and the config may still name another
     fs::write(d.path().join("t.toml"), "work_dir = \"design\"\n").unwrap();
@@ -221,4 +216,52 @@ fn no_config_is_not_an_error() {
     let d = tempfile::tempdir().unwrap();
     assert!(locate(&REPO, d.path()).unwrap().is_none());
     assert!(locate(&SPAN, d.path()).unwrap().is_none());
+}
+
+#[test]
+fn the_missing_root_message_names_what_was_looked_for() {
+    assert!(no_root(&REPO).contains(".git"), "{}", no_root(&REPO));
+    assert!(no_root(&REPO).contains("WIDGET_ROOT"), "{}", no_root(&REPO));
+
+    const SPAN: Tool = Tool {
+        anchor: Anchor::ConfigFile,
+        short: "widget",
+        ..REPO
+    };
+    // a config-anchored tool has no marker, so naming one would send the
+    // reader looking for a file that has nothing to do with it.
+    assert!(no_root(&SPAN).contains("t.toml"), "{}", no_root(&SPAN));
+    assert!(!no_root(&SPAN).contains(".git"), "{}", no_root(&SPAN));
+    assert!(no_root(&SPAN).contains("WIDGET_ROOT"), "{}", no_root(&SPAN));
+}
+
+#[test]
+fn the_refusal_says_whether_the_override_was_set() {
+    // an operator who has just exported the variable and got it wrong is
+    // the one person this message has to serve, and telling them it is
+    // unset sends them looking somewhere else entirely.
+    let unset = no_root_with(&REPO, None);
+    assert!(unset.contains("WIDGET_ROOT is unset"), "{unset}");
+    assert!(unset.contains(".git"), "{unset}");
+
+    let set = no_root_with(&REPO, Some("/nope/xyzzy".into()));
+    assert!(set.contains("/nope/xyzzy"), "{set}");
+    assert!(set.contains("not a directory"), "{set}");
+    assert!(
+        !set.contains("is unset"),
+        "the set case still claims unset: {set}"
+    );
+}
+
+#[test]
+fn the_refusal_names_the_anchor_the_tool_actually_looks_for() {
+    // a config-anchored tool never looked for `.git`, so naming it would
+    // send the reader to create one.
+    const SPAN: Tool = Tool {
+        anchor: Anchor::ConfigFile,
+        ..REPO
+    };
+    let m = no_root_with(&SPAN, None);
+    assert!(m.contains(REPO.config_file), "{m}");
+    assert!(!m.contains(".git"), "{m}");
 }

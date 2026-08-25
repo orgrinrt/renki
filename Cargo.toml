@@ -1,9 +1,9 @@
 [package]
 name = "renki"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 publish = true
-description = "The launcher half of a pinned-engine command-line tool. Reads the engine version a repo pins, builds it once into a shared cache, and runs it from any working directory."
+description = "The launcher half of a command-line tool whose engine each repo pins. Reads the pinned version, builds it once into a shared cache, and runs it from any working directory."
 license = "MPL-2.0"
 homepage = "https://github.com/orgrinrt/renki"
 repository = "https://github.com/orgrinrt/renki"
@@ -12,13 +12,23 @@ readme = "README.md"
 # is where let-chains stabilised, which this uses throughout.
 rust-version = "1.88"
 categories = ["development-tools", "command-line-utilities"]
-# Only the sources and the two files a reader of the package needs. The lint
-# configs and the ignore file are ours and are paid for by everyone who
-# downloads the crate if they are left in.
+# The sources, the integration tests, and the two files a reader of the package
+# needs. The lint configs and the ignore file are ours and are paid for by
+# everyone who downloads the crate if they are left in.
+#
+# No test ships, because neither of them can run where the package lands. The
+# header-coverage test reads `ante.toml` and asks git what is tracked. The
+# unix-guard test asks rustup which targets are installed and fails loudly
+# when the one it needs is absent, which is right in a checkout and wrong in a
+# tarball, where it would be the first thing a consumer sees go red.
+#
+# Both are checks about this repository. A test about the crate would ship, and
+# `include_ships_the_crate_tests_and_none_of_the_repository_ones` is what says
+# which kind a new one is.
 include = ["src/**/*.rs", "README.md", "LICENSE"]
 keywords = ["launcher", "pinning", "reproducible", "bootstrap", "cli"]
 
-# Curated-minimal, because every dependency is paid at `cargo install` time by
+# Kept deliberately small, because every dependency is paid at `cargo install` time by
 # a user who only wanted the tool this launches. The pin header is hand-read
 # (a handful of top-level keys), cargo's own install-root lock and atomic
 # binary install cover concurrency, and the cache key uses a vendored stable

@@ -4,32 +4,23 @@
 //--------------------------------------------------------------------------------------------------
 
 use super::*;
-use crate::tool::{Anchor, Cli, Hooks, Locate};
+use crate::tool::Hooks;
 
 /// A tool that demands nothing of a checkout beyond a manifest.
 const PLAIN: Tool = Tool {
-    anchor: Anchor::Marker(".git"),
     short: "t",
     config_file: "t.toml",
-    pin_prefix: "t",
+    pin_keys: crate::pin_keys!("t"),
     engine_crate: "engine",
-    engine_bin: None,
     cache_namespace: "t",
     default_url: "u",
     launcher_crate: "t-launcher",
-    workdir: None,
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
-    hooks: Hooks::NONE,
+    ..Tool::CONVENTIONS
 };
 
 /// A tool that demands more of a checkout than a manifest, through the
 /// verification hook.
 const FUSSY: Tool = Tool {
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
     hooks: Hooks {
         verify_engine_dir: Some(|abs| {
             abs.join("extra")
@@ -228,7 +219,7 @@ fn a_build_used_today_survives_however_long_ago_it_was_made() {
     touch(&root);
     backdate(&root, SCRATCH_TTL_SECS * 3);
 
-    sweep(&scratch);
+    sweep(dir.path());
     assert!(
         root.is_dir(),
         "a build used a moment ago was swept for having been created a long time ago"
@@ -249,7 +240,7 @@ fn a_build_nothing_has_touched_since_the_ttl_goes() {
     backdate(&root.join(SCRATCH_MARKER), SCRATCH_TTL_SECS * 3);
     backdate(&root, SCRATCH_TTL_SECS * 3);
 
-    sweep(&scratch);
+    sweep(dir.path());
     assert!(
         !root.exists(),
         "a build nobody has used since the ttl survived"
@@ -268,7 +259,7 @@ fn a_root_from_before_the_marker_falls_back_to_its_own_timestamp() {
     std::fs::create_dir_all(&new).unwrap();
     backdate(&old, SCRATCH_TTL_SECS * 3);
 
-    sweep(&scratch);
+    sweep(dir.path());
     assert!(!old.exists(), "an unmarked stale root survived");
     assert!(new.is_dir(), "an unmarked fresh root was swept");
 }
@@ -279,7 +270,7 @@ fn the_sweep_keeps_fresh_builds_and_survives_a_missing_directory() {
     let scratch = dir.path().join("engines");
     let fresh = scratch.join("aaaa");
     std::fs::create_dir_all(&fresh).unwrap();
-    sweep(&scratch);
+    sweep(dir.path());
     assert!(fresh.is_dir(), "a build made a moment ago was swept");
 
     // A sweep of somewhere that does not exist is a normal first run.
@@ -306,10 +297,7 @@ fn a_flag_passed_twice_takes_the_last_one_and_leaves_neither_behind() {
     // a later occurrence with no value is a usage error rather than a fallback
     // to the earlier one, because the last thing the user typed is what they
     // meant and it was incomplete
-    let (last_empty, rest) = take_flag(
-        strings(&["--engine=/tmp/first", "--engine="]),
-        "--engine",
-    );
+    let (last_empty, rest) = take_flag(strings(&["--engine=/tmp/first", "--engine="]), "--engine");
     assert_eq!(last_empty, Flag::Missing);
     assert!(rest.is_empty());
 }
