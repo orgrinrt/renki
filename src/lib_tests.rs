@@ -229,8 +229,58 @@ fn an_empty_engine_bin_would_have_looked_for_the_directory_itself() {
         ..T
     };
     let looked_for = Path::new("/cache/builds/k/bin").join(EMPTY.engine_bin_name());
-    assert_eq!(looked_for, Path::new("/cache/builds/k/bin/"));
-    assert_eq!(looked_for, Path::new("/cache/builds/k/bin"));
+
+    // The claim is about renki, not about `Path`: an empty name adds no
+    // component, so what the cache would short-circuit on is the bin directory.
+    // Asserting the two spellings of that path against each other only measures
+    // `Path`'s own trailing-separator handling.
+    assert_eq!(EMPTY.engine_bin_name(), "");
+    assert_eq!(
+        looked_for,
+        Path::new("/cache/builds/k/bin"),
+        "an empty name should add no component"
+    );
+    assert!(
+        !looked_for.is_file(),
+        "a directory is never the file the cache short-circuits on, so the \
+         engine would rebuild on every run"
+    );
+    // The control: a name that is not empty does add one, so the assertion
+    // above is about the emptiness rather than about `join` in general.
+    const NAMED: Tool = Tool {
+        engine_bin: Some("shortname"),
+        ..T
+    };
+    assert_eq!(
+        Path::new("/cache/builds/k/bin").join(NAMED.engine_bin_name()),
+        Path::new("/cache/builds/k/bin/shortname")
+    );
+}
+
+#[test]
+fn the_eviction_message_is_not_prefixed_with_the_tool_name() {
+    // `run_without_sanitizing` puts the tool's name in front of every error it
+    // prints, so a message carrying its own copy goes out as `widget: widget:`.
+    // This branch needs a build that vanishes three times running, which no test
+    // can arrange, so the message is asserted where it is built instead.
+    let msg = eviction_exhausted(Path::new("/cache/builds/k/bin/engine"));
+
+    assert!(
+        !msg.starts_with(T.short),
+        "the message prefixes itself and the printer prefixes it again: {msg}"
+    );
+    assert!(
+        msg.contains("/cache/builds/k/bin/engine"),
+        "the message does not say which build went missing: {msg}"
+    );
+    assert!(
+        msg.contains(&EVICTION_RETRIES.to_string()),
+        "the message does not say how many attempts were made: {msg}"
+    );
+    // The control: a message that did self-prefix is caught by the first
+    // assertion, so it is about this string rather than about any string.
+    let doubled = format!("{}: {msg}", T.short);
+    assert!(doubled.starts_with(T.short));
 }
 
 fn s(v: &[&str]) -> Vec<String> {

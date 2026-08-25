@@ -191,8 +191,8 @@ impl Locate {
 /// Full names rather than a prefix, on the same argument [`Locate`] is
 /// parameterised by: a tool moving onto this crate keeps whatever its existing
 /// configs already spell, and no repository has to be edited on the day it
-/// migrates. [`PinKeys::prefixed`] is the conventional shape and is what a new
-/// tool writes.
+/// migrates. The [`pin_keys!`](crate::pin_keys) macro writes the conventional shape and is
+/// what a new tool reaches for.
 ///
 /// Only top-level keys are read, so a name here is a top-level name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

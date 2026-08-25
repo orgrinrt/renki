@@ -18,6 +18,13 @@ const RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
 /// key makes every assertion about a deletion vacuous.
 const KEY: &str = "00112233445566aa";
 
+/// Build keys as `is_build_key` wants them: sixteen hex characters. A word
+/// here is rejected before any directory is touched, so a test using one
+/// asserts about the disk and measures nothing.
+const STALE_KEY: &str = "0123456789abcdef";
+const CURRENT_KEY: &str = "fedcba9876543210";
+const OTHER_KEY: &str = "00112233445566aa";
+
 fn touch_build_dir(cache_root: &Path, key: &str) {
     let d = cache_root.join("builds").join(key).join("bin");
     fs::create_dir_all(&d).unwrap();
@@ -177,7 +184,7 @@ fn gc_evicts_build_whose_consumers_are_all_stale() {
     let root = dir.path();
     let repo = root.join("repo");
     fs::create_dir_all(&repo).unwrap();
-    touch_build_dir(root, "stalekey");
+    touch_build_dir(root, STALE_KEY);
 
     let mut r = Registry::default();
     // last_seen far in the past relative to `now`.
@@ -189,14 +196,18 @@ fn gc_evicts_build_whose_consumers_are_all_stale() {
         engine_url: "u",
         form: PinForm::Branch,
         pin_value: "dev",
-        key: "stalekey",
+        key: STALE_KEY,
         key_rev: "r",
         toolchain: "tc",
         now: 1,
     });
     let now = RETENTION_SECS + 1000;
-    let removed = r.gc(root, "somethingelse", RETENTION, now);
-    assert_eq!(removed, vec!["stalekey".to_string()]);
+    let removed = r.gc(root, OTHER_KEY, RETENTION, now);
+    assert_eq!(removed, vec![STALE_KEY.to_string()]);
+    assert!(
+        !root.join("builds").join(STALE_KEY).is_dir(),
+        "the row went and the build it names stayed on disk"
+    );
 }
 
 #[test]
@@ -205,7 +216,7 @@ fn gc_protects_current_key_even_if_stale() {
     let root = dir.path();
     let repo = root.join("repo");
     fs::create_dir_all(&repo).unwrap();
-    touch_build_dir(root, "current");
+    touch_build_dir(root, CURRENT_KEY);
     let mut r = Registry::default();
     r.record(&Recording {
         root: repo.to_str().unwrap(),
@@ -215,15 +226,18 @@ fn gc_protects_current_key_even_if_stale() {
         engine_url: "u",
         form: PinForm::Branch,
         pin_value: "dev",
-        key: "current",
+        key: CURRENT_KEY,
         key_rev: "r",
         toolchain: "tc",
         now: 1,
     });
     let now = RETENTION_SECS + 1000;
-    let removed = r.gc(root, "current", RETENTION, now);
+    let removed = r.gc(root, CURRENT_KEY, RETENTION, now);
     assert!(removed.is_empty());
-    assert!(root.join("builds").join("current").is_dir());
+    assert!(
+        root.join("builds").join(CURRENT_KEY).is_dir(),
+        "the protected build was collected"
+    );
 }
 
 #[test]
