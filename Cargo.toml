@@ -8,12 +8,12 @@ license = "MPL-2.0"
 homepage = "https://github.com/orgrinrt/renki"
 repository = "https://github.com/orgrinrt/renki"
 readme = "README.md"
-# Measured rather than guessed: 1.88 builds and tests this crate clean, and it
-# is where let-chains stabilised, which this uses throughout.
+# The floor, measured in both directions rather than guessed. 1.88 builds and
+# runs the whole suite clean; 1.87 refuses the let-chains this uses throughout,
+# with `let expressions in this position are unstable` at every one of them.
 rust-version = "1.88"
 categories = ["development-tools", "command-line-utilities"]
-# The sources, the integration tests, and the two files a reader of the package
-# needs. The lint configs and the ignore file are ours and are paid for by
+# The sources, and the two files a reader of the package needs. The lint configs and the ignore file are ours and are paid for by
 # everyone who downloads the crate if they are left in.
 #
 # No test ships, because neither of them can run where the package lands. The

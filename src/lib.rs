@@ -48,6 +48,10 @@
 // public inside private modules, and one genuinely public type hiding in that
 // noise that the crate root had forgotten to re-export.
 #![warn(unreachable_pub, missing_docs)]
+// A dead link renders as plain text on the page a stranger lands on, and a
+// published version's documentation cannot be replaced. Warned about, it
+// ships; denied, it does not build.
+#![deny(rustdoc::broken_intra_doc_links)]
 
 // The README's `rust` block is compiled as a doctest. Only that one: the shell
 // and toml blocks are prose as far as this is concerned, and changing the fence
@@ -278,6 +282,22 @@ fn locate_answer(
 /// in the same narrow gap for a run to fail.
 const EVICTION_RETRIES: usize = 3;
 
+/// What a build that keeps vanishing says on the way out.
+///
+/// Extracted so it can be asserted on. Reaching the branch itself needs a build
+/// that disappears three times in a row, which nothing here can arrange, and the
+/// message went out doubly prefixed for exactly as long as that was true:
+/// [`run_without_sanitizing`] already puts the tool's name in front of every
+/// error, and this one carried a second copy of its own.
+fn eviction_exhausted(bin: &std::path::Path) -> String {
+    format!(
+        "the engine was rebuilt {EVICTION_RETRIES} times and was gone again each \
+         time, at {}. A collection pass landing in that gap once is a race; landing \
+         in it repeatedly is a fault, so this stops rather than rebuilding forever.",
+        bin.display()
+    )
+}
+
 fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // `--engine <path>` is the launcher's, so it comes off before anything
     // reads the arguments, the same as `--dir`.
@@ -419,14 +439,7 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
         bin = cache::ensure_built(tool, &cache_root, &key, &resolved)?;
     }
     if !bin.is_file() {
-        return Err(format!(
-            "{}: the engine was rebuilt {EVICTION_RETRIES} times and was gone again \
-             each time, at {}. A collection pass landing in that gap once is a race; \
-             landing in it repeatedly is a fault, so this stops rather than \
-             rebuilding forever.",
-            tool.short,
-            bin.display()
-        ));
+        return Err(eviction_exhausted(&bin));
     }
 
     let extra = tool
