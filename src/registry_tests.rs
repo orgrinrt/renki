@@ -417,3 +417,19 @@ fn an_exempt_row_still_ages_out_through_the_retention_window() {
     assert_eq!(removed, vec![KEY.to_string()]);
     assert!(!root.join("builds").join(KEY).exists());
 }
+
+#[test]
+fn a_legacy_pin_registers_as_legacy_whatever_its_reference_is() {
+    let p = Pin {
+        url: "u".into(),
+        reference: Reference::Rev("abc".into()),
+    };
+    assert_eq!(
+        pin_form_and_value(&p, PinSource::Config),
+        (PinForm::Rev, "abc".to_string())
+    );
+    assert_eq!(
+        pin_form_and_value(&p, PinSource::Legacy),
+        (PinForm::Legacy, "abc".to_string())
+    );
+}

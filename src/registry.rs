@@ -34,6 +34,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::PinSource;
+use crate::manifest::{Pin, Reference};
+use crate::pin::Resolved;
+use crate::tool::Tool;
+
 /// GC runs at most this often; a `last_gc` within the window skips the pass.
 const GC_INTERVAL_SECS: u64 = 24 * 60 * 60;
 
@@ -328,6 +333,84 @@ fn is_build_key(key: &str) -> bool {
         && key
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The registry pin form and value for a resolved pin. Legacy overrides the
+/// reference variant: a legacy pin is always a rev, but must register as legacy
+/// for migration detection.
+pub(crate) fn pin_form_and_value(pin: &Pin, source: PinSource) -> (PinForm, String) {
+    let value = match &pin.reference {
+        Reference::Version(v) | Reference::Branch(v) | Reference::Rev(v) | Reference::Tag(v) => {
+            v.clone()
+        }
+    };
+    let form = match source {
+        PinSource::Legacy => PinForm::Legacy,
+        PinSource::Config => match &pin.reference {
+            Reference::Version(_) => PinForm::Version,
+            Reference::Branch(_) => PinForm::Branch,
+            Reference::Rev(_) => PinForm::Rev,
+            Reference::Tag(_) => PinForm::Tag,
+        },
+    };
+    (form, value)
+}
+
+/// Record this repo and its resolved build, then run a throttled collection
+/// pass protecting the just-resolved key. Every step is best-effort; a registry
+/// failure never blocks the exec.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_and_collect(
+    tool: &Tool,
+    cache_root: &Path,
+    root: &Path,
+    workdir: &Path,
+    pin: &Pin,
+    source: PinSource,
+    resolved: &Resolved,
+    toolchain: &str,
+    key: &str,
+) {
+    let path = registry_path(cache_root);
+    let mut reg = Registry::load(&path);
+    let now = crate::now_secs();
+    let name = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let (form, value) = pin_form_and_value(pin, source);
+    reg.record(&Recording {
+        root: &root.display().to_string(),
+        root_exact: root.to_str().is_some(),
+        name: &name,
+        workdir: &workdir.display().to_string(),
+        engine_url: &pin.url,
+        form,
+        pin_value: &value,
+        key,
+        key_rev: &resolved.key_rev,
+        toolchain,
+        now,
+    });
+    if reg.gc_due(now) {
+        let removed = reg.gc(cache_root, key, tool.cache_retention, now);
+        if !removed.is_empty() {
+            eprintln!(
+                "{}: cache gc removed {} unused engine build(s)",
+                tool.short,
+                removed.len()
+            );
+        }
+        // The two leftovers nothing else collects, on the same schedule and
+        // for the same reason. Both used to be swept only by the path that
+        // creates them, which for `--engine` meant a user who passed the flag
+        // once and never again kept the checkout and its target directory
+        // forever, and for branch resolutions meant never.
+        crate::engine::sweep(cache_root);
+        crate::pin::sweep_branch_resolutions(cache_root);
+    }
+    reg.save(&path);
 }
 
 #[cfg(test)]

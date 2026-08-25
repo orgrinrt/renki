@@ -6,7 +6,7 @@
 use std::fs;
 
 use super::*;
-use crate::tool::Workdir;
+use crate::tool::{Anchor, Workdir};
 
 /// A tool whose config lives inside a repository.
 const REPO: Tool = Tool {
@@ -216,4 +216,52 @@ fn no_config_is_not_an_error() {
     let d = tempfile::tempdir().unwrap();
     assert!(locate(&REPO, d.path()).unwrap().is_none());
     assert!(locate(&SPAN, d.path()).unwrap().is_none());
+}
+
+#[test]
+fn the_missing_root_message_names_what_was_looked_for() {
+    assert!(no_root(&REPO).contains(".git"), "{}", no_root(&REPO));
+    assert!(no_root(&REPO).contains("WIDGET_ROOT"), "{}", no_root(&REPO));
+
+    const SPAN: Tool = Tool {
+        anchor: Anchor::ConfigFile,
+        short: "widget",
+        ..REPO
+    };
+    // a config-anchored tool has no marker, so naming one would send the
+    // reader looking for a file that has nothing to do with it.
+    assert!(no_root(&SPAN).contains("t.toml"), "{}", no_root(&SPAN));
+    assert!(!no_root(&SPAN).contains(".git"), "{}", no_root(&SPAN));
+    assert!(no_root(&SPAN).contains("WIDGET_ROOT"), "{}", no_root(&SPAN));
+}
+
+#[test]
+fn the_refusal_says_whether_the_override_was_set() {
+    // an operator who has just exported the variable and got it wrong is
+    // the one person this message has to serve, and telling them it is
+    // unset sends them looking somewhere else entirely.
+    let unset = no_root_with(&REPO, None);
+    assert!(unset.contains("WIDGET_ROOT is unset"), "{unset}");
+    assert!(unset.contains(".git"), "{unset}");
+
+    let set = no_root_with(&REPO, Some("/nope/xyzzy".into()));
+    assert!(set.contains("/nope/xyzzy"), "{set}");
+    assert!(set.contains("not a directory"), "{set}");
+    assert!(
+        !set.contains("is unset"),
+        "the set case still claims unset: {set}"
+    );
+}
+
+#[test]
+fn the_refusal_names_the_anchor_the_tool_actually_looks_for() {
+    // a config-anchored tool never looked for `.git`, so naming it would
+    // send the reader to create one.
+    const SPAN: Tool = Tool {
+        anchor: Anchor::ConfigFile,
+        ..REPO
+    };
+    let m = no_root_with(&SPAN, None);
+    assert!(m.contains(REPO.config_file), "{m}");
+    assert!(!m.contains(".git"), "{m}");
 }

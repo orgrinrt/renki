@@ -179,6 +179,36 @@ fn ordered_subdirs(root: &Path, skip: &[&str]) -> Vec<PathBuf> {
     hidden.into_iter().chain(plain).map(|(_, p)| p).collect()
 }
 
+/// Why the root walk found nothing, as a message an operator can act on.
+pub(crate) fn no_root(tool: &Tool) -> String {
+    no_root_with(tool, std::env::var_os(tool.root_env()))
+}
+
+/// Pure core of [`no_root`]. The override is passed in so both arms are
+/// testable without mutating process env.
+///
+/// The distinction is the whole of it. A set-but-wrong override is the case an
+/// operator can actually fix, and telling them the variable is unset when they
+/// just exported it sends them looking in the wrong place. The walk falls
+/// through rather than failing on a bad override, deliberately, so a stale
+/// export in a shell does not make the tool unusable; that is what leaves this
+/// message the only place the operator hears about it.
+fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
+    let what = match tool.anchor {
+        Anchor::Marker(m) => m.to_string(),
+        Anchor::ConfigFile => tool.config_file.to_string(),
+    };
+    let env = tool.root_env();
+    match from_env {
+        Some(v) => format!(
+            "no {what} found in this directory or any above it. {env} is set to {}, which is \
+             not a directory, so it was ignored",
+            Path::new(&v).display()
+        ),
+        None => format!("no {what} found in this directory or any above it, and {env} is unset"),
+    }
+}
+
 #[cfg(test)]
 #[path = "discover_tests.rs"]
 mod tests;

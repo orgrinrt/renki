@@ -211,7 +211,7 @@ fn outcome(tool: &Tool, raw: &[String]) -> Result<(), String> {
 /// see two records and the second would have no `=`, so a path containing one
 /// is refused by name rather than answered wrongly.
 fn locate_query(tool: &Tool, locate: &Locate) -> Result<(), String> {
-    let root = discover::repo_root(tool).ok_or_else(|| no_root(tool))?;
+    let root = discover::repo_root(tool).ok_or_else(|| discover::no_root(tool))?;
     let located = discover::locate(tool, &root)?;
     let (config, workdir) = match located {
         Some(l) => (l.config_path, l.workdir),
@@ -270,35 +270,6 @@ fn locate_answer(
     Ok(out)
 }
 
-fn no_root(tool: &Tool) -> String {
-    no_root_with(tool, std::env::var_os(tool.root_env()))
-}
-
-/// Pure core of [`no_root`]. The override is passed in so both arms are
-/// testable without mutating process env.
-///
-/// The distinction is the whole of it. A set-but-wrong override is the case an
-/// operator can actually fix, and telling them the variable is unset when they
-/// just exported it sends them looking in the wrong place. The walk falls
-/// through rather than failing on a bad override, deliberately, so a stale
-/// export in a shell does not make the tool unusable; that is what leaves this
-/// message the only place the operator hears about it.
-fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
-    let what = match tool.anchor {
-        Anchor::Marker(m) => m.to_string(),
-        Anchor::ConfigFile => tool.config_file.to_string(),
-    };
-    let env = tool.root_env();
-    match from_env {
-        Some(v) => format!(
-            "no {what} found in this directory or any above it. {env} is set to {}, which is \
-             not a directory, so it was ignored",
-            Path::new(&v).display()
-        ),
-        None => format!("no {what} found in this directory or any above it, and {env} is unset"),
-    }
-}
-
 /// How many times a build evicted out from under us is re-materialised before
 /// the run gives up.
 ///
@@ -332,8 +303,16 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
         return locate_query(tool, locate);
     }
 
+    let root = discover::repo_root(tool).ok_or_else(|| discover::no_root(tool))?;
+
     // Keep the launcher itself current: branch installs only, hourly, opt-out.
     // May reinstall and re-exec into the new binary, never returning.
+    //
+    // After the root, deliberately. Typing the tool's name somewhere that is
+    // not a repository is the fastest-failing invocation it has, and running
+    // this first made it one of the slowest: a network round trip, and
+    // possibly a full reinstall and re-exec, before failing with "no .git
+    // found in this directory or any above it".
     //
     // Skipped under `--engine`, which says which engine to run: replacing the
     // launcher underneath a deliberate override is the one moment an automatic
@@ -344,7 +323,6 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
         selfupdate::maybe_self_update(tool, &cache_root);
     }
 
-    let root = discover::repo_root(tool).ok_or_else(|| no_root(tool))?;
     // `locate` hard-errors, blocking the run, when a marker-anchored repo has
     // more than one config. `None` means none, `Some` exactly one.
     let located = discover::locate(tool, &root)?;
@@ -410,7 +388,7 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // Record this repo and build in the registry, then at most once a day
     // collect engine builds nothing pins anymore. Best-effort throughout: the
     // registry is a cache, never a reason to fail a run.
-    record_and_gc(
+    registry::record_and_collect(
         tool,
         &cache_root,
         &root,
@@ -456,84 +434,6 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-/// The registry pin form and value for a resolved pin. Legacy overrides the
-/// reference variant: a legacy pin is always a rev, but must register as legacy
-/// for migration detection.
-fn pin_form_and_value(pin: &Pin, source: PinSource) -> (registry::PinForm, String) {
-    let value = match &pin.reference {
-        Reference::Version(v) | Reference::Branch(v) | Reference::Rev(v) | Reference::Tag(v) => {
-            v.clone()
-        }
-    };
-    let form = match source {
-        PinSource::Legacy => registry::PinForm::Legacy,
-        PinSource::Config => match &pin.reference {
-            Reference::Version(_) => registry::PinForm::Version,
-            Reference::Branch(_) => registry::PinForm::Branch,
-            Reference::Rev(_) => registry::PinForm::Rev,
-            Reference::Tag(_) => registry::PinForm::Tag,
-        },
-    };
-    (form, value)
-}
-
-/// Record this repo and its resolved build, then run a throttled collection
-/// pass protecting the just-resolved key. Every step is best-effort; a registry
-/// failure never blocks the exec.
-#[allow(clippy::too_many_arguments)]
-fn record_and_gc(
-    tool: &Tool,
-    cache_root: &Path,
-    root: &Path,
-    workdir: &Path,
-    pin: &Pin,
-    source: PinSource,
-    resolved: &Resolved,
-    toolchain: &str,
-    key: &str,
-) {
-    let path = registry::registry_path(cache_root);
-    let mut reg = registry::Registry::load(&path);
-    let now = now_secs();
-    let name = root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
-    let (form, value) = pin_form_and_value(pin, source);
-    reg.record(&registry::Recording {
-        root: &root.display().to_string(),
-        root_exact: root.to_str().is_some(),
-        name: &name,
-        workdir: &workdir.display().to_string(),
-        engine_url: &pin.url,
-        form,
-        pin_value: &value,
-        key,
-        key_rev: &resolved.key_rev,
-        toolchain,
-        now,
-    });
-    if reg.gc_due(now) {
-        let removed = reg.gc(cache_root, key, tool.cache_retention, now);
-        if !removed.is_empty() {
-            eprintln!(
-                "{}: cache gc removed {} unused engine build(s)",
-                tool.short,
-                removed.len()
-            );
-        }
-        // The two leftovers nothing else collects, on the same schedule and
-        // for the same reason. Both used to be swept only by the path that
-        // creates them, which for `--engine` meant a user who passed the flag
-        // once and never again kept the checkout and its target directory
-        // forever, and for branch resolutions meant never.
-        engine::sweep(cache_root);
-        pin::sweep_branch_resolutions(cache_root);
-    }
-    reg.save(&path);
 }
 
 /// The pin: the config's own key, then whatever legacy fallback the tool

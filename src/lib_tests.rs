@@ -304,73 +304,9 @@ fn an_engine_flag_with_no_path_is_refused_rather_than_running_the_pinned_engine(
 }
 
 #[test]
-fn the_missing_root_message_names_what_was_looked_for() {
-    assert!(no_root(&T).contains(".git"), "{}", no_root(&T));
-    assert!(no_root(&T).contains("WIDGET_ROOT"), "{}", no_root(&T));
-
-    const SPAN: Tool = Tool {
-        anchor: Anchor::ConfigFile,
-        short: "widget",
-        ..T
-    };
-    // a config-anchored tool has no marker, so naming one would send the
-    // reader looking for a file that has nothing to do with it.
-    assert!(no_root(&SPAN).contains("t.toml"), "{}", no_root(&SPAN));
-    assert!(!no_root(&SPAN).contains(".git"), "{}", no_root(&SPAN));
-    assert!(no_root(&SPAN).contains("WIDGET_ROOT"), "{}", no_root(&SPAN));
-}
-
-#[test]
-fn a_legacy_pin_registers_as_legacy_whatever_its_reference_is() {
-    let p = Pin {
-        url: "u".into(),
-        reference: Reference::Rev("abc".into()),
-    };
-    assert_eq!(
-        pin_form_and_value(&p, PinSource::Config),
-        (registry::PinForm::Rev, "abc".to_string())
-    );
-    assert_eq!(
-        pin_form_and_value(&p, PinSource::Legacy),
-        (registry::PinForm::Legacy, "abc".to_string())
-    );
-}
-
-#[test]
 fn the_missing_pin_message_names_the_tools_own_key() {
     let d = tempfile::tempdir().unwrap();
     let err = resolve_pin(&T, None, d.path(), d.path()).unwrap_err();
     assert!(err.contains("t_version"), "{err}");
     assert!(err.contains("t.toml"), "{err}");
-}
-
-#[test]
-fn the_refusal_says_whether_the_override_was_set() {
-    // an operator who has just exported the variable and got it wrong is
-    // the one person this message has to serve, and telling them it is
-    // unset sends them looking somewhere else entirely.
-    let unset = no_root_with(&T, None);
-    assert!(unset.contains("WIDGET_ROOT is unset"), "{unset}");
-    assert!(unset.contains(".git"), "{unset}");
-
-    let set = no_root_with(&T, Some("/nope/xyzzy".into()));
-    assert!(set.contains("/nope/xyzzy"), "{set}");
-    assert!(set.contains("not a directory"), "{set}");
-    assert!(
-        !set.contains("is unset"),
-        "the set case still claims unset: {set}"
-    );
-}
-
-#[test]
-fn the_refusal_names_the_anchor_the_tool_actually_looks_for() {
-    // a config-anchored tool never looked for `.git`, so naming it would
-    // send the reader to create one.
-    const SPAN: Tool = Tool {
-        anchor: Anchor::ConfigFile,
-        ..T
-    };
-    let m = no_root_with(&SPAN, None);
-    assert!(m.contains(T.config_file), "{m}");
-    assert!(!m.contains(".git"), "{m}");
 }
