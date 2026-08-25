@@ -418,6 +418,16 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
         }
         bin = cache::ensure_built(tool, &cache_root, &key, &resolved)?;
     }
+    if !bin.is_file() {
+        return Err(format!(
+            "{}: the engine was rebuilt {EVICTION_RETRIES} times and was gone again \
+             each time, at {}. A collection pass landing in that gap once is a race; \
+             landing in it repeatedly is a fault, so this stops rather than \
+             rebuilding forever.",
+            tool.short,
+            bin.display()
+        ));
+    }
 
     let extra = tool
         .hooks

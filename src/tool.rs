@@ -27,9 +27,9 @@ use crate::pin::{Pin, Resolved};
 /// That argument says the two are irreducible. It does not say there is no
 /// third, and a launcher of this kind plausibly wants one: an anchor that is
 /// only the environment override, for a tool that refuses to guess. So the
-/// enum is left open. Nothing in the public surface hands a consumer an
-/// [`Anchor`] to match on, so the marker costs a consumer nothing today and
-/// makes a third shape a minor release.
+/// enum is left open. A consumer writes an [`Anchor`] into its descriptor and
+/// is not asked to match one, so a third variant costs nothing to anyone who
+/// only constructs, and the marker makes adding it a minor release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Anchor {
@@ -212,15 +212,26 @@ pub struct PinKeys {
 }
 
 impl PinKeys {
-    /// The first empty name, or `None`.
+    /// The first empty key, named, or `None`.
+    ///
+    /// Named rather than described, because an empty key makes exactly one pin
+    /// form unreadable and a message saying only that one of five is empty
+    /// leaves the reader to find out which.
     const fn defect(&self) -> Option<&'static str> {
-        if self.version.is_empty()
-            || self.rev.is_empty()
-            || self.tag.is_empty()
-            || self.branch.is_empty()
-            || self.git.is_empty()
-        {
-            return Some("a pin key is empty, so that pin form can never be read");
+        if self.version.is_empty() {
+            return Some("pin_keys.version is empty, so a version pin can never be read");
+        }
+        if self.rev.is_empty() {
+            return Some("pin_keys.rev is empty, so a rev pin can never be read");
+        }
+        if self.tag.is_empty() {
+            return Some("pin_keys.tag is empty, so a tag pin can never be read");
+        }
+        if self.branch.is_empty() {
+            return Some("pin_keys.branch is empty, so a branch pin can never be read");
+        }
+        if self.git.is_empty() {
+            return Some("pin_keys.git is empty, so a repo url can never be read");
         }
         None
     }
@@ -486,6 +497,11 @@ impl Tool {
             return Some(
                 "default_url is empty, so the git attempts ask cargo to install from \
                  nowhere and it fails naming nothing the user wrote",
+            );
+        }
+        if self.cache_retention.is_zero() {
+            return Some(
+                "cache_retention is zero, so every build is older than the window the                  moment it lands and the collector removes it on the next pass. The                  result is a full rebuild every run, under a message saying it                  happens once per version",
             );
         }
         if self.dir_flag.is_empty() || self.engine_flag.is_empty() {

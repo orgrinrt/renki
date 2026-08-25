@@ -23,7 +23,7 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
     // The point of the check is that it runs, and a predicate tested only
     // as a predicate stays green when nothing calls it. Every arm below is
     // a descriptor that would otherwise run and misbehave quietly.
-    const BAD: [Tool; 15] = [
+    const BAD: [Tool; 16] = [
         Tool {
             short: "my-tool",
             ..T
@@ -104,6 +104,14 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
             engine_flag: Cli::DIR_FLAG,
             ..T
         },
+        // Zero, so every build is older than the window the moment it lands.
+        // The collector then removes it on the next pass and the tool rebuilds
+        // from scratch on every run, while its own message says once per
+        // version.
+        Tool {
+            cache_retention: std::time::Duration::ZERO,
+            ..T
+        },
     ];
     for bad in &BAD {
         assert!(
@@ -117,6 +125,85 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
             "it failed for some other reason, so nothing checked the descriptor: {err}"
         );
     }
+}
+
+#[test]
+fn an_empty_pin_key_is_reported_by_name() {
+    // A message saying one of five keys is empty leaves the reader to work out
+    // which, and the five are one word apart. So each arm carries its own
+    // name, and this checks the name rather than that something was returned.
+    const CASES: [(Tool, &str); 5] = [
+        (
+            Tool {
+                pin_keys: PinKeys {
+                    version: "",
+                    ..T.pin_keys
+                },
+                ..T
+            },
+            "pin_keys.version",
+        ),
+        (
+            Tool {
+                pin_keys: PinKeys {
+                    rev: "",
+                    ..T.pin_keys
+                },
+                ..T
+            },
+            "pin_keys.rev",
+        ),
+        (
+            Tool {
+                pin_keys: PinKeys {
+                    tag: "",
+                    ..T.pin_keys
+                },
+                ..T
+            },
+            "pin_keys.tag",
+        ),
+        (
+            Tool {
+                pin_keys: PinKeys {
+                    branch: "",
+                    ..T.pin_keys
+                },
+                ..T
+            },
+            "pin_keys.branch",
+        ),
+        (
+            Tool {
+                pin_keys: PinKeys {
+                    git: "",
+                    ..T.pin_keys
+                },
+                ..T
+            },
+            "pin_keys.git",
+        ),
+    ];
+
+    for (bad, name) in &CASES {
+        let msg = bad
+            .defect()
+            .expect("an empty pin key was not reported at all");
+        assert!(
+            msg.contains(name),
+            "the defect message does not name the field that is wrong. \
+             Expected it to mention `{name}`, got: {msg}"
+        );
+    }
+
+    // The control. Every arm above differs from the fixture in exactly one
+    // key, so without this the loop would still pass if `defect` refused the
+    // fixture itself for some unrelated reason and happened to name the field
+    // in that message.
+    assert!(
+        T.defect().is_none(),
+        "the fixture is already broken, so nothing above isolated a single key"
+    );
 }
 
 #[test]
