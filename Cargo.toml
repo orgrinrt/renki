@@ -16,20 +16,16 @@ categories = ["development-tools", "command-line-utilities"]
 # needs. The lint configs and the ignore file are ours and are paid for by
 # everyone who downloads the crate if they are left in.
 #
-# Tests are named one at a time rather than swept in, because the two kinds
-# here want opposite answers. `the_unix_assumption_is_stated.rs` guards the
-# crate's only `compile_error!`, and shipping the guard without the thing that
-# checks it invites a reader to verify a claim they have no way to run. The
-# header-coverage test is about this repository rather than about the crate: it
-# reads `ante.toml` and asks git what is tracked, so in an unpacked tarball it
-# would fail on a file that is deliberately not there. Adding a test means
-# deciding which of those it is.
-include = [
-    "src/**/*.rs",
-    "tests/the_unix_assumption_is_stated.rs",
-    "README.md",
-    "LICENSE",
-]
+# No test ships, because neither of them can run where the package lands. The
+# header-coverage test reads `ante.toml` and asks git what is tracked. The
+# unix-guard test asks rustup which targets are installed and fails loudly
+# when the one it needs is absent, which is right in a checkout and wrong in a
+# tarball, where it would be the first thing a consumer sees go red.
+#
+# Both are checks about this repository. A test about the crate would ship, and
+# `include_ships_the_crate_tests_and_none_of_the_repository_ones` is what says
+# which kind a new one is.
+include = ["src/**/*.rs", "README.md", "LICENSE"]
 keywords = ["launcher", "pinning", "reproducible", "bootstrap", "cli"]
 
 # Kept deliberately small, because every dependency is paid at `cargo install` time by

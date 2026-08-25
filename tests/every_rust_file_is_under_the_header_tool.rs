@@ -114,19 +114,22 @@ fn a_directory_the_config_omits_is_reported() {
     );
 }
 
-/// The tests this crate publishes have to run from an unpacked tarball, where
-/// the repository is not there.
+/// `include` ships exactly the tests that can run without the repository.
 ///
-/// Two kinds of test live under `tests/`. One checks the crate and belongs in
-/// the package. The other checks this repository, reads files `include`
-/// deliberately leaves out, and asks git what is tracked. Shipping the second
-/// kind produces a crate whose own suite fails on a file that was never meant
-/// to be in it, and `cargo package` will not catch it, because packaging
-/// compiles the tests and never runs them.
+/// Two kinds of test live under `tests/`, and they want opposite answers. One
+/// checks the crate and belongs in the package. The other checks this
+/// repository: it reads a config the package leaves out, or asks git or rustup
+/// something only a checkout can answer. Shipping one of those produces a
+/// crate whose own suite fails on something that was never meant to be there,
+/// and `cargo package` will not catch it, because packaging compiles the tests
+/// and never runs them.
+///
+/// Checked in both directions, so neither a repository check sneaking into
+/// `include` nor a crate test quietly dropped from it goes unreported.
 #[test]
-fn a_shipped_test_does_not_reach_for_the_repository() {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let toml = std::fs::read_to_string(manifest.join("Cargo.toml")).expect("no manifest");
+fn include_ships_the_crate_tests_and_none_of_the_repository_ones() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let toml = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("no manifest");
 
     let include = toml
         .split_once("include = [")
@@ -136,47 +139,100 @@ fn a_shipped_test_does_not_reach_for_the_repository() {
         .expect("`include` is not closed")
         .0;
 
-    let shipped: Vec<&str> = include
+    let entries: Vec<&str> = include
         .split('"')
         .filter(|s| s.starts_with("tests/") && s.ends_with(".rs"))
         .collect();
 
+    // A glob under `tests/` defeats the whole check: it matches every file
+    // including the ones that must not ship, and it reads as a set of names to
+    // anything comparing strings, so the comparison below silently finds
+    // nothing wrong. It is also the thing being forbidden on its own merits,
+    // since deciding per file is the point.
+    let globbed: Vec<&&str> = entries.iter().filter(|e| e.contains('*')).collect();
     assert!(
-        !shipped.is_empty(),
-        "no test file is named in `include`, so this check would hold over an \
-         empty set. If that is deliberate, delete this test rather than \
-         leaving it to pass on nothing."
+        globbed.is_empty(),
+        "`include` reaches into `tests/` with a glob: {globbed:?}\n\
+         A glob cannot tell a crate test from a repository check, so it ships \
+         both. Name the files that belong in the package instead."
     );
 
-    // What a tarball does not have. `ante.toml` is excluded on purpose and the
-    // repository is not shipped at all, so a test touching either cannot run
-    // where the crate is consumed.
-    const ABSENT: [&str; 2] = ["ante.toml", "\"git\""];
+    let shipped: BTreeSet<String> = entries.into_iter().map(str::to_owned).collect();
 
-    for file in &shipped {
-        let body = std::fs::read_to_string(manifest.join(file))
-            .unwrap_or_else(|e| panic!("`include` names {file}, which is not readable: {e}"));
+    // What an unpacked tarball does not have: `ante.toml` is excluded on
+    // purpose, and neither the repository nor a rustup toolchain list is in
+    // there at all.
+    const ABSENT: [&str; 3] = ["ante.toml", "\"git\"", "\"rustup\""];
 
-        for needle in ABSENT {
-            assert!(
-                !body.contains(needle),
-                "{file} is published and reaches for {needle}, which an unpacked \
-                 tarball does not have. Either drop it from `include` because it \
-                 is a check about this repository, or stop it depending on the \
-                 repository because it is a check about the crate."
-            );
+    let mut every = Vec::new();
+    let mut repository_only = BTreeSet::new();
+    for entry in std::fs::read_dir(manifest_dir.join("tests")).expect("no tests directory") {
+        let path = entry.expect("unreadable entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
         }
+        let name = format!("tests/{}", path.file_name().unwrap().to_string_lossy());
+        let body = std::fs::read_to_string(&path).expect("unreadable test");
+        if ABSENT.iter().any(|n| body.contains(n)) {
+            repository_only.insert(name.clone());
+        }
+        every.push(name);
     }
 
-    // The control. Without it the loop passes on any needle nothing contains,
-    // including a typo, and this file itself is the proof that the needles are
-    // findable in a real test body.
-    let own = std::fs::read_to_string(file!()).expect("this file is not readable");
+    assert!(
+        !every.is_empty(),
+        "no test files were found at all, so both assertions below would hold \
+         over an empty set and say nothing"
+    );
+
+    let wrongly_shipped: Vec<&String> = shipped.intersection(&repository_only).collect();
+    assert!(
+        wrongly_shipped.is_empty(),
+        "these are published and reach for the repository, which an unpacked \
+         tarball does not have:\n  {}\n\
+         Either drop each from `include` because it is a check about this \
+         repository, or stop it depending on the repository because it is a \
+         check about the crate.",
+        wrongly_shipped
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+
+    let wrongly_left_out: Vec<&String> = every
+        .iter()
+        .filter(|n| !repository_only.contains(*n) && !shipped.contains(*n))
+        .collect();
+    assert!(
+        wrongly_left_out.is_empty(),
+        "these test the crate rather than the repository and are not in \
+         `include`, so the package ships the code without the check on \
+         it:\n  {}",
+        wrongly_left_out
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+
+    // The control. Without it both assertions pass on needles nothing
+    // contains, including a typo, and every test would classify as a crate
+    // test. Each needle has to be live in at least one real test body.
     for needle in ABSENT {
+        let found = every.iter().any(|n| {
+            std::fs::read_to_string(manifest_dir.join(n)).is_ok_and(|b| b.contains(needle))
+        });
         assert!(
-            own.contains(needle),
-            "the needle {needle} was not found even in a file that plainly uses \
-             it, so the loop above would clear every file it looked at"
+            found,
+            "the needle {needle} matches no test body here, so it classifies \
+             nothing and the two assertions above are that much weaker"
         );
     }
+
+    assert!(
+        !repository_only.is_empty(),
+        "nothing classified as a repository check, so the first assertion held \
+         over an empty intersection and checked nothing"
+    );
 }
