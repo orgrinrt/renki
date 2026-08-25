@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MPL-2.0     https://mozilla.org/MPL/2.0        contact@hiisi.digital
 //--------------------------------------------------------------------------------------------------
 
-//! The launcher half of a pinned-engine command-line tool.
+//! The launcher half of a command-line tool whose engine each repo pins.
 //!
 //! A tool built this way has two pieces. The **engine** does the work and is
 //! version-pinned by each repo that uses it. The **launcher** is what sits on

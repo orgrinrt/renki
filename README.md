@@ -8,19 +8,19 @@
 [![GitHub Issues](https://img.shields.io/github/issues/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/issues)
 ![License](https://img.shields.io/github/license/orgrinrt/renki?color=%23009689)
 
-> The launcher half of a pinned-engine command line tool. One const describes the tool, and the pin, cache, build and exec come with it.
+> `renki` is the launcher half of a command-line tool whose engine each repo pins. One const describes your tool, and the pin, cache, build and exec come with it. Unix only for now.
 
 </div>
 
 ## Status
 
-Under active development, so the api hasn't settled and breaking changes should
-be expected. It works and two tools already run on it, but I'd hold off building
-anything load-bearing on it just yet. We'll try to document any migration
-properly when the shape does move, and `Tool::CONVENTIONS` is there so that at
-least a new field doesn't break you.
+This crate is under active development, so the api hasn't settled and breaking
+changes should be expected. It works and two tools already run on it, but I'd
+hold off building anything load-bearing on it just yet. We'll try to document any
+migration properly when the shape does move, and `Tool::CONVENTIONS` is there so
+that at least a new field doesn't break you.
 
-## What it is
+## The split, and what it buys
 
 A tool built this way comes in two halves. The engine does the actual work, and
 each repo pins the version of it that it wants. The launcher is the small thing
@@ -31,11 +31,8 @@ The point of the split is that a repo's tooling can't drift away from what the
 repo asked for. Everyone on the project gets the version the config names, on
 whatever machine, regardless of what they happened to install last year. And a
 launcher installed off a git branch can keep itself current, so nobody has to
-remember to, which is the part that otherwise bites: a hand-installed binary
-goes stale quietly and nothing at all tells you. A version or tag install is
-immutable so that one is left alone anyway, `SelfUpdate::Never` turns the whole
-thing off if you don't want it, and `WIDGET_NO_SELF_UPDATE` lets a user turn it
-off for themselves.
+remember to, which is the part that otherwise bites: a hand-installed binary goes
+stale quietly and nothing at all tells you.
 
 `renki` is that launcher with the identity taken out. You write a `const` naming
 the config file, the pin keys, the engine crate and a few other things, and the
@@ -45,9 +42,9 @@ what it actually knows.
 
 The engine has to be a Rust crate that `cargo install` can build, since that is
 what the build path shells out to. The one other thing it owes is a flag taking
-an absolute path, because the launcher always passes the working directory as the
-first two arguments and the engine has to accept them. Everything else about it
-is yours.
+an absolute path, because the launcher always puts that flag and the working
+directory in front of whatever the user typed, and the engine has to accept both.
+Everything else about it is yours.
 
 ## Contents
 
@@ -63,18 +60,21 @@ is yours.
 | `Workdir` | The subdirectory a config maps, for tools that have one. |
 | `Cli` / `Locate` | The conventional flag spellings, and the key names the `locate` answer uses. Both yours to rename. |
 | `Pin` / `Reference` | What a repo pinned: a version, a rev, a tag or a branch. |
-| `Header` | The config keys the launcher reads, if you want to read them yourself. |
-| `package_name` | What a `Cargo.toml` in some directory declares itself to be. Handy in `verify_engine_dir`. |
 | `Resolved` | A pin turned into concrete build attempts, plus the git ref it landed on. |
 | `run` / `run_without_sanitizing` | The launcher itself. Your `main` is one of these and not much else. |
-| `GIT_REPO_ENV` / `sanitize_git_env` | The repo-location git variables `run` drops, and the function that drops them. |
+
+A few smaller doors are there for when you want to do a piece yourself rather
+than take the one that comes with it: `Header` reads the config keys, `package_name`
+tells you what a `Cargo.toml` in some directory declares itself to be, and
+`GIT_REPO_ENV` with `sanitize_git_env` is the set of repo-location git variables
+`run` drops and the function that drops them. The rustdoc has them.
 
 ## The two anchors
 
 Finding the repo root is the one thing that genuinely differs between tools, and
 neither answer generalises to the other, so it stays a parameter.
 
-`Anchor::Marker(".git")` walks up to the nearest directory holding that entry.
+`Anchor::Marker(".git")` walks up to the nearest directory holding that name.
 Right when the config lives inside a repository. The config may then sit at the
 root or one directory below it, and more than one in scope is a hard error rather
 than a precedence question, mostly because nobody ever specified which should
@@ -118,17 +118,17 @@ Or in your `Cargo.toml`:
 renki = "0.0.1"
 ```
 
-Do pin the exact version rather than a range. `Tool` is a struct literal, so a
-field added to it is technically breaking even with `..Tool::CONVENTIONS` in
-between, and `0.0.x` releases are incompatible with each other by semver's own
-rules anyway.
+`Tool` is a struct literal, so a field added to it is technically breaking even
+with `..Tool::CONVENTIONS` in between, and `0.0.x` releases are incompatible with
+each other by semver's own rules anyway. So do pin the exact version rather than
+a range.
 
 You don't install `renki` itself as a command. It's a library, and what goes on
 `PATH` is your own launcher built with it.
 
 ## Usage
 
-The whole thing:
+Here's the whole of it, and it really is about this much:
 
 ```rust,no_run
 use renki::{pin_keys, Tool};
@@ -173,7 +173,7 @@ input.
 The config is TOML, and only those few top-level keys are read out of it. The
 rest of the file is yours and the launcher never looks at it.
 
-### What you get for free
+### What the launcher answers on its own
 
 `widget locate` prints the repo root, the config and the working directory, one
 `key=value` per line, in the paths' own bytes. Worth reading from any shell script
@@ -186,8 +186,9 @@ of answered wrongly.
 
 `--engine <path>` builds from a checkout on disk instead of the pin, always
 rebuilding, recording nothing in the registry, and getting swept a day after you
-last used it. For when you're working on the engine itself, where pushing to find
-out whether a change took is a slow way to ask a fast question.
+last used it. For when you're working on the engine itself. Otherwise you're
+pushing a commit and waiting on a build just to find out whether a one-line
+change took, and that gets old fast.
 
 `--dir` is the launcher's own, and a user-supplied one gets stripped before the
 engine sees anything, so the engine never has two answers to choose between.
@@ -202,9 +203,10 @@ The registry is worth knowing about, since it's the one thing that records
 something about you rather than about a build. It holds a row per repo that has
 run the tool on this machine: the repo's path, its directory name, what it pinned
 and when it last ran. That's what lets the collector tell a build nothing points
-at any more from one that's still in use. It never leaves the machine and nothing
-reads it but the launcher, and deleting the whole cache directory is always safe.
-A build that no repo has wanted for `Tool::cache_retention`, thirty days by
+at any more from one that's still in use. Nothing but the launcher writes it and
+nothing sends it anywhere. It's plain TOML in your own cache directory, so read
+it yourself if you're curious, and deleting the whole cache directory is always
+safe. A build that no repo has wanted for `Tool::cache_retention`, thirty days by
 default, gets collected.
 
 Three environment variables, all named after your `short`:
@@ -215,15 +217,21 @@ Three environment variables, all named after your `short`:
 | `WIDGET_CACHE` | Put the cache here. The whole path, not a parent to append the namespace to. |
 | `WIDGET_NO_SELF_UPDATE` | Don't check whether the launcher itself has moved on. |
 
-## Positioning
+That last one is the user's own way out of the self-update. A version or tag
+install is immutable so that one is left alone anyway, and `SelfUpdate::Never` in
+your `Tool` turns the whole thing off for everybody if you'd rather it didn't
+happen at all.
 
-If you want a version manager, this isn't one. It doesn't manage toolchains,
-doesn't shim anything, and holds no opinion about what your engine does. What it
-does is narrow: the repo names a version, and the tool that runs is that version.
+## What this isn't
 
-Unix only for now. The exec path is `execve` and nothing has been done about
-Windows, so the build fails there with a message saying as much rather than
-misbehaving.
+If you're after a version manager, this probably isn't it. Not that there's no
+overlap, but the proper ones do a lot this doesn't: toolchains, shims, opinions
+about what your engine even is. What this does is narrow, the repo names a
+version and the tool that runs is that version, and that's about the whole of it.
+
+Unix only for now. The handover is `exec`, which is a unix call with no portable
+equivalent, and nothing has been done about Windows, so the build fails there
+with a message saying as much rather than misbehaving.
 
 ## Support
 

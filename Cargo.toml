@@ -3,7 +3,7 @@ name = "renki"
 version = "0.0.1"
 edition = "2024"
 publish = true
-description = "The launcher half of a pinned-engine command-line tool. Reads the engine version a repo pins, builds it once into a shared cache, and runs it from any working directory."
+description = "The launcher half of a command-line tool whose engine each repo pins. Reads the pinned version, builds it once into a shared cache, and runs it from any working directory."
 license = "MPL-2.0"
 homepage = "https://github.com/orgrinrt/renki"
 repository = "https://github.com/orgrinrt/renki"
@@ -23,7 +23,7 @@ categories = ["development-tools", "command-line-utilities"]
 include = ["src/**/*.rs", "tests/**/*.rs", "README.md", "LICENSE"]
 keywords = ["launcher", "pinning", "reproducible", "bootstrap", "cli"]
 
-# Curated-minimal, because every dependency is paid at `cargo install` time by
+# Kept deliberately small, because every dependency is paid at `cargo install` time by
 # a user who only wanted the tool this launches. The pin header is hand-read
 # (a handful of top-level keys), cargo's own install-root lock and atomic
 # binary install cover concurrency, and the cache key uses a vendored stable
