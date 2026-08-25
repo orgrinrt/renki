@@ -193,6 +193,18 @@ pub struct Hooks {
     /// A last-resort pin for a repo that has not adopted an explicit one,
     /// given the working directory. Keeps a repo mid-migration running.
     pub legacy_pin: Option<fn(&Path) -> Option<Pin>>,
+    /// The tag a released version is under, where the repository does not name
+    /// its tags after the bare version.
+    ///
+    /// The version pin tries the registry first and a git tag second, and the
+    /// second attempt needs a name. `v0.1.0` is at least as common as `0.1.0`,
+    /// and a tool whose engine repository uses the prefix could not be built
+    /// from a version pin before publishing, with the failure reported against
+    /// the pin rather than against the spelling.
+    ///
+    /// Every string this returns is tried in order, so a repository that
+    /// changed convention partway can name both.
+    pub version_tags: Option<fn(&str) -> Vec<String>>,
     /// Refuse a repo state that would silently route the user somewhere else,
     /// given the repo root.
     ///
@@ -210,9 +222,26 @@ impl Hooks {
         engine_args: None,
         engine_args_local: None,
         verify_engine_dir: None,
+        version_tags: None,
         legacy_pin: None,
         verify_repo_state: None,
     };
+}
+
+/// Byte equality for two `&str` in a const context, which `==` is not.
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 impl Tool {
@@ -288,9 +317,22 @@ impl Tool {
                 "launcher_crate is empty, so the update check can never find its own install",
             );
         }
+        if self.default_url.is_empty() {
+            return Some(
+                "default_url is empty, so the git attempts ask cargo to install from \
+                 nowhere and it fails naming nothing the user wrote",
+            );
+        }
         if self.dir_flag.is_empty() || self.engine_flag.is_empty() {
             return Some(
                 "dir_flag or engine_flag is empty, which puts a bare empty argument on the command line",
+            );
+        }
+        if const_str_eq(self.dir_flag, self.engine_flag) {
+            return Some(
+                "dir_flag and engine_flag are the same string, so the override is \
+                 unreachable: the directory is stripped first and nothing is left \
+                 for the engine flag to find",
             );
         }
         if let Anchor::Marker(m) = self.anchor
@@ -390,116 +432,5 @@ fn normalize(p: PathBuf) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const WITH: Tool = Tool {
-        anchor: Anchor::Marker(".git"),
-        short: "mock",
-        config_file: "t.toml",
-        pin_prefix: "t",
-        engine_crate: "engine",
-        engine_bin: None,
-        cache_namespace: "t",
-        default_url: "u",
-        launcher_crate: "t-launcher",
-        workdir: Some(Workdir {
-            key: "work_dir",
-            root_default: "mock",
-        }),
-        dir_flag: Cli::DIR_FLAG,
-        engine_flag: Cli::ENGINE_FLAG,
-        locate: Locate::DEFAULT,
-        hooks: Hooks::NONE,
-    };
-
-    const WITHOUT: Tool = Tool {
-        workdir: None,
-        ..WITH
-    };
-
-    #[test]
-    fn a_short_name_a_shell_cannot_spell_is_refused() {
-        // The whole matrix of what an environment variable name may hold,
-        // rather than the one hyphen case that prompted this.
-        for ok in ["w", "widget", "cargo_mock", "w2", "W", "_w"] {
-            assert!(
-                Tool { short: ok, ..WITH }.short_is_usable(),
-                "{ok} should be usable"
-            );
-        }
-        for bad in [
-            "", "my-tool", "my.tool", "my tool", "my/tool", "2tools", "tööli",
-        ] {
-            assert!(
-                !Tool { short: bad, ..WITH }.short_is_usable(),
-                "{bad:?} should be refused"
-            );
-        }
-    }
-
-    #[test]
-    fn a_refused_short_name_would_have_produced_an_unusable_variable() {
-        // The control that ties the predicate to what it is about, computed a
-        // second way, over the variable name rather than over the short name.
-        //
-        // Both halves are load-bearing, and the second was found by this test
-        // disagreeing with the first version of itself. An empty short is
-        // perfectly spellable: it yields `_ROOT`, which every shell accepts and
-        // which belongs to no tool, so every launcher built that way would read
-        // the same variable.
-        fn usable_variable(name: &str) -> bool {
-            let b = name.as_bytes();
-            let spellable = !b.is_empty()
-                && !b[0].is_ascii_digit()
-                && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_');
-            spellable && name != "_ROOT"
-        }
-        for s in ["w", "widget", "my-tool", "2tools", "", "my.tool", "tööli"] {
-            let t = Tool { short: s, ..WITH };
-            assert_eq!(
-                t.short_is_usable(),
-                usable_variable(&t.root_env()),
-                "disagreed about {s:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn env_names_come_from_the_short_name() {
-        assert_eq!(WITH.root_env(), "MOCK_ROOT");
-        assert_eq!(WITH.no_self_update_env(), "MOCK_NO_SELF_UPDATE");
-    }
-
-    #[test]
-    fn a_root_config_defaults_to_the_subdirectory_beside_it() {
-        let root = Path::new("/r");
-        assert_eq!(WITH.workdir_for(root, root, None), Path::new("/r/mock"));
-    }
-
-    #[test]
-    fn a_root_config_may_name_another() {
-        let root = Path::new("/r");
-        let got = WITH.workdir_for(root, root, Some("design".into()));
-        assert_eq!(got, Path::new("/r/design"));
-    }
-
-    #[test]
-    fn a_config_inside_the_workdir_defaults_to_its_own_directory() {
-        // and the trailing `/.` that default produces is collapsed, or every
-        // path derived from it carries it.
-        let got = WITH.workdir_for(Path::new("/r"), Path::new("/r/mock"), None);
-        assert_eq!(got, Path::new("/r/mock"));
-    }
-
-    #[test]
-    fn a_tool_without_a_workdir_runs_against_the_root() {
-        let root = Path::new("/r");
-        // the control: the same inputs that give a subdirectory above give the
-        // root here, including when the config declares something.
-        assert_eq!(WITHOUT.workdir_for(root, root, None), root);
-        assert_eq!(WITHOUT.workdir_for(root, root, Some("design".into())), root);
-        assert_eq!(WITHOUT.workdir_default(root), root);
-        assert_eq!(WITH.workdir_default(root), Path::new("/r/mock"));
-    }
-}
+#[path = "tool_tests.rs"]
+mod tests;

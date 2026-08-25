@@ -9,8 +9,7 @@ homepage = "https://github.com/orgrinrt/renki"
 repository = "https://github.com/orgrinrt/renki"
 readme = "README.md"
 # Measured rather than guessed: 1.88 builds and tests this crate clean, and it
-# is where let-chains stabilised, which this uses throughout. A first attempt
-# claimed 1.90 and cargo refused the build, which is the check working.
+# is where let-chains stabilised, which this uses throughout.
 rust-version = "1.88"
 categories = ["development-tools", "command-line-utilities"]
 # Only the sources and the two files a reader of the package needs. The lint

@@ -37,6 +37,17 @@ use crate::tool::Tool;
 /// the target directory is what makes the rebuild cheap and it lives here too.
 const SCRATCH_TTL_SECS: u64 = 24 * 60 * 60;
 
+/// The file whose timestamp says when a scratch build was last used.
+///
+/// A directory's own modification time changes when an entry is added to it or
+/// removed from it, and not when something inside an entry is written. cargo
+/// writes into `bin` and `target`, both of which already exist after the first
+/// run, so the root's timestamp is when it was created and never moves again.
+/// Reading it as last use meant a checkout somebody worked on daily was swept
+/// by its own process every day and rebuilt cold, which is the opposite of what
+/// keeping the target directory is for.
+const SCRATCH_MARKER: &str = ".last-used";
+
 /// Where scratch engine builds live, beside the keyed ones but never mixed with
 /// them: the keyed cache is content-addressed and shared, this is neither.
 fn scratch_dir(cache_root: &Path) -> PathBuf {
@@ -56,12 +67,39 @@ fn scratch_dir(cache_root: &Path) -> PathBuf {
 /// A value beginning with `-` is not taken. `--engine --verbose` is a flag with
 /// its value missing, and reading `--verbose` as a path both loses the flag and
 /// produces a diagnostic about a file nobody named.
+///
+/// The joined spelling with nothing after the `=` is also missing rather than
+/// empty. An empty path resolves to the working directory, so `--engine=` and
+/// an unset variable expanding to it would have built whatever repository the
+/// command was run in.
+///
+/// Scanning stops at a bare `--`. Everything after one belongs to the engine
+/// verbatim, by the convention every command line shares, so a launcher that
+/// kept reading would take an argument the user had already said was not its.
+///
+/// A flag passed more than once takes the last one, and every occurrence is
+/// still removed, so nothing the launcher owns reaches the engine. Last wins is
+/// what a shell user expects from a repeated option, and it is the spelling
+/// that lets a wrapper script append an override after whatever it was handed.
 pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
     let joined = format!("{flag}=");
     let mut found = Flag::Absent;
     let mut rest = Vec::with_capacity(args.len());
     let mut want_value = false;
+    let mut users_from_here = false;
     for arg in args {
+        if users_from_here {
+            rest.push(arg);
+            continue;
+        }
+        if arg == "--" {
+            users_from_here = true;
+            // A pending value stays missing: `--engine --` is the flag with
+            // nothing after it, not the flag taking a separator.
+            want_value = false;
+            rest.push(arg);
+            continue;
+        }
         if want_value {
             want_value = false;
             if !arg.starts_with('-') {
@@ -77,7 +115,11 @@ pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
             continue;
         }
         if let Some(value) = arg.strip_prefix(&joined) {
-            found = Flag::Value(value.to_string());
+            found = if value.is_empty() {
+                Flag::Missing
+            } else {
+                Flag::Value(value.to_string())
+            };
             continue;
         }
         rest.push(arg);
@@ -164,6 +206,7 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
     let root = scratch.join(h.hex());
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create {}: {e}", root.display()))?;
+    touch(&root);
 
     eprintln!(
         "{}: building the engine from {} (scratch, not cached by revision)",
@@ -198,6 +241,14 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
     Ok(bin)
 }
 
+/// Record that this scratch build is in use, for the sweep to read later.
+///
+/// Best-effort. A marker that cannot be written costs a rebuild a day later and
+/// nothing else, so it is not worth failing a run over.
+fn touch(root: &Path) {
+    let _ = std::fs::write(root.join(SCRATCH_MARKER), b"");
+}
+
 /// Delete scratch builds nothing has used for [`SCRATCH_TTL_SECS`].
 ///
 /// Best-effort in every direction: a scratch build is disposable, so a sweep
@@ -213,8 +264,10 @@ fn sweep(scratch: &Path) {
         if !path.is_dir() {
             continue;
         }
-        let stale = entry
-            .metadata()
+        // The marker where there is one, and the directory itself where there
+        // is not, which is a root from before the marker existed.
+        let stamp = std::fs::metadata(path.join(SCRATCH_MARKER)).or_else(|_| entry.metadata());
+        let stale = stamp
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| now.duration_since(t).ok())
@@ -226,161 +279,5 @@ fn sweep(scratch: &Path) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tool::{Anchor, Cli, Hooks, Locate};
-
-    /// A tool that demands nothing of a checkout beyond a manifest.
-    const PLAIN: Tool = Tool {
-        anchor: Anchor::Marker(".git"),
-        short: "t",
-        config_file: "t.toml",
-        pin_prefix: "t",
-        engine_crate: "engine",
-        engine_bin: None,
-        cache_namespace: "t",
-        default_url: "u",
-        launcher_crate: "t-launcher",
-        workdir: None,
-        dir_flag: Cli::DIR_FLAG,
-        engine_flag: Cli::ENGINE_FLAG,
-        locate: Locate::DEFAULT,
-        hooks: Hooks::NONE,
-    };
-
-    /// A tool that demands more, the way mockspace demands a lint-rules crate
-    /// its custom-lint cdylibs can link against.
-    const FUSSY: Tool = Tool {
-        dir_flag: Cli::DIR_FLAG,
-        engine_flag: Cli::ENGINE_FLAG,
-        locate: Locate::DEFAULT,
-        hooks: Hooks {
-            verify_engine_dir: Some(|abs| {
-                abs.join("extra")
-                    .is_dir()
-                    .then_some(())
-                    .ok_or_else(|| format!("--engine {} has no extra/", abs.display()))
-            }),
-            ..Hooks::NONE
-        },
-        ..PLAIN
-    };
-
-    fn strings(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| (*s).to_string()).collect()
-    }
-
-    #[test]
-    fn the_flag_is_taken_out_of_the_forwarded_arguments() {
-        // The engine must never see it. It is the launcher's, like `--dir`, and
-        // an engine given an argument it does not know reports a usage error
-        // against a flag the user passed correctly.
-        let (path, rest) = take_flag(
-            strings(&["lock", "--engine", "/tmp/e", "--verbose"]),
-            "--engine",
-        );
-        assert_eq!(path, Flag::Value("/tmp/e".into()));
-        assert_eq!(rest, strings(&["lock", "--verbose"]));
-    }
-
-    #[test]
-    fn the_joined_form_is_the_same_flag() {
-        let (path, rest) = take_flag(strings(&["--engine=/tmp/e", "close"]), "--engine");
-        assert_eq!(path, Flag::Value("/tmp/e".into()));
-        assert_eq!(rest, strings(&["close"]));
-    }
-
-    #[test]
-    fn a_run_without_the_flag_is_untouched() {
-        // The control. Every assertion above would hold for a parser that
-        // dropped arguments it did not recognise.
-        let (path, rest) = take_flag(strings(&["lock", "--verbose"]), "--engine");
-        assert_eq!(path, Flag::Absent);
-        assert_eq!(rest, strings(&["lock", "--verbose"]));
-    }
-
-    #[test]
-    fn a_trailing_flag_with_no_value_takes_nothing() {
-        let (path, rest) = take_flag(strings(&["lock", "--engine"]), "--engine");
-        assert_eq!(
-            path,
-            Flag::Missing,
-            "a value was invented for a flag that had none, or its absence was \
-             reported as the flag never having been passed"
-        );
-        assert_eq!(rest, strings(&["lock"]));
-    }
-
-    #[test]
-    fn a_flag_with_another_flag_after_it_is_missing_its_value_rather_than_absent() {
-        // The distinction the caller acts on, and the one this returned as a
-        // bare `None` before: nobody passing the flag and somebody passing it
-        // with nothing after it are different facts, and only the first means
-        // "do what you do when it was not asked for".
-        let (never, rest) = take_flag(strings(&["lock", "--verbose"]), "--engine");
-        let (empty, rest2) = take_flag(strings(&["lock", "--engine", "--verbose"]), "--engine");
-        assert_eq!(never, Flag::Absent);
-        assert_eq!(empty, Flag::Missing);
-        assert_ne!(never, empty, "the two cases collapsed back into one");
-        // and in both the user's own argument survives, which is what the
-        // `-` check is for
-        assert_eq!(rest, strings(&["lock", "--verbose"]));
-        assert_eq!(rest2, strings(&["lock", "--verbose"]));
-    }
-
-    #[test]
-    fn value_collapses_missing_into_absent_and_nothing_else() {
-        // `strip_dir_flag` reads through this, deliberately: the user's
-        // directory is discarded whether they named one or not.
-        assert_eq!(Flag::Absent.value(), None);
-        assert_eq!(Flag::Missing.value(), None);
-        assert_eq!(Flag::Value("x".into()).value().as_deref(), Some("x"));
-    }
-
-    #[test]
-    fn a_directory_that_is_not_a_crate_is_refused_by_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let err = locate(&PLAIN, &dir.path().to_string_lossy()).unwrap_err();
-        assert!(err.contains("no Cargo.toml"), "{err}");
-        // and the message names the engine the tool actually builds
-        assert!(err.contains("engine"), "{err}");
-    }
-
-    #[test]
-    fn the_tools_own_demand_is_checked_after_the_manifest() {
-        // and only the tool that makes it: the same tree passes for one and
-        // fails for the other, which is what makes the hook a hook rather than
-        // a rule the crate hardcodes for everyone.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\n").unwrap();
-        let raw = dir.path().to_string_lossy().to_string();
-
-        assert!(locate(&PLAIN, &raw).is_ok());
-        let err = locate(&FUSSY, &raw).unwrap_err();
-        assert!(err.contains("no extra/"), "{err}");
-
-        std::fs::create_dir(dir.path().join("extra")).unwrap();
-        assert!(locate(&FUSSY, &raw).is_ok());
-    }
-
-    #[test]
-    fn a_real_checkout_resolves_to_an_absolute_path() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\n").unwrap();
-        let got = locate(&PLAIN, &dir.path().to_string_lossy()).unwrap();
-        assert!(got.is_absolute());
-    }
-
-    #[test]
-    fn the_sweep_keeps_fresh_builds_and_survives_a_missing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let scratch = dir.path().join("engines");
-        let fresh = scratch.join("aaaa");
-        std::fs::create_dir_all(&fresh).unwrap();
-        sweep(&scratch);
-        assert!(fresh.is_dir(), "a build made a moment ago was swept");
-
-        // A sweep of somewhere that does not exist is a normal first run.
-        sweep(&dir.path().join("nothing-here"));
-    }
-}
+#[path = "engine_tests.rs"]
+mod tests;

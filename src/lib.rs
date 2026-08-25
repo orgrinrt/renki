@@ -12,8 +12,9 @@
 //! so the shell's cwd never matters.
 //!
 //! The point is that a repo's tooling cannot drift from what the repo asked
-//! for, and that the launcher keeps itself current so nobody has to remember
-//! to. A hand-installed binary goes stale silently and nothing reports it.
+//! for. A launcher installed from a git branch also keeps itself current; one
+//! installed from a registry, a tag or a revision is pinned to what was asked
+//! for and stays there.
 //!
 //! # Using it
 //!
@@ -30,7 +31,7 @@
 //!     engine_crate:    "widget-engine",
 //!     engine_bin:      None,
 //!     cache_namespace: "widget",
-//!     default_url:     "ssh://git@github.com/o/widget.git",
+//!     default_url:     "https://github.com/o/widget.git",
 //!     launcher_crate:  "widget",
 //!     workdir:         None,
 //!     dir_flag:        Cli::DIR_FLAG,
@@ -64,6 +65,20 @@
 #[doc = include_str!("../README.md")]
 struct Readme;
 
+// The launcher's whole job ends in `CommandExt::exec`, which replaces the
+// process rather than spawning a child, and unix is the only place that call
+// exists. Without this, a non-unix build fails on `use
+// std::os::unix::process::CommandExt` in two files and says nothing about why,
+// leaving the reader to work out that the design assumes a handover rather
+// than that an import went missing.
+#[cfg(not(unix))]
+compile_error!(
+    "renki execs the engine in place of itself, which is a unix operation. \
+     There is no portable equivalent, so a port needs a different handover \
+     rather than a different import."
+);
+
+mod args;
 mod cache;
 mod discover;
 mod engine;
@@ -78,8 +93,10 @@ mod tool;
 use std::path::Path;
 use std::process::ExitCode;
 
+use crate::args::{is_the_locate_query, normalize_args};
+
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
-pub use crate::manifest::{Header, Pin, Reference};
+pub use crate::manifest::{Header, Pin, Reference, package_name};
 pub use crate::pin::Resolved;
 pub use crate::tool::{Anchor, Check, Cli, Hooks, Locate, Tool, Workdir};
 
@@ -252,59 +269,6 @@ fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
         ),
         None => format!("no {what} found in this directory or any above it, and {env} is unset"),
     }
-}
-
-/// The user-facing arguments to forward to the engine.
-///
-/// Two invocation shapes collapse to one. Invoked directly, every argument is
-/// forwarded. Invoked as a cargo external subcommand, cargo executes
-/// `cargo-<x> <x> <args...>`, so a leading `<x>` is dropped when the program
-/// name is `cargo-<x>`. That is cargo's convention rather than any one tool's,
-/// which is why it lives here.
-///
-/// A user-supplied [`Tool::dir_flag`] is stripped, in either spelling: the
-/// launcher owns it and always passes the absolute working directory.
-fn normalize_args(tool: &Tool, raw: &[String]) -> Vec<String> {
-    let prog = raw
-        .first()
-        .map(|p| {
-            Path::new(p)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string()
-        })
-        .unwrap_or_default();
-    let mut rest: Vec<String> = raw.iter().skip(1).cloned().collect();
-    if let Some(sub) = prog.strip_prefix("cargo-")
-        && rest.first().map(String::as_str) == Some(sub)
-    {
-        rest.remove(0);
-    }
-    strip_dir_flag(rest, tool.dir_flag)
-}
-
-/// Drop a user-supplied `<dir_flag> <value>` pair anywhere in the args, in
-/// either spelling. The launcher passes its own, so a second one is an
-/// ambiguity the engine should never have to resolve.
-///
-/// A `<dir_flag>` with no value after it is dropped too, and that is not the
-/// oversight it looks like beside the engine flag's refusal below. The user's
-/// directory is discarded whether they named one or not, so naming nothing
-/// changes nothing about the run.
-fn strip_dir_flag(args: Vec<String>, dir_flag: &str) -> Vec<String> {
-    engine::take_flag(args, dir_flag).1
-}
-
-/// Whether these arguments ask the launcher the locate question rather than
-/// asking the engine anything.
-///
-/// Its own function because the guard on the left is load-bearing and easy to
-/// lose: without it, a tool that wants no locate query at all has
-/// `subcommand: None`, an invocation with no arguments compares `None` against
-/// `None`, and every bare run answers the query instead of running the engine.
-fn is_the_locate_query(locate: &Locate, args: &[String]) -> bool {
-    locate.subcommand.is_some() && args.first().map(String::as_str) == locate.subcommand
 }
 
 fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
@@ -548,394 +512,5 @@ fn resolve_pin(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const T: Tool = Tool {
-        anchor: Anchor::Marker(".git"),
-        short: "mock",
-        config_file: "t.toml",
-        pin_prefix: "t",
-        engine_crate: "engine",
-        engine_bin: None,
-        cache_namespace: "t",
-        default_url: "u",
-        launcher_crate: "cargo-mock",
-        workdir: None,
-        dir_flag: Cli::DIR_FLAG,
-        engine_flag: Cli::ENGINE_FLAG,
-        locate: Locate::DEFAULT,
-        hooks: Hooks::NONE,
-    };
-
-    #[test]
-    fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
-        // The point of the check is that it runs, and a predicate tested only
-        // as a predicate stays green when nothing calls it. Every arm below is
-        // a descriptor that would otherwise run and misbehave quietly.
-        const BAD: [Tool; 8] = [
-            Tool {
-                short: "my-tool",
-                ..T
-            },
-            Tool {
-                config_file: "",
-                ..T
-            },
-            Tool {
-                pin_prefix: "",
-                ..T
-            },
-            Tool {
-                engine_crate: "",
-                ..T
-            },
-            Tool {
-                engine_bin: Some(""),
-                ..T
-            },
-            Tool {
-                cache_namespace: "",
-                ..T
-            },
-            Tool {
-                launcher_crate: "",
-                ..T
-            },
-            Tool {
-                anchor: Anchor::Marker(""),
-                ..T
-            },
-        ];
-        for bad in &BAD {
-            assert!(
-                bad.defect().is_some(),
-                "no defect reported for {:?}",
-                bad.short
-            );
-            let err = outcome(bad, &s(&["widget"])).expect_err("a broken launcher ran");
-            assert!(
-                err.contains("descriptor is not usable"),
-                "it failed for some other reason, so nothing checked the descriptor: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_sound_descriptor_is_not_refused() {
-        // The control. Without it the test above passes for a `defect` that
-        // returns `Some` unconditionally, which would refuse every launcher
-        // ever built on this.
-        assert!(T.defect().is_none(), "the fixture itself is not usable");
-        const NAMED_BIN: Tool = Tool {
-            engine_bin: Some("engine"),
-            ..T
-        };
-        assert!(NAMED_BIN.defect().is_none());
-    }
-
-    #[test]
-    fn an_empty_engine_bin_would_have_looked_for_the_directory_itself() {
-        // Why that arm is in the list, computed rather than asserted from
-        // memory: the join produces the bin directory, and a directory is never
-        // the file the cache short-circuits on, so the engine rebuilds forever.
-        const EMPTY: Tool = Tool {
-            engine_bin: Some(""),
-            ..T
-        };
-        let looked_for = Path::new("/cache/builds/k/bin").join(EMPTY.engine_bin_name());
-        assert_eq!(looked_for, Path::new("/cache/builds/k/bin/"));
-        assert_eq!(looked_for, Path::new("/cache/builds/k/bin"));
-    }
-
-    fn s(v: &[&str]) -> Vec<String> {
-        v.iter().map(|x| x.to_string()).collect()
-    }
-
-    #[test]
-    fn a_direct_invocation_forwards_everything() {
-        assert_eq!(
-            normalize_args(&T, &s(&["/usr/bin/mock", "lock", "--foo"])),
-            s(&["lock", "--foo"])
-        );
-    }
-
-    #[test]
-    fn a_cargo_subcommand_drops_the_repeated_name() {
-        // cargo runs `cargo mock x` as `cargo-mock mock x`, so the engine would
-        // otherwise be handed a subcommand it does not have.
-        assert_eq!(
-            normalize_args(
-                &T,
-                &s(&["/root/.cargo/bin/cargo-mock", "mock", "lock", "--foo"])
-            ),
-            s(&["lock", "--foo"])
-        );
-        assert_eq!(
-            normalize_args(&T, &s(&["cargo-mock", "mock"])),
-            Vec::<String>::new()
-        );
-    }
-
-    #[test]
-    fn a_repeated_name_is_dropped_only_when_it_is_the_cargo_shape() {
-        // the control, and the reason the rule is written against the program
-        // name rather than the first argument. `mock mock` is a user asking the
-        // engine for a subcommand called `mock`, and eating it would be wrong.
-        assert_eq!(
-            normalize_args(&T, &s(&["/usr/bin/mock", "mock"])),
-            s(&["mock"])
-        );
-        // and a cargo-shaped launcher whose first argument is something else
-        assert_eq!(
-            normalize_args(&T, &s(&["cargo-mock", "lock"])),
-            s(&["lock"])
-        );
-        // and the name has to match the program's own suffix
-        assert_eq!(
-            normalize_args(&T, &s(&["cargo-mock", "other", "lock"])),
-            s(&["other", "lock"])
-        );
-    }
-
-    #[test]
-    fn a_user_supplied_dir_flag_is_stripped() {
-        // the launcher owns `--dir`, and two of them would leave the engine
-        // reading whichever it parsed last.
-        assert_eq!(
-            normalize_args(
-                &T,
-                &s(&["mock", "check", "--dir", "/somewhere", "--scope", "x"])
-            ),
-            s(&["check", "--scope", "x"])
-        );
-    }
-
-    #[test]
-    fn the_joined_dir_flag_is_stripped_too() {
-        // The defect the single `take_flag` exists to prevent, and the one the
-        // two copies before it had: the separated spelling was stripped and the
-        // joined one was forwarded, so the engine saw a flag the launcher owns
-        // and the launcher's own `--dir` fought it.
-        assert_eq!(
-            normalize_args(
-                &T,
-                &s(&["mock", "check", "--dir=/somewhere", "--scope", "x"])
-            ),
-            s(&["check", "--scope", "x"])
-        );
-        // the same for the flag this tool actually spells, in case a tool picks
-        // another and only one of the two spellings is wired to it
-        const OTHER: Tool = Tool {
-            dir_flag: "--at",
-            ..T
-        };
-        assert_eq!(
-            normalize_args(&OTHER, &s(&["mock", "check", "--at=/somewhere"])),
-            s(&["check"])
-        );
-        assert_eq!(
-            normalize_args(&OTHER, &s(&["mock", "check", "--dir=/somewhere"])),
-            s(&["check", "--dir=/somewhere"]),
-            "a flag the tool did not choose was stripped anyway"
-        );
-    }
-
-    #[test]
-    fn a_dir_flag_with_no_value_is_dropped_and_takes_nothing_with_it() {
-        // Deliberate, and the counterpart to the engine flag's refusal: the
-        // user's directory is discarded whether they named one or not, so
-        // naming nothing changes nothing. What must not happen is the next
-        // argument being eaten as the value.
-        assert_eq!(
-            normalize_args(&T, &s(&["mock", "check", "--dir", "--scope", "x"])),
-            s(&["check", "--scope", "x"])
-        );
-    }
-
-    #[test]
-    fn the_locate_answer_uses_the_tools_own_key_names() {
-        // All three were hardcoded here while `Locate` documented them as "a
-        // contract with those callers", so a tool that set them got the
-        // conventional spellings anyway and its own shell helpers parsed
-        // nothing. Caught by mockspace, whose `lib/mock.sh` has parsed
-        // `mock_dir=` since before the launcher was extracted.
-        const OWN: Locate = Locate {
-            subcommand: Some("locate"),
-            root_key: "repo",
-            config_key: "manifest",
-            workdir_key: "mock_dir",
-        };
-        let d = tempfile::tempdir().unwrap();
-        let wd = d.path().join("mock");
-        std::fs::create_dir_all(&wd).unwrap();
-
-        let got = locate_answer(&OWN, d.path(), "/c/x.toml", &wd);
-        assert_eq!(
-            got,
-            format!(
-                "repo={}\nmanifest=/c/x.toml\nmock_dir={}\n",
-                d.path().display(),
-                wd.display()
-            )
-        );
-        // and the control: the conventional names are not what came out, so
-        // this cannot be passing against a formatter that ignores its argument
-        assert!(!got.contains("root="), "{got}");
-        assert!(!got.contains("config="), "{got}");
-        assert!(!got.contains("workdir="), "{got}");
-
-        // the default still answers conventionally
-        let d2 = locate_answer(&Locate::DEFAULT, d.path(), "/c/x.toml", &wd);
-        assert!(d2.starts_with("root="), "{d2}");
-        assert!(d2.contains("\nconfig=/c/x.toml\n"), "{d2}");
-        assert!(
-            d2.contains(&format!("\nworkdir={}\n", wd.display())),
-            "{d2}"
-        );
-    }
-
-    #[test]
-    fn a_missing_workdir_answers_with_the_key_and_no_value() {
-        // The line stays, so a reader can tell an absent directory from a
-        // launcher too old to answer at all.
-        let d = tempfile::tempdir().unwrap();
-        let absent = d.path().join("nothing-here");
-        let got = locate_answer(&Locate::DEFAULT, d.path(), "", &absent);
-        assert!(got.ends_with("workdir=\n"), "{got}");
-        assert!(got.contains("\nconfig=\n"), "{got}");
-    }
-
-    #[test]
-    fn an_engine_flag_with_no_path_is_refused_rather_than_running_the_pinned_engine() {
-        // Before this, the flag came back as a bare `None`, which is what an
-        // absent flag also came back as, so the run fell through to the pinned
-        // engine. That is the opposite of what was asked and it is silent: the
-        // override path prints `ENGINE OVERRIDE` and this path printed nothing.
-        //
-        // The refusal is the first thing `dispatch` does, so this reaches it
-        // without any discovery, build or exec.
-        let e = dispatch(&T, &s(&["--engine"])).unwrap_err();
-        assert!(
-            e.contains("--engine") && e.contains("none followed it"),
-            "the refusal does not name the flag or say what was missing: {e}"
-        );
-
-        let e = dispatch(&T, &s(&["--engine", "--verbose"])).unwrap_err();
-        assert!(e.contains("--engine"), "{e}");
-
-        // and it names the tool's own flag, not the conventional spelling
-        const OTHER: Tool = Tool {
-            engine_flag: "--with",
-            ..T
-        };
-        let e = dispatch(&OTHER, &s(&["--with"])).unwrap_err();
-        assert!(e.contains("--with"), "{e}");
-        assert!(!e.contains("--engine"), "{e}");
-    }
-
-    #[test]
-    fn the_locate_query_needs_a_subcommand_to_ask_it_with() {
-        // The `is_some()` half of the guard. A tool that wants no locate query
-        // has `subcommand: None`, and a bare invocation has no first argument,
-        // so without it `None == None` and every plain run answers the query
-        // instead of running the engine.
-        const NO_QUERY: Locate = Locate {
-            subcommand: None,
-            ..Locate::DEFAULT
-        };
-        assert!(
-            !is_the_locate_query(&NO_QUERY, &s(&[])),
-            "a tool with no locate subcommand answered the query on a bare run"
-        );
-        assert!(!is_the_locate_query(&NO_QUERY, &s(&["locate"])));
-        assert!(!is_the_locate_query(&NO_QUERY, &s(&["lock"])));
-
-        // and the control, so the assertions above are not passing because the
-        // predicate is a constant `false`
-        assert!(is_the_locate_query(&Locate::DEFAULT, &s(&["locate"])));
-        assert!(!is_the_locate_query(&Locate::DEFAULT, &s(&[])));
-        assert!(!is_the_locate_query(&Locate::DEFAULT, &s(&["lock"])));
-
-        // a tool that spells it differently is asked by its own name and not by
-        // the conventional one
-        const RENAMED: Locate = Locate {
-            subcommand: Some("where"),
-            ..Locate::DEFAULT
-        };
-        assert!(is_the_locate_query(&RENAMED, &s(&["where"])));
-        assert!(!is_the_locate_query(&RENAMED, &s(&["locate"])));
-    }
-
-    #[test]
-    fn the_missing_root_message_names_what_was_looked_for() {
-        assert!(no_root(&T).contains(".git"), "{}", no_root(&T));
-        assert!(no_root(&T).contains("MOCK_ROOT"), "{}", no_root(&T));
-
-        const SPAN: Tool = Tool {
-            anchor: Anchor::ConfigFile,
-            short: "widget",
-            ..T
-        };
-        // a config-anchored tool has no marker, so naming one would send the
-        // reader looking for a file that has nothing to do with it.
-        assert!(no_root(&SPAN).contains("t.toml"), "{}", no_root(&SPAN));
-        assert!(!no_root(&SPAN).contains(".git"), "{}", no_root(&SPAN));
-        assert!(no_root(&SPAN).contains("WIDGET_ROOT"), "{}", no_root(&SPAN));
-    }
-
-    #[test]
-    fn a_legacy_pin_registers_as_legacy_whatever_its_reference_is() {
-        let p = Pin {
-            url: "u".into(),
-            reference: Reference::Rev("abc".into()),
-        };
-        assert_eq!(
-            pin_form_and_value(&p, PinSource::Config),
-            (registry::PinForm::Rev, "abc".to_string())
-        );
-        assert_eq!(
-            pin_form_and_value(&p, PinSource::Legacy),
-            (registry::PinForm::Legacy, "abc".to_string())
-        );
-    }
-
-    #[test]
-    fn the_missing_pin_message_names_the_tools_own_key() {
-        let d = tempfile::tempdir().unwrap();
-        let err = resolve_pin(&T, None, d.path(), d.path()).unwrap_err();
-        assert!(err.contains("t_version"), "{err}");
-        assert!(err.contains("t.toml"), "{err}");
-    }
-
-    #[test]
-    fn the_refusal_says_whether_the_override_was_set() {
-        // an operator who has just exported the variable and got it wrong is
-        // the one person this message has to serve, and telling them it is
-        // unset sends them looking somewhere else entirely.
-        let unset = no_root_with(&T, None);
-        assert!(unset.contains("MOCK_ROOT is unset"), "{unset}");
-        assert!(unset.contains(".git"), "{unset}");
-
-        let set = no_root_with(&T, Some("/nope/xyzzy".into()));
-        assert!(set.contains("/nope/xyzzy"), "{set}");
-        assert!(set.contains("not a directory"), "{set}");
-        assert!(
-            !set.contains("is unset"),
-            "the set case still claims unset: {set}"
-        );
-    }
-
-    #[test]
-    fn the_refusal_names_the_anchor_the_tool_actually_looks_for() {
-        // a config-anchored tool never looked for `.git`, so naming it would
-        // send the reader to create one.
-        const SPAN: Tool = Tool {
-            anchor: Anchor::ConfigFile,
-            ..T
-        };
-        let m = no_root_with(&SPAN, None);
-        assert!(m.contains(T.config_file), "{m}");
-        assert!(!m.contains(".git"), "{m}");
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;
