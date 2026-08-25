@@ -36,13 +36,18 @@ pub struct Resolved {
     /// name included, tried in order until one succeeds. `--root` and `--force`
     /// are added by the cache. A version pin tries the registry first, then the
     /// matching git tag.
-    pub attempts: Vec<Vec<String>>,
+    ///
+    /// Not public. It is the build plan rather than anything a hook needs, and
+    /// leaving it reachable would mean a caller could rewrite the plan out from
+    /// under the rest of the struct.
+    pub(crate) attempts: Vec<Vec<String>>,
     /// The tag a version pin resolved to, which is the bare version unless the
     /// tool said its repository spells tags differently. Empty for every other
     /// reference kind, which carries its own ref already.
     ///
-    /// Not public: it has to agree with `attempts`, and nothing outside the
-    /// crate can keep that true. Read it through [`Resolved::git_ref`].
+    /// Not public: it has to agree with `attempts`, which is also crate-only, so
+    /// the pair moves together and no caller can leave one describing a source
+    /// the other does not. Read it through [`Resolved::git_ref`].
     pub(crate) version_tag: String,
 }
 

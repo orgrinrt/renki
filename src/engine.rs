@@ -76,6 +76,11 @@ fn scratch_dir(cache_root: &Path) -> PathBuf {
 /// Scanning stops at a bare `--`. Everything after one belongs to the engine
 /// verbatim, by the convention every command line shares, so a launcher that
 /// kept reading would take an argument the user had already said was not its.
+///
+/// A flag passed more than once takes the last one, and every occurrence is
+/// still removed, so nothing the launcher owns reaches the engine. Last wins is
+/// what a shell user expects from a repeated option, and it is the spelling
+/// that lets a wrapper script append an override after whatever it was handed.
 pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
     let joined = format!("{flag}=");
     let mut found = Flag::Absent;

@@ -285,3 +285,31 @@ fn the_sweep_keeps_fresh_builds_and_survives_a_missing_directory() {
     // A sweep of somewhere that does not exist is a normal first run.
     sweep(&dir.path().join("nothing-here"));
 }
+
+#[test]
+fn a_flag_passed_twice_takes_the_last_one_and_leaves_neither_behind() {
+    let (path, rest) = take_flag(
+        strings(&["lock", "--engine", "/tmp/first", "--engine", "/tmp/second"]),
+        "--engine",
+    );
+    assert_eq!(path, Flag::Value("/tmp/second".to_string()));
+    assert_eq!(rest, strings(&["lock"]));
+
+    // the two spellings mix, and the later one still decides
+    let (mixed, rest) = take_flag(
+        strings(&["--engine=/tmp/first", "lock", "--engine", "/tmp/second"]),
+        "--engine",
+    );
+    assert_eq!(mixed, Flag::Value("/tmp/second".to_string()));
+    assert_eq!(rest, strings(&["lock"]));
+
+    // a later occurrence with no value is a usage error rather than a fallback
+    // to the earlier one, because the last thing the user typed is what they
+    // meant and it was incomplete
+    let (last_empty, rest) = take_flag(
+        strings(&["--engine=/tmp/first", "--engine="]),
+        "--engine",
+    );
+    assert_eq!(last_empty, Flag::Missing);
+    assert!(rest.is_empty());
+}

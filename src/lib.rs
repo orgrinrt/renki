@@ -65,6 +65,19 @@
 #[doc = include_str!("../README.md")]
 struct Readme;
 
+// The launcher's whole job ends in `CommandExt::exec`, which replaces the
+// process rather than spawning a child, and unix is the only place that call
+// exists. Without this, a non-unix build fails on `use
+// std::os::unix::process::CommandExt` in two files and says nothing about why,
+// leaving the reader to work out that the design assumes a handover rather
+// than that an import went missing.
+#[cfg(not(unix))]
+compile_error!(
+    "renki execs the engine in place of itself, which is a unix operation. \
+     There is no portable equivalent, so a port needs a different handover \
+     rather than a different import."
+);
+
 mod args;
 mod cache;
 mod discover;
