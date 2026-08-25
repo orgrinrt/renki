@@ -508,3 +508,7 @@ fn resolve_pin(
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "prose_tests.rs"]
+mod prose_tests;

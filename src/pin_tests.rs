@@ -130,27 +130,31 @@ fn a_hook_that_names_no_tag_is_refused_rather_than_left_with_nothing_to_try() {
         },
         ..T
     };
+    // A url nothing else in the message could supply. The one the rest of this
+    // file uses is a single character, and every sentence here contains it, so
+    // asserting on it was asserting on the alphabet.
+    const URL: &str = "https://forge.example/aardvark-quorum.git";
+    let where_it_would_look = Pin {
+        url: URL.into(),
+        reference: Reference::Version("0.1.0".into()),
+    };
     let d = tempfile::tempdir().unwrap();
-    let err = resolve(&NO_TAGS, &pin(Reference::Version("0.1.0".into())), d.path()).unwrap_err();
+    let err = resolve(&NO_TAGS, &where_it_would_look, d.path()).unwrap_err();
     assert!(err.contains("version_tags"), "{err}");
     assert!(err.contains("0.1.0"), "{err}");
-    assert!(err.contains('u'), "the url it would have looked in: {err}");
+    assert!(err.contains(URL), "the url it would have looked in: {err}");
 
     // and the opt in is refused too, rather than limping on the registry
-    // attempt alone: a tool naming no tag has lost its fallback, which is the
-    // half of the ordering that makes it safe to have.
+    // attempt alone. What makes the registry safe to try is the tool asserting
+    // it owns the name, which `RegistryThenGitTag` is; the tags behind it are
+    // what make the mode useful before the engine has ever been published, and
+    // a tool naming none of them has asked for a pin that resolves through
+    // tags and then supplied no tag. That is a broken descriptor either way.
     const PUBLISHED_NO_TAGS: Tool = Tool {
         version_source: VersionSource::RegistryThenGitTag,
         ..NO_TAGS
     };
-    assert!(
-        resolve(
-            &PUBLISHED_NO_TAGS,
-            &pin(Reference::Version("0.1.0".into())),
-            d.path()
-        )
-        .is_err()
-    );
+    assert!(resolve(&PUBLISHED_NO_TAGS, &where_it_would_look, d.path()).is_err());
 
     // the control: the same tool with one tag resolves, so the refusal is
     // about the empty list and not about the hook being set at all.

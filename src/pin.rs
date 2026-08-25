@@ -120,7 +120,9 @@ pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resol
             // the pin. Refuse here instead, where the hook can be named.
             if tags.is_empty() {
                 return Err(format!(
-                    "the {} version pin {v} has no tag to build from: this tool's `version_tags`                      hook returned an empty list. A version pin resolves through the tags on                      {}, so the hook has to name at least one.",
+                    "the {} version pin {v} has no tag to build from: this tool's \
+                     `version_tags` hook returned an empty list. A version pin resolves \
+                     through the tags on {}, so the hook has to name at least one.",
                     tool.short, pin.url,
                 ));
             }
