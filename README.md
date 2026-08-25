@@ -8,17 +8,9 @@
 [![GitHub Issues](https://img.shields.io/github/issues/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/issues)
 ![License](https://img.shields.io/github/license/orgrinrt/renki?color=%23009689)
 
-> `renki` is the launcher half of a command-line tool whose engine each repo pins. One const describes your tool, and the pin, cache, build and exec come with it. Unix only for now.
+> `renki` is the launcher half of a command-line tool whose engine each repo pins. Reads the pin, builds that exact version once into a shared cache, and hands over.
 
 </div>
-
-## Status
-
-This crate is under active development, so the api hasn't settled and breaking
-changes should be expected. It works and two tools already run on it, but I'd
-hold off building anything load-bearing on it just yet. We'll try to document any
-migration properly when the shape does move, and `Tool::CONVENTIONS` is there so
-that at least a new field doesn't break you.
 
 ## The split, and what it buys
 
@@ -32,47 +24,58 @@ repo asked for. Everyone on the project gets the version the config names, on
 whatever machine, regardless of what they happened to install last year. And a
 launcher installed off a git branch can keep itself current, so nobody has to
 remember to, which is the part that otherwise bites: a hand-installed binary goes
-stale quietly and nothing at all tells you.
+stale quietly and nothing at all says so.
 
 `renki` is that launcher with the identity taken out. You write a `const` naming
 the config file, the pin keys, the engine crate and a few other things, and the
 rest comes with it. Anything genuinely one tool's and nobody else's goes through
-a named hook instead of into the crate, so the crate keeps being honest about
-what it actually knows.
+a named hook instead of into the crate. That keeps the crate to the things
+every launcher does, which is also what makes it possible to say what it does
+without a list of exceptions.
 
 The engine has to be a Rust crate that `cargo install` can build, since that is
 what the build path shells out to. The one other thing it owes is a flag taking
 an absolute path, because the launcher always puts that flag and the working
 directory in front of whatever the user typed, and the engine has to accept both.
-Everything else about it is yours.
+Everything else about it is the tool's own.
+
+## Status
+
+This crate is under active development, so the api hasn't settled and breaking
+changes should be expected. It works, but I'd hold off building anything
+load-bearing on it just yet. We'll try to document any migration properly when
+the shape does move, and `Tool::CONVENTIONS` is there so that at least a new
+field doesn't break you.
 
 ## Contents
 
 | Type | Purpose |
 |---|---|
 | `Tool` | The const describing one launcher: names, anchor, cache namespace, hooks. |
-| `Tool::CONVENTIONS` | A base to spread with `..`, so you only name what's actually yours. |
+| `Tool::CONVENTIONS` | A base to spread with `..`, so only the fields that actually differ get named. |
 | `Anchor` | How the repo root gets found, walking up. A marker directory, or the config file itself. |
 | `PinKeys` / `pin_keys!` | What the pin keys in a repo's config are called. The macro gives the conventional `<prefix>_version` shape. |
 | `SelfUpdate` | Whether the launcher chases its own branch, or leaves itself alone. |
 | `Hooks` | The places a tool does something no other tool needs. All optional. |
 | `Check` | The shape of the two hooks that exist to refuse something. |
 | `Workdir` | The subdirectory a config maps, for tools that have one. |
-| `Cli` / `Locate` | The conventional flag spellings, and the key names the `locate` answer uses. Both yours to rename. |
+| `Cli` / `Locate` | The conventional flag spellings, and the key names the `locate` answer uses. Both renameable. |
 | `Pin` / `Reference` | What a repo pinned: a version, a rev, a tag or a branch. |
 | `Resolved` | A pin turned into concrete build attempts, plus the git ref it landed on. |
 | `run` / `run_without_sanitizing` | The launcher itself. Your `main` is one of these and not much else. |
 
-A few smaller doors are there for when you want to do a piece yourself rather
-than take the one that comes with it: `Header` reads the config keys, `package_name`
-tells you what a `Cargo.toml` in some directory declares itself to be, and
+A few smaller doors are there for doing a piece by hand rather than taking the
+one that comes with it: `Header` reads the config keys, `package_name` reports
+what a `Cargo.toml` in some directory declares itself to be, and
 `GIT_REPO_ENV` with `sanitize_git_env` is the set of repo-location git variables
 `run` drops and the function that drops them. The rustdoc has them.
 
 ## The two anchors
 
-Finding the repo root is the one thing that genuinely differs between tools, and
-neither answer generalises to the other, so it stays a parameter.
+Finding the repo root is the one thing that genuinely differs between tools. A
+config that lives in a repository wants one answer and a config that lives
+wherever it was invoked wants another, and picking one of them would just mean
+the other tool works around it. So it stays a parameter.
 
 `Anchor::Marker(".git")` walks up to the nearest directory holding that name.
 Right when the config lives inside a repository. The config may then sit at the
@@ -177,8 +180,9 @@ rest of the file is yours and the launcher never looks at it.
 
 `widget locate` prints the repo root, the config and the working directory, one
 `key=value` per line, in the paths' own bytes. Worth reading from any shell script
-that needs to know, rather than walking the tree again, since a second
-implementation is how the two come to disagree. Split on the first `=`, and do
+that needs to know, rather than walking the tree again. Two implementations of
+the same walk stay in step right up until one of them doesn't, and then it is
+not obvious which one is wrong. Split on the first `=`, and do
 quote the values when you use them; a path with a space in it is still a path.
 The one thing the format can't carry is a newline inside a path, which is legal
 on unix and would look like two records, so that one is refused by name instead
