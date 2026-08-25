@@ -110,6 +110,8 @@ pub struct Tool {
     pub scan_skip: &'static [&'static str],
     /// The engine's source when the config names none.
     pub default_url: &'static str,
+    /// Where a `version` pin is allowed to look. See [`VersionSource`].
+    pub version_source: VersionSource,
     /// This launcher's own package name, which is how it recognises its own
     /// entry in cargo's install ledger when checking for an update.
     pub launcher_crate: &'static str,
@@ -136,6 +138,38 @@ pub struct Tool {
     pub self_update: SelfUpdate,
     /// The tool-specific parts, all optional.
     pub hooks: Hooks,
+}
+
+/// Where a `version` pin is allowed to resolve the engine from.
+///
+/// A version is the one pin form with two possible sources. A rev, a tag and a
+/// branch all name something inside the repository the pin's url points at; a
+/// version could mean that repository's tag of the same name, or it could mean
+/// a release of [`Tool::engine_crate`] on crates.io, and those are not the same
+/// artifact unless somebody has made them so.
+///
+/// The registry resolves by **name**, with nothing tying that name to the url.
+/// So a tool whose engine crate name is unclaimed, or claimed by somebody else,
+/// resolves a version pin to a stranger's code and runs it as the engine. Every
+/// tool starts out with an unclaimed name, which is why the base answers this
+/// with [`GitTag`](VersionSource::GitTag) rather than with the faster one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VersionSource {
+    /// The matching tag in the pinned repository, and nowhere else.
+    ///
+    /// The only source the config actually named, so the engine that runs is
+    /// the engine the repository asked for whatever the registry holds. Costs
+    /// a git fetch on a cold build, once per version.
+    GitTag,
+    /// The registry release first, falling back to the matching tag.
+    ///
+    /// Faster on a cold build, and correct **only when the tool owns
+    /// [`Tool::engine_crate`] on crates.io**. Choosing this is a statement that
+    /// the name is yours and will stay yours. It is not checked and cannot be:
+    /// a name is claimed or not at the moment somebody runs the launcher, not
+    /// at the moment the descriptor is written.
+    RegistryThenGitTag,
 }
 
 /// Conventional spellings for the two launcher flags.
@@ -397,7 +431,10 @@ impl Tool {
     ///
     /// The point of the base is what it does to a release. Adding a field to
     /// a struct every consumer writes as a literal breaks every consumer;
-    /// adding one that this const already answers does not.
+    /// adding one this const already answers breaks only the consumers who
+    /// wrote every field out instead of spreading the base. Spreading it is
+    /// what buys the compatibility, so the guarantee is theirs and nobody
+    /// else's.
     pub const CONVENTIONS: Tool = Tool {
         anchor: Anchor::Marker(".git"),
         short: "",
@@ -415,6 +452,7 @@ impl Tool {
         cache_retention: Duration::from_secs(30 * 24 * 60 * 60),
         scan_skip: &[".git", "target", "node_modules"],
         default_url: "",
+        version_source: VersionSource::GitTag,
         launcher_crate: "",
         workdir: None,
         dir_flag: Cli::DIR_FLAG,

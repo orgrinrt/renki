@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::hash::Fnv;
 pub(crate) use crate::manifest::{Pin, Reference};
-use crate::tool::Tool;
+use crate::tool::{Tool, VersionSource};
 
 /// A branch pin re-resolves to a concrete rev at most this often; a fresh
 /// resolution within the window is reused without a network round-trip. Kept
@@ -60,6 +60,16 @@ impl Resolved {
     /// The git ref kind and value this resolved to, for a hook building a
     /// dependency pinned to the same source. Always a concrete immutable ref:
     /// a branch has already become the rev it pointed at.
+    ///
+    /// Exact for a rev, a tag and a branch. For a **version** it is the first
+    /// tag the pin would try, which is the one that built whenever the tool
+    /// names a single tag, and that is the ordinary case. It is not exact for a
+    /// tool whose `version_tags` hook names several and whose first one does not
+    /// exist, nor under [`VersionSource::RegistryThenGitTag`] when the registry
+    /// answered, because the build reports back only a path and not which
+    /// attempt won.
+    ///
+    /// [`VersionSource::RegistryThenGitTag`]: crate::VersionSource::RegistryThenGitTag
     pub fn git_ref(&self) -> (&'static str, &str) {
         match &self.pin.reference {
             Reference::Version(_) => ("tag", self.version_tag.as_str()),
@@ -83,15 +93,19 @@ pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resol
     let (key_rev, attempts) = match &pin.reference {
         Reference::Version(v) => {
             let key = format!("v:{v}");
-            // the registry release first, which is the fast path once the
-            // engine publishes. Before that it fails on a cold build and falls
-            // through to the tags below, silently, since a failure is only
-            // reported when every attempt fails.
-            let mut attempts = vec![vec![
-                tool.engine_crate.to_string(),
-                "--version".into(),
-                v.clone(),
-            ]];
+            // The registry release first, when the tool has said its engine
+            // crate name is one it owns. `cargo install` resolves by name, and
+            // nothing here ties that name to `pin.url`, so for a tool that has
+            // not said so the registry is a different artifact wearing the same
+            // name and this list must not contain it. See `VersionSource`.
+            let mut attempts = Vec::new();
+            if matches!(tool.version_source, VersionSource::RegistryThenGitTag) {
+                attempts.push(vec![
+                    tool.engine_crate.to_string(),
+                    "--version".into(),
+                    v.clone(),
+                ]);
+            }
             // the matching git tags: work before the engine is published, and
             // for git-only consumers after. The bare version unless the tool
             // says its repository spells them differently.
@@ -99,11 +113,23 @@ pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resol
                 Some(f) => f(v),
                 None => vec![v.clone()],
             };
+            // A hook naming no tag leaves nothing to try, and under the default
+            // source there is no registry attempt to carry the pin either. The
+            // loop that builds then runs zero times and reports a failure with
+            // an empty list of what it tried, which names nothing and blames
+            // the pin. Refuse here instead, where the hook can be named.
+            if tags.is_empty() {
+                return Err(format!(
+                    "the {} version pin {v} has no tag to build from: this tool's `version_tags`                      hook returned an empty list. A version pin resolves through the tags on                      {}, so the hook has to name at least one.",
+                    tool.short, pin.url,
+                ));
+            }
             attempts.extend(tags.iter().map(|t| git(&["--tag", t])));
-            // The first is what a hook building a dependency points at: the
-            // attempts are tried in order, so it is the one most likely to be
-            // the tag that exists.
-            version_tag = tags.first().cloned().unwrap_or_else(|| v.clone());
+            // The first tag, which is the one tried first. Not necessarily the
+            // one that built: `ensure_built` walks the list and does not report
+            // back which attempt won, so a tool naming several tags gets the
+            // first here whichever one existed. See `Resolved::git_ref`.
+            version_tag = tags[0].clone();
             (key, attempts)
         }
         Reference::Rev(r) => (r.clone(), vec![git(&["--rev", r])]),
