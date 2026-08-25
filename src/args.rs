@@ -11,6 +11,7 @@
 //! invoked by, a repeated subcommand name where cargo invoked it, and the flags
 //! the launcher owns.
 
+use std::ffi::OsString;
 use std::path::Path;
 
 use crate::engine;
@@ -26,7 +27,7 @@ use crate::tool::{Locate, Tool};
 ///
 /// A user-supplied [`Tool::dir_flag`] is stripped, in either spelling: the
 /// launcher owns it and always passes the absolute working directory.
-pub(crate) fn normalize_args(tool: &Tool, raw: &[String]) -> Vec<String> {
+pub(crate) fn normalize_args(tool: &Tool, raw: &[OsString]) -> Vec<OsString> {
     let prog = raw
         .first()
         .map(|p| {
@@ -37,9 +38,9 @@ pub(crate) fn normalize_args(tool: &Tool, raw: &[String]) -> Vec<String> {
                 .to_string()
         })
         .unwrap_or_default();
-    let mut rest: Vec<String> = raw.iter().skip(1).cloned().collect();
+    let mut rest: Vec<OsString> = raw.iter().skip(1).cloned().collect();
     if let Some(sub) = prog.strip_prefix("cargo-")
-        && rest.first().map(String::as_str) == Some(sub)
+        && rest.first().and_then(|a| a.to_str()) == Some(sub)
     {
         rest.remove(0);
     }
@@ -54,7 +55,7 @@ pub(crate) fn normalize_args(tool: &Tool, raw: &[String]) -> Vec<String> {
 /// oversight it looks like beside the engine flag's refusal below. The user's
 /// directory is discarded whether they named one or not, so naming nothing
 /// changes nothing about the run.
-pub(crate) fn strip_dir_flag(args: Vec<String>, dir_flag: &str) -> Vec<String> {
+pub(crate) fn strip_dir_flag(args: Vec<OsString>, dir_flag: &str) -> Vec<OsString> {
     engine::take_flag(args, dir_flag).1
 }
 
@@ -66,8 +67,8 @@ pub(crate) fn strip_dir_flag(args: Vec<String>, dir_flag: &str) -> Vec<String> {
 /// a second `Option` inside `Locate`, where a bare run with no arguments
 /// compared one absence against the other and answered the query it was never
 /// asked; the absence lives in one place now and the comparison cannot happen.
-pub(crate) fn is_the_locate_query(locate: Option<&Locate>, args: &[String]) -> bool {
-    locate.is_some_and(|l| args.first().map(String::as_str) == Some(l.subcommand))
+pub(crate) fn is_the_locate_query(locate: Option<&Locate>, args: &[OsString]) -> bool {
+    locate.is_some_and(|l| args.first().and_then(|a| a.to_str()) == Some(l.subcommand))
 }
 
 #[cfg(test)]

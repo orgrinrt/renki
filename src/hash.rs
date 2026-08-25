@@ -34,7 +34,17 @@ impl Fnv {
     /// distinct fields cannot collide by running together (`"ab" + "c"` and
     /// `"a" + "bc"` hash differently).
     pub(crate) fn write_field(&mut self, s: &str) {
-        self.write(s.as_bytes());
+        self.write_bytes(s.as_bytes());
+    }
+
+    /// The same, for a field that is bytes rather than text.
+    ///
+    /// A path on unix is arbitrary bytes, and rendering one lossily to key a
+    /// cache maps every invalid sequence onto `U+FFFD`. Two engine paths
+    /// differing only in bytes no `str` can hold then hash the same and share a
+    /// build directory.
+    pub(crate) fn write_bytes(&mut self, b: &[u8]) {
+        self.write(b);
         self.write(&[0]);
     }
 

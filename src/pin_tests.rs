@@ -251,3 +251,73 @@ fn two_branches_on_one_url_do_not_share_a_resolution() {
         branch_resolution_path(d.path(), "v", "dev")
     );
 }
+
+#[test]
+fn the_sweep_leaves_the_resolution_the_offline_fallback_reads() {
+    // The composition, which neither half was tested against. The fallback at
+    // `resolve_branch` reads a resolution whatever its age; the sweep used to
+    // delete anything past `BRANCH_TTL`, which is one hour. So the fallback
+    // worked in the gap between going offline and the next daily collection
+    // pass, and stopped afterwards, with a built engine for that very revision
+    // still sitting in the cache.
+    let d = tempfile::tempdir().unwrap();
+    let path = branch_resolution_path(d.path(), "u", "dev");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let stale = unix_now() - BRANCH_TTL.as_secs() - 1;
+    std::fs::write(&path, format!("{stale}\nfeedface99c0ffee\n")).unwrap();
+    filetime_back(&path, BRANCH_TTL.as_secs() + 1);
+
+    sweep_branch_resolutions(d.path(), Duration::from_secs(60 * 60 * 24 * 30));
+    assert!(
+        path.exists(),
+        "the sweep removed the resolution the offline fallback exists to read"
+    );
+
+    // And it still resolves from it, since a surviving file that no longer
+    // parses would pass the assertion above and fail the user.
+    let r = resolve(&T, &pin(Reference::Branch("dev".into())), d.path()).unwrap();
+    assert_eq!(r.key_rev, "feedface99c0ffee");
+}
+
+#[test]
+fn the_sweep_still_removes_a_resolution_nothing_could_want() {
+    // The control on the test above, and the reason the sweep exists at all. A
+    // resolution older than the retention window names a build the collector
+    // has already taken, so falling back to it would name a revision that has
+    // to be rebuilt anyway, which is what going to the remote does better.
+    let d = tempfile::tempdir().unwrap();
+    let path = branch_resolution_path(d.path(), "u", "dev");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, format!("{}\nfeedface99c0ffee\n", unix_now())).unwrap();
+
+    let retention = Duration::from_secs(60 * 60 * 24 * 30);
+    filetime_back(&path, retention.as_secs() + 1);
+    sweep_branch_resolutions(d.path(), retention);
+    assert!(!path.exists(), "a resolution past retention was kept");
+}
+
+#[test]
+fn a_zero_retention_sweeps_everything_and_a_huge_one_sweeps_nothing() {
+    // The two ends, so the comparison is known to be a comparison. Without
+    // these the two tests above pass against a sweep that always keeps, or one
+    // that reads a constant.
+    let d = tempfile::tempdir().unwrap();
+    let path = branch_resolution_path(d.path(), "u", "dev");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, format!("{}\nfeedface99c0ffee\n", unix_now())).unwrap();
+    filetime_back(&path, 60);
+
+    sweep_branch_resolutions(d.path(), Duration::from_secs(60 * 60 * 24 * 3650));
+    assert!(path.exists(), "a fresh resolution went under a huge window");
+
+    sweep_branch_resolutions(d.path(), Duration::ZERO);
+    assert!(!path.exists(), "nothing went under a zero window");
+}
+
+/// Push a file's modification time back by `secs`, since the sweep reads mtime
+/// and a file written now is new whatever its contents say.
+fn filetime_back(path: &Path, secs: u64) {
+    let t = std::time::SystemTime::now() - Duration::from_secs(secs);
+    let f = std::fs::File::options().write(true).open(path).unwrap();
+    f.set_modified(t).unwrap();
+}

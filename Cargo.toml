@@ -1,6 +1,6 @@
 [package]
 name = "renki"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 publish = true
 description = "The launcher half of a command-line tool whose engine each repo pins. Reads the pinned version, builds it once into a shared cache, and runs it from any working directory."
@@ -25,7 +25,12 @@ categories = ["development-tools", "command-line-utilities"]
 # Both are checks about this repository. A test about the crate would ship, and
 # `include_ships_the_crate_tests_and_none_of_the_repository_ones` is what says
 # which kind a new one is.
-include = ["src/**/*.rs", "README.md", "LICENSE"]
+include = [
+    "src/**/*.rs",
+    "tests/the_readme_tells_the_truth_about_the_package.rs",
+    "README.md",
+    "LICENSE",
+]
 keywords = ["launcher", "pinning", "reproducible", "bootstrap", "cli"]
 
 # Kept deliberately small, because every dependency is paid at `cargo install` time by

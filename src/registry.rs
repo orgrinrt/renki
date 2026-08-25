@@ -408,7 +408,7 @@ pub(crate) fn record_and_collect(
         // once and never again kept the checkout and its target directory
         // forever, and for branch resolutions meant never.
         crate::engine::sweep(cache_root);
-        crate::pin::sweep_branch_resolutions(cache_root);
+        crate::pin::sweep_branch_resolutions(cache_root, tool.cache_retention);
     }
     reg.save(&path);
 }

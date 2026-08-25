@@ -501,7 +501,20 @@ impl Tool {
         }
         if self.cache_retention.is_zero() {
             return Some(
-                "cache_retention is zero, so every build is older than the window the                  moment it lands and the collector removes it on the next pass. The                  result is a full rebuild every run, under a message saying it                  happens once per version",
+                "cache_retention is zero, so every build is older than the window \
+                 the moment it lands and the collector removes it on the next \
+                 pass. The result is a full rebuild every run, under a message \
+                 saying it happens once per version",
+            );
+        }
+        // `as_secs`, because `Duration`'s comparison is not const and this is.
+        if self.cache_retention.as_secs() < crate::pin::BRANCH_TTL.as_secs() {
+            return Some(
+                "cache_retention is shorter than the hour a branch resolution \
+                 counts as the branch's current tip. The collector sweeps \
+                 resolutions on this window, so one would be deleted while it \
+                 is still live, and every run of a branch-pinned repo would ask \
+                 the remote again",
             );
         }
         if self.dir_flag.is_empty() || self.engine_flag.is_empty() {

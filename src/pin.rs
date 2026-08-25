@@ -20,9 +20,14 @@ use crate::tool::Tool;
 /// resolution within the window is reused without a network round-trip. Kept
 /// short so a repo tracking a branch picks up new heads within the hour,
 /// matching the launcher's own self-update cadence.
-const BRANCH_TTL: Duration = Duration::from_secs(60 * 60);
+pub(crate) const BRANCH_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// A pin resolved to concrete build attempts.
+///
+/// Produced by parsing, never by a consumer, so it is closed for the same
+/// reason [`crate::Reference`] and [`crate::Header`] are: a field added later
+/// would otherwise be a breaking change.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
     /// The pin this came from, kept so a tool's hooks can derive whatever they
@@ -207,18 +212,29 @@ pub(crate) fn ls_remote_head(url: &str, branch: &str) -> Result<String, String> 
     Ok(sha)
 }
 
-/// Delete branch resolutions past their own freshness window.
+/// Delete branch resolutions no build could still want.
 ///
 /// One file per url and branch, seventy bytes each, and nothing removed them:
-/// a repo that once tracked a branch left one behind for good. A resolution
-/// older than [`BRANCH_TTL`] is never read again, since the next run
-/// re-resolves and overwrites it, so anything the window has passed is dead by
-/// definition and a live repo's own file is rewritten before it can be caught.
+/// a repo that once tracked a branch left one behind for good.
 ///
-/// Best-effort, like every other sweep here: a resolution is re-derived from
-/// the network, so failing to remove one costs nothing and must never fail a
-/// run.
-pub(crate) fn sweep_branch_resolutions(cache_root: &Path) {
+/// **The window is the build cache's, not [`BRANCH_TTL`].** Those are two
+/// different questions and this swept on the wrong one. `BRANCH_TTL` says when
+/// a resolution stops being taken as the branch's current tip, which is an
+/// hour. It does not say when the file stops being read, because
+/// [`resolve_branch`]'s offline arm reads it at any age on purpose: a revision
+/// that was the tip yesterday is very probably still built and sitting in the
+/// cache, and running from it beats refusing to run.
+///
+/// So sweeping on `BRANCH_TTL` deleted the fallback an hour after it was
+/// written, leaving it to work only in the gap before the next collection pass.
+/// `retention` is the honest bound: past it the collector has taken the build
+/// the resolution names, so falling back to it would name a revision that has
+/// to be fetched and rebuilt anyway, which is what asking the remote already
+/// does, and does better.
+///
+/// Best-effort, like every other sweep here: failing to remove one costs a
+/// seventy-byte file and must never fail a run.
+pub(crate) fn sweep_branch_resolutions(cache_root: &Path, retention: Duration) {
     let Ok(entries) = std::fs::read_dir(cache_root.join("branch-resolutions")) else {
         return;
     };
@@ -229,7 +245,7 @@ pub(crate) fn sweep_branch_resolutions(cache_root: &Path) {
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| now.duration_since(t).ok())
-            .is_some_and(|age| age > BRANCH_TTL);
+            .is_some_and(|age| age > retention);
         if stale {
             let _ = std::fs::remove_file(entry.path());
         }

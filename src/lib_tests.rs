@@ -23,7 +23,7 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
     // The point of the check is that it runs, and a predicate tested only
     // as a predicate stays green when nothing calls it. Every arm below is
     // a descriptor that would otherwise run and misbehave quietly.
-    const BAD: [Tool; 16] = [
+    const BAD: [Tool; 17] = [
         Tool {
             short: "my-tool",
             ..T
@@ -112,13 +112,46 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
             cache_retention: std::time::Duration::ZERO,
             ..T
         },
+        // Under the hour a branch resolution counts as the branch's tip. The
+        // collector sweeps resolutions on this window, so one would go while it
+        // is still live and a branch-pinned repo would ask the remote on every
+        // single run.
+        Tool {
+            cache_retention: std::time::Duration::from_secs(59 * 60),
+            ..T
+        },
     ];
     for bad in &BAD {
+        let Some(why) = bad.defect() else {
+            panic!("no defect reported for {:?}", bad.short);
+        };
+
+        // The message is the whole point of the arm, so it is read rather than
+        // counted. One of these shipped with three runs of eighteen spaces in
+        // it, from a continued literal whose backslashes were dropped in a
+        // reflow, and `is_some()` had nothing to say about that. A `\`
+        // continuation eats the leading whitespace of the next line and a bare
+        // newline in a string does not, so the run of spaces IS the tell and it
+        // cannot occur in a message anybody wrote on purpose.
         assert!(
-            bad.defect().is_some(),
-            "no defect reported for {:?}",
+            !why.contains("  "),
+            "{:?}'s defect message carries a run of spaces, which is what a \
+             dropped line continuation looks like: {why:?}",
             bad.short
         );
+        assert!(
+            !why.contains('\n'),
+            "{:?}'s defect message carries a newline, so it breaks the one-line \
+             shape every other diagnostic here has: {why:?}",
+            bad.short
+        );
+        assert!(
+            why.len() > 20 && why.ends_with(|c: char| c.is_alphanumeric() || c == '"'),
+            "{:?}'s defect message is too short to diagnose anything, or ends \
+             mid-thought: {why:?}",
+            bad.short
+        );
+
         let err = outcome(bad, &s(&["widget"])).expect_err("a broken launcher ran");
         assert!(
             err.contains("descriptor is not usable"),
@@ -283,8 +316,9 @@ fn the_eviction_message_is_not_prefixed_with_the_tool_name() {
     assert!(doubled.starts_with(T.short));
 }
 
-fn s(v: &[&str]) -> Vec<String> {
-    v.iter().map(|x| x.to_string()).collect()
+/// Arguments, as the launcher receives them: bytes, not text.
+fn s(v: &[&str]) -> Vec<std::ffi::OsString> {
+    v.iter().map(|x| std::ffi::OsString::from(*x)).collect()
 }
 
 /// The answer as text, for a case whose paths are all valid UTF-8. Every
