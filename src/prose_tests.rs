@@ -10,39 +10,74 @@
 //! consumer reads when a pin will not resolve. So the guard is over the source
 //! rather than over one function: whatever a later diagnostic is called, it is
 //! scanned.
+//!
+//! What that covers, exactly, because a guard that reads as total and is not is
+//! worse than one nobody trusts. Every `.rs` file under `src`, at any depth.
+//! Every string literal in one, raw or not, including the case where a real
+//! newline sits inside a non-raw literal, which is the same weld with the
+//! backslash removed rather than eaten. What it does not cover: a weld shorter
+//! than [`RUN`] spaces, and prose built at runtime rather than written in a
+//! literal.
 
 use std::path::{Path, PathBuf};
 
 /// A run of spaces this long, mid-sentence inside a literal, is the tell.
 ///
-/// Eight rather than two, and the gap between them is where a sample lives. A
-/// continued line is indented to at least the literal's own column, so a
+/// A continued line is indented to at least the literal's own column, so a
 /// dropped backslash welds fifteen to twenty-five spaces into the middle of a
-/// sentence; the two observed were twenty and twenty-two. Deliberate spacing
-/// inside a literal is alignment, which runs to three or four: a comment lined
-/// up in a config sample, a parser fixture proving whitespace around `=` is
-/// tolerated. Nothing anybody writes on purpose sits between them.
+/// sentence; the two observed were twenty and twenty-two. Eight is well under
+/// that and well over the three or four an aligned comment in a config sample
+/// takes.
+///
+/// It is a threshold rather than a boundary, and both sides of it cost
+/// something. Above it, a run this long can be deliberate: an aligned TOML
+/// sample whose keys are short and whose values are far right, or a usage block
+/// laying out a flag against its description. Both are alignment after a word
+/// on the same line, which is exactly the shape being matched. Below it, a weld
+/// from a literal that started near the left margin is six spaces and walks
+/// past.
+///
+/// Eight is the number that let both observed defects be caught with no false
+/// positive in this crate. It is not a claim that nothing between four and
+/// eight is ever a weld, nor that nothing above eight is ever intended.
 const RUN: usize = 8;
 
 fn src_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-/// Every `.rs` file under `src`, sorted so a failure names the same file twice
-/// in a row rather than wandering with the directory order.
+/// Every `.rs` file under `src`, at any depth, sorted so a failure names the
+/// same file twice in a row rather than wandering with the directory order.
+///
+/// At any depth because the crate is flat today and the guard is supposed to
+/// hold when it stops being. A reader of the module comment above is told the
+/// scan is over the source; a single `read_dir` would make that false the day
+/// somebody adds a directory, silently and with the suite green.
 fn sources() -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = std::fs::read_dir(src_dir())
-        .expect("the crate's own src directory is unreadable")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+    let mut out = Vec::new();
+    collect_into(&src_dir(), &mut out);
+    out.sort();
+    out
+}
+
+fn collect_into(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = std::fs::read_dir(dir).expect("a source directory of this crate is unreadable");
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.is_dir() {
+            collect_into(&path, out);
+            continue;
+        }
+        if path.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
         // This file's own fixtures are the defect, written out, so that the
         // scan can be shown catching it. Scanning them would report the
         // control as a finding.
-        .filter(|p| p.file_name().is_some_and(|n| n != "prose_tests.rs"))
-        .collect();
-    out.sort();
-    out
+        if path.file_name().is_some_and(|n| n == "prose_tests.rs") {
+            continue;
+        }
+        out.push(path);
+    }
 }
 
 /// One offending literal: the line it sits on and the text around the run.
@@ -147,7 +182,22 @@ fn mid_sentence_runs(src: &str) -> Vec<Run> {
                     continue;
                 }
                 if b[i] == '\n' {
+                    // A real newline inside a non-raw literal is not a break in
+                    // anybody's layout. It is the same weld the dropped
+                    // backslash makes, with the backslash never written rather
+                    // than eaten, and the indentation that follows it lands
+                    // mid-sentence exactly the same way. So it is not passed
+                    // through as a newline: doing that made `runs_in_body` read
+                    // the indentation as a line's own, which is deliberate, and
+                    // walk past the larger half of the class.
+                    //
+                    // An escaped `\n` is the opposite and keeps its newline
+                    // above, because somebody typed it and what follows it is
+                    // layout.
                     source_newlines += 1;
+                    body.push('\u{0}');
+                    i += 1;
+                    continue;
                 }
                 body.push(b[i]);
                 i += 1;
@@ -251,5 +301,69 @@ fn the_scan_finds_a_dropped_continuation_and_leaves_a_deliberate_indent_alone() 
         mid_sentence_runs(commented),
         vec![],
         "the scan read a comment as a literal"
+    );
+}
+
+#[test]
+fn a_newline_written_into_a_literal_is_a_weld_and_one_that_was_escaped_is_layout() {
+    // The larger half of the class, and the half the first version walked past.
+    // A backslash that was never written leaves a real newline in the literal
+    // and the next line's indentation welded on behind it, which reads exactly
+    // as the dropped-backslash case does to whoever gets the message.
+    let welded = "fn f() { let _ = \"this tool's hook\n                     returned nothing.\"; }";
+    let found = mid_sentence_runs(welded);
+    assert_eq!(
+        found.len(),
+        1,
+        "a real newline inside a literal was read as somebody's layout: {found:?}"
+    );
+
+    // And the control, on the same axis, because a scan that flagged both would
+    // report every multi-line message in the crate. An escaped `\n` is typed on
+    // purpose and what follows it is a bullet, a sample, a column.
+    let escaped = r#"fn f() { let _ = "tried:\n                     the registry\n                     the tag"; }"#;
+    assert_eq!(
+        mid_sentence_runs(escaped),
+        vec![],
+        "an escaped newline's indentation was read as a weld"
+    );
+}
+
+#[test]
+fn the_scan_reaches_a_source_file_in_a_subdirectory() {
+    // The module comment says every `.rs` under `src`. A single `read_dir` says
+    // every `.rs` directly under it, and the difference is invisible until
+    // somebody adds a directory, at which point the guard silently stops
+    // covering a file while the suite stays green.
+    let found = sources();
+    assert!(
+        !found.is_empty(),
+        "the walk found no sources at all, so it proves nothing about depth"
+    );
+    let dir = src_dir();
+    let mut deepest = 0usize;
+    for path in &found {
+        let rel = path.strip_prefix(&dir).expect("a source outside src");
+        deepest = deepest.max(rel.components().count());
+    }
+    // The crate is flat today, so this cannot assert a nested file exists. What
+    // it can assert is that the walk descends, over a tree built to need it.
+    let tmp = tempfile::tempdir().expect("a temporary directory");
+    let nested = tmp.path().join("deep").join("deeper");
+    std::fs::create_dir_all(&nested).expect("the fixture tree");
+    std::fs::write(nested.join("buried.rs"), "fn f() {}").expect("the buried source");
+    std::fs::write(tmp.path().join("top.rs"), "fn g() {}").expect("the top source");
+    let mut walked = Vec::new();
+    collect_into(tmp.path(), &mut walked);
+    walked.sort();
+    let names: Vec<String> = walked
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["buried.rs".to_string(), "top.rs".to_string()],
+        "the walk did not descend, so the module comment's claim is false \
+         (this crate is {deepest} level(s) deep today)"
     );
 }
