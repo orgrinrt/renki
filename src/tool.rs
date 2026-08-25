@@ -659,6 +659,67 @@ impl Tool {
         {
             return Some(bad);
         }
+        if let Some(bad) = self.config_keys_collide() {
+            return Some(bad);
+        }
+        None
+    }
+
+    /// Whether two of the names read out of the repo's config are the same
+    /// string.
+    ///
+    /// Six names come out of one `toml::Table`: the five pin keys and the
+    /// working directory's. A collision between two of them is not a
+    /// duplicated line in a config, it is one line answering two questions,
+    /// and which answer wins is decided by the order the reader happens to try
+    /// them in rather than by anything a descriptor said.
+    ///
+    /// Both halves do real damage. Two pin keys the same and the more specific
+    /// form wins, so `version` spelled the same as `tag` is read as a tag,
+    /// which skips the registry attempt and the `version_tags` rewrite and
+    /// fetches a different artifact under the same config. The working
+    /// directory sharing a pin key means one string is both a path and a
+    /// revision.
+    ///
+    /// Separate from the emptiness checks above because it is a different
+    /// question: those ask whether a name can be used at all, this asks
+    /// whether two of them mean the same thing.
+    const fn config_keys_collide(&self) -> Option<&'static str> {
+        let k = &self.pin_keys;
+        // Written out rather than looped, because a `const fn` cannot build the
+        // array of `&str` this would iterate over, and the pairs are few.
+        let names: [&'static str; 6] = [
+            k.version,
+            k.rev,
+            k.tag,
+            k.branch,
+            k.git,
+            match self.workdir {
+                // A tool with no working directory has five names to compare,
+                // and repeating one of them against itself is the cheapest way
+                // to say so in a const context: it collides with nothing new.
+                Some(w) => w.key,
+                None => k.version,
+            },
+        ];
+        let mut i = 0;
+        while i < names.len() {
+            let mut j = i + 1;
+            while j < names.len() {
+                // The workdir slot standing in as `version` is the one pair
+                // that must not count, and it is exactly `i == 0, j == 5`.
+                let stand_in = i == 0 && j == 5 && self.workdir.is_none();
+                if !stand_in && const_str_eq(names[i], names[j]) {
+                    return Some(
+                        "two of the names read out of a repo's config are the same string, \
+                         so one line answers two questions and which one wins is decided by \
+                         the order they are tried in",
+                    );
+                }
+                j += 1;
+            }
+            i += 1;
+        }
         None
     }
 

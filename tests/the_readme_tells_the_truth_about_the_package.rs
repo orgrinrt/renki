@@ -99,7 +99,12 @@ fn declares_a_bin(manifest: &str) -> bool {
         .any(|l| l.trim_start().starts_with("[[bin]]"))
 }
 
-/// The value of a top-level `key = "..."` in the `[package]` table.
+/// The value of the first `key = "..."` in the manifest.
+///
+/// Not a TOML parse, and it does not know what table it is in. Every key it is
+/// asked for here is declared once, in `[package]`, above every other table, so
+/// the first match is the right one. A manifest that grew a second `description`
+/// under some other table would need a real parse instead.
 fn package_str<'a>(manifest: &'a str, key: &str) -> &'a str {
     let needle = format!("\n{key} = \"");
     let (_, rest) = manifest
@@ -118,9 +123,12 @@ fn the_manifest_does_not_sell_a_binary_either() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("no manifest");
 
+    // The word rather than the opening phrase. The point is that the sentence
+    // says what the package is, and pinning where it says it makes an ordinary
+    // rewording fail a test that has nothing to say about the rewording.
     let description = package_str(&manifest, "description");
     assert!(
-        description.starts_with("A library"),
+        description.contains("library"),
         "the description does not say this is a library, and a reader who takes \
          it for a tool reaches for `cargo install`: {description}"
     );

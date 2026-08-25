@@ -199,13 +199,6 @@ pub(crate) fn locate(tool: &Tool, raw: &OsStr) -> Result<PathBuf, String> {
     Ok(abs)
 }
 
-/// Build the engine from `source`, always, and return the binary.
-///
-/// Always, rather than when something looks stale: the reason to pass this flag
-/// is that the source changed a moment ago, and any staleness check cheap enough
-/// to run here would be a worse version of what cargo already does. cargo skips
-/// what genuinely did not change, and the target directory is kept between runs
-/// so it can.
 /// The scratch directory name for one `--engine` source path.
 ///
 /// The path's bytes, not a rendering of them. On unix a path is arbitrary bytes
@@ -220,6 +213,13 @@ pub(crate) fn scratch_key(source: &Path) -> String {
     h.hex()
 }
 
+/// Build the engine from `source`, always, and return the binary.
+///
+/// Always, rather than when something looks stale: the reason to pass this flag
+/// is that the source changed a moment ago, and any staleness check cheap enough
+/// to run here would be a worse version of what cargo already does. cargo skips
+/// what genuinely did not change, and the target directory is kept between runs
+/// so it can.
 pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<PathBuf, String> {
     let scratch = scratch_dir(cache_root);
     sweep(cache_root);

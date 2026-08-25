@@ -23,7 +23,7 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
     // The point of the check is that it runs, and a predicate tested only
     // as a predicate stays green when nothing calls it. Every arm below is
     // a descriptor that would otherwise run and misbehave quietly.
-    const BAD: [Tool; 24] = [
+    const BAD: [Tool; 30] = [
         Tool {
             short: "my-tool",
             ..T
@@ -168,11 +168,68 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
             ..T
         },
         // Not empty, and still unusable: the answer names `root` twice with
-        // two values behind it and a reader takes whichever came last.
+        // two values behind it and a reader takes whichever came last. One arm
+        // per pair rather than one for the set, because a check written as two
+        // comparisons instead of three passes every arm but one of these.
         Tool {
             locate: Some(Locate {
                 config_key: "root",
                 ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                workdir_key: "root",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        Tool {
+            locate: Some(Locate {
+                workdir_key: "config",
+                ..Locate::DEFAULT
+            }),
+            ..T
+        },
+        // The same shape one namespace over, and the one that does damage
+        // rather than confusion. Six names come out of one table, and two of
+        // them spelled the same makes one line answer two questions.
+        //
+        // `tag` spelled as `version` is the worst of them: the reader tries
+        // the more specific form first, so a version resolves as a tag, which
+        // skips the registry attempt and the `version_tags` rewrite and fetches
+        // a different artifact under a config that looks correct.
+        Tool {
+            pin_keys: PinKeys {
+                tag: "t_version",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        Tool {
+            pin_keys: PinKeys {
+                rev: "t_branch",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        // The url key sharing a pin key, which makes one string both where the
+        // engine comes from and which revision of it.
+        Tool {
+            pin_keys: PinKeys {
+                git: "t_tag",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        // Across the two namespaces rather than inside one, which is the pair
+        // a check written per-struct cannot see: the working directory and a
+        // revision are read out of the same table.
+        Tool {
+            workdir: Some(Workdir {
+                key: "t_branch",
+                root_default: "sub",
             }),
             ..T
         },
@@ -306,6 +363,19 @@ fn a_sound_descriptor_is_not_refused() {
         ..T
     };
     assert!(NAMED_BIN.defect().is_none());
+
+    // A working directory with a name of its own, because the collision check
+    // compares six names and a tool that declares no working directory has
+    // five. Something has to stand in for the sixth in a const context, and
+    // this is what says the stand-in is not itself read as a collision.
+    const WITH_WORKDIR: Tool = Tool {
+        workdir: Some(Workdir {
+            key: "t_dir",
+            root_default: "sub",
+        }),
+        ..T
+    };
+    assert!(WITH_WORKDIR.defect().is_none());
 }
 
 #[test]
