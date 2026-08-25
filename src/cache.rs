@@ -25,6 +25,7 @@
 //! `~/.config`, which is per-developer configuration rather than machine
 //! content that can be deleted and rebuilt.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -225,14 +226,14 @@ pub(crate) fn engine_command_line(
     tool: &Tool,
     workdir: &Path,
     extra: &[String],
-    args: &[String],
-) -> Vec<std::ffi::OsString> {
+    args: &[OsString],
+) -> Vec<OsString> {
     let mut argv = Vec::with_capacity(3 + extra.len() + args.len());
     argv.push(tool.short.into());
     argv.push(tool.dir_flag.into());
     argv.push(workdir.as_os_str().to_os_string());
     argv.extend(extra.iter().map(Into::into));
-    argv.extend(args.iter().map(Into::into));
+    argv.extend(args.iter().cloned());
     argv
 }
 
@@ -243,7 +244,7 @@ pub(crate) fn exec_engine(
     bin: &Path,
     workdir: &Path,
     extra: &[String],
-    args: &[String],
+    args: &[OsString],
 ) -> Result<std::convert::Infallible, String> {
     use std::os::unix::process::CommandExt;
     let argv = engine_command_line(tool, workdir, extra, args);

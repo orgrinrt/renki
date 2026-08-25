@@ -120,7 +120,7 @@ fn the_directory_leads_and_the_hooks_arguments_precede_the_users() {
     // the same flag, and a `--` the user wrote has to stay last or every
     // argument after it changes meaning.
     let extra = vec!["--dep".to_string(), "{ path = \"x\" }".to_string()];
-    let args = vec!["lock".to_string(), "--".to_string(), "-v".to_string()];
+    let args: Vec<std::ffi::OsString> = ["lock", "--", "-v"].iter().map(Into::into).collect();
     assert_eq!(
         engine_command_line(&T, Path::new("/w"), &extra, &args),
         [

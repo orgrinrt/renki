@@ -88,6 +88,7 @@ mod registry;
 mod selfupdate;
 mod tool;
 
+use std::ffi::OsString;
 use std::io::Write as _;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
@@ -155,7 +156,17 @@ pub unsafe fn run(tool: &Tool) -> ExitCode {
 /// this when the caller has already sanitised, or when it knows it is not a
 /// hook descendant.
 pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
-    let raw: Vec<String> = std::env::args().collect();
+    // `args_os`, never `args`. The latter panics on an argument that is not
+    // valid UTF-8, and on unix argv is arbitrary bytes: a latin-1 filename
+    // handed through by a script would kill the launcher with a std panic
+    // before any of its own diagnostics ran. Everything below compares against
+    // ASCII flags and forwards the rest untouched, so nothing here needs the
+    // bytes to be text, and the engine gets exactly what the shell passed.
+    //
+    // The type is the guard rather than this comment. `args()` yields `String`
+    // and `Vec<OsString>` has no `FromIterator<String>`, so putting the
+    // panicking call back here does not compile.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
     match outcome(tool, &raw) {
         Ok(()) => ExitCode::SUCCESS, // unreachable when the exec succeeds
         Err(e) => {
@@ -173,7 +184,7 @@ pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
 /// passes just as well against a launcher that got as far as looking for a
 /// repository and did not find one, which is not the same thing at all and is
 /// how the check ends up unwired without anything reporting it.
-fn outcome(tool: &Tool, raw: &[String]) -> Result<(), String> {
+fn outcome(tool: &Tool, raw: &[OsString]) -> Result<(), String> {
     // Refused before anything else, because what a bad descriptor produces is
     // silence rather than an error: a short name no shell can spell leaves both
     // overrides unsettable, and an empty engine binary name rebuilds the engine
@@ -298,7 +309,7 @@ fn eviction_exhausted(bin: &std::path::Path) -> String {
     )
 }
 
-fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
+fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
     // `--engine <path>` is the launcher's, so it comes off before anything
     // reads the arguments, the same as `--dir`.
     let (engine_override, args) = engine::take_flag(args.to_vec(), tool.engine_flag);

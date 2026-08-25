@@ -53,7 +53,13 @@ pub fn package_name(dir: &Path) -> Result<String, String> {
 /// The four forms are not interchangeable. A version is immutable and maps to
 /// both a release and a tag; a rev and a tag are immutable and git-only; a
 /// branch moves, and is the only one that has to be re-resolved.
+///
+/// Left open, for the same reason [`Anchor`](crate::Anchor) is. A fifth form is
+/// plausible, a path pin for a tool whose engine sits beside it, and a consumer
+/// that only builds one of these pays nothing for the marker. One that matches
+/// gains a wildcard arm now instead of a broken build later.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Reference {
     /// A released version.
     Version(String),
@@ -76,7 +82,12 @@ pub struct Pin {
 }
 
 /// The launcher-relevant top-level keys of a config.
+///
+/// Open for the same reason, and it costs less here: a `Header` is what
+/// [`Header::parse`] hands back, so nothing outside this crate has cause to
+/// build one field by field.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Header {
     /// The declared working directory, if the tool has one and the config
     /// names it.

@@ -501,7 +501,10 @@ impl Tool {
         }
         if self.cache_retention.is_zero() {
             return Some(
-                "cache_retention is zero, so every build is older than the window the                  moment it lands and the collector removes it on the next pass. The                  result is a full rebuild every run, under a message saying it                  happens once per version",
+                "cache_retention is zero, so every build is older than the window \
+                 the moment it lands and the collector removes it on the next \
+                 pass. The result is a full rebuild every run, under a message \
+                 saying it happens once per version",
             );
         }
         if self.dir_flag.is_empty() || self.engine_flag.is_empty() {
