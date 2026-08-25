@@ -104,8 +104,13 @@ pub struct Header {
 }
 
 impl Header {
-    /// Read the header of `text` under `tool`'s key names. Unreadable TOML and
-    /// a config with none of the keys are the same answer: an empty header.
+    /// Read the header of `text` under `tool`'s key names.
+    ///
+    /// Unreadable TOML and a config with none of the keys are the same answer
+    /// here: an empty header. A caller that would otherwise tell the user their
+    /// config names no pin asks [`Header::syntax_error`] first, because the two
+    /// want different repairs and a reader told to add a key they can see is
+    /// already there has been sent the wrong way.
     pub fn parse(tool: &Tool, text: &str) -> Header {
         let Ok(table) = text.parse::<toml::Table>() else {
             return Header::default();
@@ -147,3 +152,13 @@ impl Header {
 #[cfg(test)]
 #[path = "manifest_tests.rs"]
 mod tests;
+
+/// Why a config parsed to nothing, when it did.
+///
+/// `None` when the text is TOML, whatever it holds. Separate from
+/// [`Header::parse`] rather than folded into its return, because every caller
+/// but one wants the header and does not care, and a `Result` there would put
+/// the question in front of all of them.
+pub(crate) fn syntax_error(text: &str) -> Option<String> {
+    text.parse::<toml::Table>().err().map(|e| e.to_string())
+}

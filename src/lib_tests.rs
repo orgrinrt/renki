@@ -537,3 +537,48 @@ fn the_missing_pin_message_names_the_tools_own_key() {
     assert!(err.contains("t_version"), "{err}");
     assert!(err.contains("t.toml"), "{err}");
 }
+
+#[test]
+fn a_config_that_is_not_toml_is_reported_as_that_and_not_as_a_missing_pin() {
+    // A parse failure hands back an empty header, which is the same value a
+    // config naming no pin hands back. Told to add `t_version = "0.1.0"` to a
+    // file whose first line is already `t_version = "0.1.0"`, a reader goes
+    // looking anywhere but at the unclosed quote three lines down.
+    let d = tempfile::tempdir().unwrap();
+    let config = d.path().join("t.toml");
+    std::fs::write(&config, "t_version = \"0.1.0\"\nbroken = [1, 2\n").unwrap();
+    let located = crate::discover::Located {
+        workdir: d.path().to_path_buf(),
+        config_path: config.clone(),
+    };
+    let err = resolve_pin(&T, Some(&located), d.path(), d.path()).unwrap_err();
+    assert!(
+        err.contains("not readable as TOML"),
+        "the parse failure was reported as something else: {err}"
+    );
+    assert!(err.contains("t.toml"), "the file is not named: {err}");
+    assert!(
+        !err.contains("add one to"),
+        "still telling the reader to add a key the file already has: {err}"
+    );
+}
+
+#[test]
+fn a_config_that_is_toml_and_names_no_pin_still_says_to_add_one() {
+    // The control on the arm above. Both reach `resolve_pin` with an empty
+    // header, so an arm that fired on both would have replaced one wrong
+    // message with another.
+    let d = tempfile::tempdir().unwrap();
+    let config = d.path().join("t.toml");
+    std::fs::write(&config, "unrelated = \"value\"\n").unwrap();
+    let located = crate::discover::Located {
+        workdir: d.path().to_path_buf(),
+        config_path: config.clone(),
+    };
+    let err = resolve_pin(&T, Some(&located), d.path(), d.path()).unwrap_err();
+    assert!(err.contains("t_version"), "{err}");
+    assert!(
+        !err.contains("not readable as TOML"),
+        "valid TOML reported as a parse failure: {err}"
+    );
+}

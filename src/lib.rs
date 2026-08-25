@@ -49,15 +49,14 @@
 //! Everything that is one tool's and no other's goes through [`Hooks`] rather
 //! than into this crate.
 
-// The crate's whole selling point is a small honest surface, and both of these
-// guard exactly that claim. `unreachable_pub` caught thirty-one items marked
-// public inside private modules, and one genuinely public type hiding in that
-// noise that the crate root had forgotten to re-export.
-#![warn(unreachable_pub, missing_docs)]
-// A dead link renders as plain text on the page a stranger lands on, and a
-// published version's documentation cannot be replaced. Warned about, it
-// ships; denied, it does not build.
-#![deny(rustdoc::broken_intra_doc_links)]
+// The crate's whole selling point is a small honest surface, and all three of
+// these guard exactly that claim, so all three refuse rather than complain.
+// `unreachable_pub` caught thirty-one items marked public inside private
+// modules, and one genuinely public type hiding in that noise that the crate
+// root had forgotten to re-export. An undocumented public item and a dead
+// intra-doc link both land on the page a stranger reads, and a published
+// version's documentation cannot be replaced.
+#![deny(unreachable_pub, missing_docs, rustdoc::broken_intra_doc_links)]
 
 // The README's `rust` block is compiled as a doctest. Only that one: the shell
 // and toml blocks are prose as far as this is concerned, and changing the fence
@@ -502,6 +501,19 @@ fn resolve_pin(
     let where_to = located
         .map(|l| l.config_path.clone())
         .unwrap_or_else(|| root.join(tool.config_file));
+    // A config that is not TOML parses to an empty header, which reaches here
+    // looking exactly like a config that names no pin. The repair for the two
+    // is not the same, and telling somebody to add a key that is sitting in
+    // front of them sends them looking in the wrong place.
+    if let Some(l) = located
+        && let Ok(s) = std::fs::read_to_string(&l.config_path)
+        && let Some(why) = crate::manifest::syntax_error(&s)
+    {
+        return Err(format!(
+            "{} is not readable as TOML, so no pin could be read from it:\n\n{why}\n",
+            l.config_path.display()
+        ));
+    }
     Err(format!(
         "no {} pin found. add one to {}:\n\n    {} = \"0.1.0\"   # the released engine \
          version\n",

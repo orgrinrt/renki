@@ -317,11 +317,10 @@ fn a_flag_passed_twice_takes_the_last_one_and_leaves_neither_behind() {
 fn the_scratch_key_is_the_path_bytes_and_not_a_lossy_rendering() {
     use std::os::unix::ffi::OsStrExt;
 
-    let key = |bytes: &[u8]| {
-        let mut h = crate::hash::Fnv::new();
-        h.write_bytes(std::ffi::OsStr::from_bytes(bytes).as_encoded_bytes());
-        h.hex()
-    };
+    // The build's own function, not a second copy of it. A copy here goes on
+    // agreeing with itself after the build stops hashing this way.
+    let key =
+        |bytes: &[u8]| super::scratch_key(std::path::Path::new(std::ffi::OsStr::from_bytes(bytes)));
 
     // Two distinct invalid sequences. `to_string_lossy` renders both as the
     // same single replacement character, so a lossy key cannot tell them apart.

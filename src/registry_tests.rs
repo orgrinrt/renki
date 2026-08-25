@@ -23,7 +23,42 @@ const KEY: &str = "00112233445566aa";
 /// asserts about the disk and measures nothing.
 const STALE_KEY: &str = "0123456789abcdef";
 const CURRENT_KEY: &str = "fedcba9876543210";
-const OTHER_KEY: &str = "00112233445566aa";
+/// The key a sweep is running under when the row being swept is somebody
+/// else's. It carried [`KEY`]'s value, which was harmless and said nothing:
+/// the whole of what the name claims is that it is not [`STALE_KEY`], and a
+/// constant equal to the one it is contrasted with makes the sweep that reads
+/// it prove nothing. `the_test_keys_are_distinct` is what holds it apart now.
+const OTHER_KEY: &str = "aabbccdd00112233";
+
+#[test]
+fn the_test_keys_are_distinct() {
+    // The control on every sweep below. `gc` decides by comparing the key it
+    // is running under against the key on each row, so two of these being the
+    // same string turns a test about what survives into a test about nothing,
+    // and it does it silently: the assertions still pass.
+    let keys = [KEY, STALE_KEY, CURRENT_KEY, OTHER_KEY];
+    for (i, a) in keys.iter().enumerate() {
+        for b in &keys[i + 1..] {
+            assert_ne!(a, b, "two of the test keys are the same string");
+        }
+    }
+}
+
+#[test]
+fn a_registry_carrying_a_key_this_version_does_not_know_still_loads() {
+    // The claim the schema tag's removal rests on. A future version that needs
+    // to tell two shapes apart writes one, and a file it wrote must still be
+    // readable here rather than being silently discarded as unparseable, which
+    // is what `load` does with an error.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.toml");
+    fs::write(&path, "schema = 7\nlast_gc = 41\nsomething_else = \"x\"\n").unwrap();
+    let r = Registry::load(&path);
+    assert_eq!(
+        r.last_gc, 41,
+        "a key this version does not know threw the file away"
+    );
+}
 
 fn touch_build_dir(cache_root: &Path, key: &str) {
     let d = cache_root.join("builds").join(key).join("bin");
