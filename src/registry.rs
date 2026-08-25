@@ -30,17 +30,12 @@
 //! later would leave every row written before that day incomplete.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 /// GC runs at most this often; a `last_gc` within the window skips the pass.
 const GC_INTERVAL_SECS: u64 = 24 * 60 * 60;
-
-/// A build whose consumers have all been idle at least this long is evicted
-/// even though they still nominally pin it. An untouched repo's engine is cheap
-/// to rebuild if the repo is ever revisited, and holding it forever means a
-/// cache that only grows.
-const LRU_STALE_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// Pin form as recorded for a consumer. `Legacy` means the pin came from the
 /// tool's [`legacy_pin`](crate::Hooks::legacy_pin) hook rather than from a pin
@@ -101,8 +96,33 @@ pub(crate) struct Consumer {
     pub pin_value: String,
     /// The build key this consumer last resolved to.
     pub key: String,
+    /// Whether [`Consumer::root`] is the repo root exactly, rather than its
+    /// lossy rendering.
+    ///
+    /// A path is bytes and this file is TOML, which is text, so a root that is
+    /// not valid UTF-8 can only be written here with the bytes replaced. The
+    /// replacement names no file, so `is_dir` on it is false, so the row was
+    /// dropped on every collection pass, so that repo's build became an orphan
+    /// and was deleted while still pinned, and the repo paid a full cold
+    /// rebuild every time some other repo happened to collect. Forever, with
+    /// the launcher printing "once per version" each time.
+    ///
+    /// So the flag is read as "the not-a-directory rule may be applied to this
+    /// row". Where it cannot, the row still ages out through the retention
+    /// window like every other, which is the right answer anyway: a repo that
+    /// is still there keeps moving `last_seen`.
+    ///
+    /// Defaults true, because every row written before the flag existed was
+    /// written from a path that round-tripped.
+    #[serde(default = "yes")]
+    pub root_exact: bool,
     /// Unix seconds of the last run in this repo.
     pub last_seen: u64,
+}
+
+/// The default for [`Consumer::root_exact`] on a row that predates it.
+fn yes() -> bool {
+    true
 }
 
 /// One cached engine build.
@@ -155,20 +175,20 @@ impl Registry {
 
     /// Upsert the current repo as a consumer (keyed by `root`) and the build it
     /// resolved to (keyed by `key`), stamping `now`.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record(
-        &mut self,
-        root: &str,
-        name: &str,
-        workdir: &str,
-        engine_url: &str,
-        form: PinForm,
-        pin_value: &str,
-        key: &str,
-        key_rev: &str,
-        toolchain: &str,
-        now: u64,
-    ) {
+    pub(crate) fn record(&mut self, r: &Recording<'_>) {
+        let Recording {
+            root,
+            root_exact,
+            name,
+            workdir,
+            engine_url,
+            form,
+            pin_value,
+            key,
+            key_rev,
+            toolchain,
+            now,
+        } = *r;
         match self.consumers.iter_mut().find(|c| c.root == root) {
             Some(c) => {
                 c.name = name.to_string();
@@ -177,6 +197,7 @@ impl Registry {
                 c.pin_form = form.as_str().to_string();
                 c.pin_value = pin_value.to_string();
                 c.key = key.to_string();
+                c.root_exact = root_exact;
                 c.last_seen = now;
             }
             None => self.consumers.push(Consumer {
@@ -187,6 +208,7 @@ impl Registry {
                 pin_form: form.as_str().to_string(),
                 pin_value: pin_value.to_string(),
                 key: key.to_string(),
+                root_exact,
                 last_seen: now,
             }),
         }
@@ -211,13 +233,25 @@ impl Registry {
     /// Garbage-collect the build cache. A build is removed when no live consumer
     /// resolves to its key: either no consumer pins it at all (orphan, e.g. a
     /// repo re-pinned to a newer engine), or every consumer that pins it has
-    /// been idle past the LRU window. The `protect` key (the build resolving
+    /// been idle past `retention`. The `protect` key (the build resolving
     /// this very invocation) is never removed. Consumers whose repo root no
     /// longer exists on disk are dropped first, so a deleted repo orphans its
-    /// build. Removes the on-disk build dirs and the pruned `[[build]]` rows;
+    /// build; a consumer whose root could not be written exactly is exempt from
+    /// that rule and ages out through `retention` instead. See
+    /// [`Consumer::root_exact`]. Removes the on-disk build dirs and the pruned `[[build]]` rows;
     /// returns the removed keys for logging.
-    pub(crate) fn gc(&mut self, cache_root: &Path, protect: &str, now: u64) -> Vec<String> {
-        self.consumers.retain(|c| Path::new(&c.root).is_dir());
+    pub(crate) fn gc(
+        &mut self,
+        cache_root: &Path,
+        protect: &str,
+        retention: Duration,
+        now: u64,
+    ) -> Vec<String> {
+        // A row whose root did not survive being written as text cannot be
+        // checked against the disk: the rendering names no file. Keeping it is
+        // the safe direction, since the retention window still ages it out.
+        self.consumers
+            .retain(|c| !c.root_exact || Path::new(&c.root).is_dir());
         self.last_gc = now;
 
         let builds_dir = cache_root.join("builds");
@@ -230,7 +264,7 @@ impl Registry {
             let pinners: Vec<&Consumer> = consumers.iter().filter(|c| c.key == b.key).collect();
             let live = pinners
                 .iter()
-                .any(|c| now.saturating_sub(c.last_seen) < LRU_STALE_SECS);
+                .any(|c| now.saturating_sub(c.last_seen) < retention.as_secs());
             if live {
                 return true;
             }
@@ -250,6 +284,37 @@ impl Registry {
         });
         removed
     }
+}
+
+/// One run, as the registry records it.
+///
+/// A struct rather than eleven parameters, ten of which are strings. Nothing
+/// about `record(root, name, workdir, url, ...)` tells a caller which of them
+/// it is looking at, so a transposition compiles and produces a registry whose
+/// rows are quietly wrong; named fields make the same mistake a build error.
+pub(crate) struct Recording<'a> {
+    /// The absolute repo root, as text.
+    pub root: &'a str,
+    /// Whether that text is the root exactly. See [`Consumer::root_exact`].
+    pub root_exact: bool,
+    /// The repo name.
+    pub name: &'a str,
+    /// The absolute working directory the engine runs against, as text.
+    pub workdir: &'a str,
+    /// The engine source this repo builds from.
+    pub engine_url: &'a str,
+    /// Which of the pin forms the repo used.
+    pub form: PinForm,
+    /// The pin value, empty for a legacy pin.
+    pub pin_value: &'a str,
+    /// The build key the run resolved to.
+    pub key: &'a str,
+    /// The revision that key was computed from.
+    pub key_rev: &'a str,
+    /// The toolchain identity folded into the key.
+    pub toolchain: &'a str,
+    /// Unix seconds of this run.
+    pub now: u64,
 }
 
 /// Whether `key` is a key this crate wrote: exactly the 16 lowercase hex

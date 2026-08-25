@@ -5,23 +5,17 @@
 
 use super::*;
 use crate::pin::{Pin, Reference};
-use crate::tool::{Anchor, Cli, Hooks, Locate};
+use crate::tool::Tool;
 
 const T: Tool = Tool {
-    anchor: Anchor::Marker(".git"),
     short: "t",
     config_file: "t.toml",
-    pin_prefix: "t",
+    pin_keys: crate::pin_keys!("t"),
     engine_crate: "engine",
-    engine_bin: None,
     cache_namespace: "tns",
     default_url: "u",
     launcher_crate: "t-launcher",
-    workdir: None,
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
-    hooks: Hooks::NONE,
+    ..Tool::CONVENTIONS
 };
 
 #[test]
@@ -157,14 +151,51 @@ fn a_working_directory_that_is_not_utf8_survives_the_handover() {
 
 #[test]
 fn the_cache_root_prefers_xdg_and_falls_back_to_home() {
-    let r = cache_root_from(&T, Some("/x/cache".into()), Some("/home/u".into())).unwrap();
+    let r = cache_root_from(&T, None, Some("/x/cache".into()), Some("/home/u".into())).unwrap();
     assert_eq!(r, Path::new("/x/cache/tns"));
 
-    let r = cache_root_from(&T, None, Some("/home/u".into())).unwrap();
+    let r = cache_root_from(&T, None, None, Some("/home/u".into())).unwrap();
     assert_eq!(r, Path::new("/home/u/.cache/tns"));
     // an empty XDG is not a setting
-    let r = cache_root_from(&T, Some("".into()), Some("/home/u".into())).unwrap();
+    let r = cache_root_from(&T, None, Some("".into()), Some("/home/u".into())).unwrap();
     assert_eq!(r, Path::new("/home/u/.cache/tns"));
+}
+
+#[test]
+fn the_tools_own_cache_variable_wins_and_is_the_whole_path() {
+    // The asymmetry this closes: a user could say which repository to work
+    // on, through `<SHORT>_ROOT`, and could not say where several hundred
+    // megabytes of built engines were going to land. `XDG_CACHE_HOME` moves
+    // every other program's cache with it, which is a different request.
+    let r = cache_root_from(
+        &T,
+        Some("/mnt/big".into()),
+        Some("/x/cache".into()),
+        Some("/home/u".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        r,
+        Path::new("/mnt/big"),
+        "the namespace was appended to a path that already names this tool's cache"
+    );
+
+    // it wins over the fallback too, not only over XDG
+    let r = cache_root_from(&T, Some("/mnt/big".into()), None, Some("/home/u".into())).unwrap();
+    assert_eq!(r, Path::new("/mnt/big"));
+
+    // an empty value is not a setting, the same as XDG's
+    let r = cache_root_from(&T, Some("".into()), None, Some("/home/u".into())).unwrap();
+    assert_eq!(r, Path::new("/home/u/.cache/tns"));
+
+    // and the name is the tool's own, so two launchers do not read each
+    // other's variable
+    assert_eq!(T.cache_env(), "T_CACHE");
+    const OTHER: Tool = Tool {
+        short: "widget",
+        ..T
+    };
+    assert_eq!(OTHER.cache_env(), "WIDGET_CACHE");
 }
 
 #[test]
@@ -176,14 +207,14 @@ fn two_tools_never_share_a_cache_root() {
         cache_namespace: "another",
         ..T
     };
-    let a = cache_root_from(&T, Some("/x".into()), None).unwrap();
-    let b = cache_root_from(&OTHER, Some("/x".into()), None).unwrap();
+    let a = cache_root_from(&T, None, Some("/x".into()), None).unwrap();
+    let b = cache_root_from(&OTHER, None, Some("/x".into()), None).unwrap();
     assert_ne!(a, b);
 }
 
 #[test]
 fn no_home_and_no_xdg_is_an_error_rather_than_a_guess() {
-    assert!(cache_root_from(&T, None, None).is_err());
+    assert!(cache_root_from(&T, None, None, None).is_err());
 }
 
 #[test]

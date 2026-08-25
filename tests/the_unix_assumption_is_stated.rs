@@ -26,22 +26,27 @@ fn target_is_installed() -> bool {
     Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == NON_UNIX))
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l.trim() == NON_UNIX)
+        })
         .unwrap_or(false)
 }
 
 #[test]
 fn a_non_unix_build_explains_itself() {
-    if !target_is_installed() {
-        // Not a pass. There is no skip state to report, so this is the record:
-        // the check did not run on this machine, and `rustup target add
-        // wasm32-unknown-unknown` is what makes it run.
-        eprintln!(
-            "NOT CHECKED: {NON_UNIX} is not installed, so the non-unix guard was not exercised. \
-             `rustup target add {NON_UNIX}` to run it."
-        );
-        return;
-    }
+    assert!(
+        target_is_installed(),
+        "the non-unix guard was not exercised, because {NON_UNIX} is not installed.\n\
+         `rustup target add {NON_UNIX}` and run this again.\n\
+         \n\
+         This used to print the same sentence and return, which the harness \
+         reported as `ok`. cargo swallows the output of a passing test, so on \
+         every machine without that target the line read green having checked \
+         nothing, and the machine most likely to have broken this guard is a \
+         fresh one. A check that did not run is not a check that passed."
+    );
 
     let out = Command::new(env!("CARGO"))
         .args(["check", "--target", NON_UNIX])

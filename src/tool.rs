@@ -14,6 +14,7 @@
 //! binary is a `static` and a `main` that hands it over.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::pin::{Pin, Resolved};
 
@@ -22,7 +23,15 @@ use crate::pin::{Pin, Resolved};
 /// A parameter rather than a `.git` constant, because the two shapes do not
 /// generalise to each other: one stops at the first repository and the other
 /// must walk past it.
+///
+/// That argument says the two are irreducible. It does not say there is no
+/// third, and a launcher of this kind plausibly wants one: an anchor that is
+/// only the environment override, for a tool that refuses to guess. So the
+/// enum is left open. Nothing in the public surface hands a consumer an
+/// [`Anchor`] to match on, so the marker costs a consumer nothing today and
+/// makes a third shape a minor release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Anchor {
     /// The nearest ancestor holding an entry of this name, `.git` in practice.
     ///
@@ -31,6 +40,11 @@ pub enum Anchor {
     /// for the config then covers the root and its immediate subdirectories,
     /// and more than one config found there is an error rather than a
     /// precedence question.
+    ///
+    /// One directory below is the whole depth. A config at
+    /// `tools/widget/widget.toml` is not found, and [`Anchor::ConfigFile`] is
+    /// the anchor for that shape. Which subdirectories are looked in at all is
+    /// [`Tool::scan_skip`].
     Marker(&'static str),
     /// The nearest ancestor holding the config file itself.
     ///
@@ -56,15 +70,14 @@ pub struct Tool {
     pub anchor: Anchor,
     /// The short name this launcher answers to, used in its own diagnostics
     /// (`widget: ...`) and, uppercased, as the prefix of the environment
-    /// variables it reads: `WIDGET_ROOT` overrides discovery, and
-    /// `WIDGET_NO_SELF_UPDATE` turns the update check off.
+    /// variables it reads: `WIDGET_ROOT` overrides discovery, `WIDGET_CACHE`
+    /// overrides where the built engines go, and `WIDGET_NO_SELF_UPDATE` turns
+    /// the update check off.
     pub short: &'static str,
     /// The one config file a repo carries, e.g. `widget.toml`.
     pub config_file: &'static str,
-    /// The prefix of the pin keys inside that config. A prefix of `widget`
-    /// reads `widget_version`, `widget_rev`, `widget_branch`, `widget_tag` and
-    /// `widget_git`.
-    pub pin_prefix: &'static str,
+    /// What the pin keys inside that config are called. See [`PinKeys`].
+    pub pin_keys: PinKeys,
     /// The engine's package name, which is what `cargo install` is asked for.
     pub engine_crate: &'static str,
     /// The binary that package installs, when it is not named after the
@@ -75,7 +88,26 @@ pub struct Tool {
     pub engine_bin: Option<&'static str>,
     /// The directory under `$XDG_CACHE_HOME` (or `~/.cache`) this launcher
     /// owns. Distinct per tool so two tools never share a build cache.
+    ///
+    /// `<SHORT>_CACHE` overrides the whole path for a user who needs the
+    /// builds somewhere else.
     pub cache_namespace: &'static str,
+    /// How long a cached engine survives after the last run that wanted it.
+    ///
+    /// A build nothing has asked for in this long is collected. The number
+    /// decides how much of a user's disk the tool holds, and it is a very
+    /// different number for a tool used daily than for one used twice a year,
+    /// which is why it is the tool's rather than the launcher's.
+    pub cache_retention: Duration,
+    /// Directory names the config scan never descends into, under
+    /// [`Anchor::Marker`].
+    ///
+    /// [`Tool::CONVENTIONS`] carries the three that never hold a config under
+    /// any tool. A repository with a vendored tree, a virtual environment or a
+    /// build output directory adds its own, which is worth doing: a stray file
+    /// with this tool's config name anywhere in scope is a hard error that
+    /// blocks every run, not a scan result.
+    pub scan_skip: &'static [&'static str],
     /// The engine's source when the config names none.
     pub default_url: &'static str,
     /// This launcher's own package name, which is how it recognises its own
@@ -97,8 +129,11 @@ pub struct Tool {
     /// [`Cli::ENGINE_FLAG`] is the conventional `--engine`.
     pub engine_flag: &'static str,
     /// The query the launcher answers itself, and what it calls the parts of
-    /// its answer. See [`Locate`].
-    pub locate: Locate,
+    /// its answer. `None` for a tool that answers no such query and forwards
+    /// every subcommand to the engine. See [`Locate`].
+    pub locate: Option<Locate>,
+    /// Whether this launcher keeps itself current. See [`SelfUpdate`].
+    pub self_update: SelfUpdate,
     /// The tool-specific parts, all optional.
     pub hooks: Hooks,
 }
@@ -127,9 +162,8 @@ impl Cli {
 /// parse, and nothing downstream has to change on the same day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Locate {
-    /// The subcommand that triggers the query. `None` for a tool that wants no
-    /// such query, which then forwards every subcommand to the engine.
-    pub subcommand: Option<&'static str>,
+    /// The subcommand that triggers the query.
+    pub subcommand: &'static str,
     /// What the answer calls the repo root.
     pub root_key: &'static str,
     /// What the answer calls the config file's path. Empty in the answer when
@@ -145,11 +179,100 @@ impl Locate {
     /// The conventional spelling: a `locate` subcommand answering under `root`,
     /// `config` and `workdir`.
     pub const DEFAULT: Locate = Locate {
-        subcommand: Some("locate"),
+        subcommand: "locate",
         root_key: "root",
         config_key: "config",
         workdir_key: "workdir",
     };
+}
+
+/// What the pin keys inside a repo's config are called.
+///
+/// Full names rather than a prefix, on the same argument [`Locate`] is
+/// parameterised by: a tool moving onto this crate keeps whatever its existing
+/// configs already spell, and no repository has to be edited on the day it
+/// migrates. [`PinKeys::prefixed`] is the conventional shape and is what a new
+/// tool writes.
+///
+/// Only top-level keys are read, so a name here is a top-level name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PinKeys {
+    /// A released version, resolved against the registry first and a tag
+    /// second.
+    pub version: &'static str,
+    /// An exact commit.
+    pub rev: &'static str,
+    /// A tag.
+    pub tag: &'static str,
+    /// A moving branch head.
+    pub branch: &'static str,
+    /// Where the engine's source is, overriding
+    /// [`Tool::default_url`](crate::Tool::default_url).
+    pub git: &'static str,
+}
+
+impl PinKeys {
+    /// The first empty name, or `None`.
+    const fn defect(&self) -> Option<&'static str> {
+        if self.version.is_empty()
+            || self.rev.is_empty()
+            || self.tag.is_empty()
+            || self.branch.is_empty()
+            || self.git.is_empty()
+        {
+            return Some("a pin key is empty, so that pin form can never be read");
+        }
+        None
+    }
+}
+
+/// The conventional [`PinKeys`]: `<prefix>_version`, `_rev`, `_tag`, `_branch`
+/// and `_git`.
+///
+/// ```
+/// # use renki::{pin_keys, PinKeys};
+/// const KEYS: PinKeys = pin_keys!("widget");
+/// assert_eq!(KEYS.version, "widget_version");
+/// assert_eq!(KEYS.git, "widget_git");
+/// ```
+///
+/// A macro rather than a `const fn`, because joining two strings into a
+/// `&'static str` is something only the expansion can do: a const function
+/// would have to return a value it has nowhere to store. The prefix is
+/// therefore a literal, which is what a descriptor writes anyway.
+#[macro_export]
+macro_rules! pin_keys {
+    ($prefix:literal) => {
+        $crate::PinKeys {
+            version: ::core::concat!($prefix, "_version"),
+            rev: ::core::concat!($prefix, "_rev"),
+            tag: ::core::concat!($prefix, "_tag"),
+            branch: ::core::concat!($prefix, "_branch"),
+            git: ::core::concat!($prefix, "_git"),
+        }
+    };
+}
+
+/// Whether a launcher keeps itself current.
+///
+/// A launcher installed from a moving branch goes stale silently, and chasing
+/// it is what a tool distributed that way wants. A tool packaged by somebody
+/// else, installed into a prefix it does not own, or run where a program
+/// reinstalling itself is unwelcome, wants the opposite, and that is the tool
+/// author's call rather than something every one of its users has to turn off
+/// by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SelfUpdate {
+    /// Never. The launcher is whatever was installed.
+    Never,
+    /// Reinstall when the installed launcher came from a branch and that
+    /// branch has moved, at most once an hour. A user turns it off for
+    /// themselves with `<SHORT>_NO_SELF_UPDATE`.
+    ///
+    /// A version or tag install is left alone either way: it names an
+    /// immutable revision, so there is nothing to chase.
+    ChaseTheBranch,
 }
 
 /// A check a tool runs against a directory, refusing with a message a reader
@@ -163,6 +286,7 @@ pub type Check = fn(&Path) -> Result<(), String>;
 /// sits. At the repo root it is `root_default` (a subdirectory beside it); in
 /// a subdirectory the default is that subdirectory itself, since a config
 /// living inside the working directory is already pointing at it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Workdir {
     /// The config key naming it, e.g. `widget_dir`.
     pub key: &'static str,
@@ -245,6 +369,50 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 }
 
 impl Tool {
+    /// Everything a launcher can be given a conventional answer for, and an
+    /// empty string everywhere it cannot.
+    ///
+    /// Written as `..Tool::CONVENTIONS`, which reads as taking the
+    /// conventions rather than as forgetting the fields. The empty names are
+    /// safe to ship as a base because [`Tool::defect`] refuses every one of
+    /// them, and it is const, so a descriptor that leaves one unset does not
+    /// build:
+    ///
+    /// ```compile_fail
+    /// # use renki::Tool;
+    /// const TOOL: Tool = Tool { short: "widget", ..Tool::CONVENTIONS };
+    /// const _: () = assert!(TOOL.defect().is_none());
+    /// ```
+    ///
+    /// The point of the base is what it does to a release. Adding a field to
+    /// a struct every consumer writes as a literal breaks every consumer;
+    /// adding one that this const already answers does not.
+    pub const CONVENTIONS: Tool = Tool {
+        anchor: Anchor::Marker(".git"),
+        short: "",
+        config_file: "",
+        pin_keys: PinKeys {
+            version: "",
+            rev: "",
+            tag: "",
+            branch: "",
+            git: "",
+        },
+        engine_crate: "",
+        engine_bin: None,
+        cache_namespace: "",
+        cache_retention: Duration::from_secs(30 * 24 * 60 * 60),
+        scan_skip: &[".git", "target", "node_modules"],
+        default_url: "",
+        launcher_crate: "",
+        workdir: None,
+        dir_flag: Cli::DIR_FLAG,
+        engine_flag: Cli::ENGINE_FLAG,
+        locate: Some(Locate::DEFAULT),
+        self_update: SelfUpdate::ChaseTheBranch,
+        hooks: Hooks::NONE,
+    };
+
     /// The file name of the binary the engine's build produces.
     #[must_use]
     pub const fn engine_bin_name(&self) -> &'static str {
@@ -266,14 +434,11 @@ impl Tool {
     /// Const, so a tool can settle it at build time:
     ///
     /// ```
-    /// # use renki::{Anchor, Cli, Hooks, Locate, Tool};
+    /// # use renki::{pin_keys, Tool};
     /// # const TOOL: Tool = Tool {
-    /// #     anchor: Anchor::Marker(".git"), short: "widget",
-    /// #     config_file: "w.toml", pin_prefix: "w",
-    /// #     engine_crate: "w-engine", engine_bin: None, cache_namespace: "w",
-    /// #     default_url: "u", launcher_crate: "w", workdir: None,
-    /// #     dir_flag: Cli::DIR_FLAG, engine_flag: Cli::ENGINE_FLAG,
-    /// #     locate: Locate::DEFAULT, hooks: Hooks::NONE,
+    /// #     short: "widget", config_file: "w.toml", pin_keys: pin_keys!("w"),
+    /// #     engine_crate: "w-engine", cache_namespace: "w",
+    /// #     default_url: "u", launcher_crate: "w", ..Tool::CONVENTIONS
     /// # };
     /// const _: () = assert!(TOOL.defect().is_none());
     /// ```
@@ -293,8 +458,8 @@ impl Tool {
         if self.config_file.is_empty() {
             return Some("config_file is empty, so discovery has nothing to look for");
         }
-        if self.pin_prefix.is_empty() {
-            return Some("pin_prefix is empty, so the pin keys have no names");
+        if let Some(bad) = self.pin_keys.defect() {
+            return Some(bad);
         }
         if self.engine_crate.is_empty() {
             return Some("engine_crate is empty, so there is nothing to build");
@@ -354,14 +519,11 @@ impl Tool {
     /// Const, so a tool can settle it at compile time rather than finding out:
     ///
     /// ```
-    /// # use renki::{Anchor, Cli, Hooks, Locate, Tool};
+    /// # use renki::{pin_keys, Tool};
     /// # const TOOL: Tool = Tool {
-    /// #     anchor: Anchor::Marker(".git"), short: "widget",
-    /// #     config_file: "w.toml", pin_prefix: "w",
-    /// #     engine_crate: "w-engine", engine_bin: None, cache_namespace: "w",
-    /// #     default_url: "u", launcher_crate: "w", workdir: None,
-    /// #     dir_flag: Cli::DIR_FLAG, engine_flag: Cli::ENGINE_FLAG,
-    /// #     locate: Locate::DEFAULT, hooks: Hooks::NONE,
+    /// #     short: "widget", config_file: "w.toml", pin_keys: pin_keys!("w"),
+    /// #     engine_crate: "w-engine", cache_namespace: "w",
+    /// #     default_url: "u", launcher_crate: "w", ..Tool::CONVENTIONS
     /// # };
     /// const _: () = assert!(TOOL.short_is_usable());
     /// ```
@@ -389,6 +551,13 @@ impl Tool {
     /// walk: the short name uppercased, plus `_ROOT`.
     pub fn root_env(&self) -> String {
         format!("{}_ROOT", self.short.to_uppercase())
+    }
+
+    /// The environment variable naming this launcher's cache directory,
+    /// overriding `$XDG_CACHE_HOME` and the namespace both: the short name
+    /// uppercased, plus `_CACHE`.
+    pub fn cache_env(&self) -> String {
+        format!("{}_CACHE", self.short.to_uppercase())
     }
 
     /// The environment variable that opts out of launcher self-update.

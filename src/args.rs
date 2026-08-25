@@ -61,12 +61,13 @@ pub(crate) fn strip_dir_flag(args: Vec<String>, dir_flag: &str) -> Vec<String> {
 /// Whether these arguments ask the launcher the locate question rather than
 /// asking the engine anything.
 ///
-/// Its own function because the guard on the left is load-bearing and easy to
-/// lose: without it, a tool that wants no locate query at all has
-/// `subcommand: None`, an invocation with no arguments compares `None` against
-/// `None`, and every bare run answers the query instead of running the engine.
-pub(crate) fn is_the_locate_query(locate: &Locate, args: &[String]) -> bool {
-    locate.subcommand.is_some() && args.first().map(String::as_str) == locate.subcommand
+/// A tool wanting no such query has no [`Locate`] at all, so there is nothing
+/// to compare against and every subcommand goes to the engine. That used to be
+/// a second `Option` inside `Locate`, where a bare run with no arguments
+/// compared one absence against the other and answered the query it was never
+/// asked; the absence lives in one place now and the comparison cannot happen.
+pub(crate) fn is_the_locate_query(locate: Option<&Locate>, args: &[String]) -> bool {
+    locate.is_some_and(|l| args.first().map(String::as_str) == Some(l.subcommand))
 }
 
 #[cfg(test)]

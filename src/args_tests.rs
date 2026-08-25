@@ -4,23 +4,17 @@
 //--------------------------------------------------------------------------------------------------
 
 use super::*;
-use crate::tool::{Anchor, Cli, Hooks, Locate, Tool};
+use crate::tool::{Locate, Tool};
 
 const T: Tool = Tool {
-    anchor: Anchor::Marker(".git"),
     short: "widget",
     config_file: "t.toml",
-    pin_prefix: "t",
+    pin_keys: crate::pin_keys!("t"),
     engine_crate: "engine",
-    engine_bin: None,
     cache_namespace: "t",
     default_url: "u",
     launcher_crate: "cargo-widget",
-    workdir: None,
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
-    hooks: Hooks::NONE,
+    ..Tool::CONVENTIONS
 };
 
 fn s(v: &[&str]) -> Vec<String> {
@@ -30,7 +24,7 @@ fn s(v: &[&str]) -> Vec<String> {
 #[test]
 fn a_direct_invocation_forwards_everything() {
     assert_eq!(
-        normalize_args(&T, &s(&["/usr/bin/mock", "lock", "--foo"])),
+        normalize_args(&T, &s(&["/usr/bin/widget", "lock", "--foo"])),
         s(&["lock", "--foo"])
     );
 }
@@ -55,20 +49,21 @@ fn a_cargo_subcommand_drops_the_repeated_name() {
 #[test]
 fn a_repeated_name_is_dropped_only_when_it_is_the_cargo_shape() {
     // the control, and the reason the rule is written against the program
-    // name rather than the first argument. `mock mock` is a user asking the
-    // engine for a subcommand called `mock`, and eating it would be wrong.
+    // name rather than the first argument. `widget widget` is a user asking
+    // the engine for a subcommand called `widget`, and eating it would be
+    // wrong.
     assert_eq!(
-        normalize_args(&T, &s(&["/usr/bin/mock", "mock"])),
-        s(&["mock"])
+        normalize_args(&T, &s(&["/usr/bin/widget", "widget"])),
+        s(&["widget"])
     );
     // and a cargo-shaped launcher whose first argument is something else
     assert_eq!(
-        normalize_args(&T, &s(&["cargo-mock", "lock"])),
+        normalize_args(&T, &s(&["cargo-widget", "lock"])),
         s(&["lock"])
     );
     // and the name has to match the program's own suffix
     assert_eq!(
-        normalize_args(&T, &s(&["cargo-mock", "other", "lock"])),
+        normalize_args(&T, &s(&["cargo-widget", "other", "lock"])),
         s(&["other", "lock"])
     );
 }
@@ -129,34 +124,31 @@ fn a_dir_flag_with_no_value_is_dropped_and_takes_nothing_with_it() {
 }
 
 #[test]
-fn the_locate_query_needs_a_subcommand_to_ask_it_with() {
-    // The `is_some()` half of the guard. A tool that wants no locate query
-    // has `subcommand: None`, and a bare invocation has no first argument,
-    // so without it `None == None` and every plain run answers the query
-    // instead of running the engine.
-    const NO_QUERY: Locate = Locate {
-        subcommand: None,
-        ..Locate::DEFAULT
-    };
+fn a_tool_with_no_locate_query_never_answers_one() {
+    // The absence used to live in `Locate::subcommand` as well as in
+    // `Tool::locate`, so a bare invocation with no first argument compared one
+    // `None` against the other and every plain run answered the query instead
+    // of running the engine. It lives in one place now, and the type is what
+    // keeps it there.
     assert!(
-        !is_the_locate_query(&NO_QUERY, &s(&[])),
-        "a tool with no locate subcommand answered the query on a bare run"
+        !is_the_locate_query(None, &s(&[])),
+        "a tool with no locate query answered one on a bare run"
     );
-    assert!(!is_the_locate_query(&NO_QUERY, &s(&["locate"])));
-    assert!(!is_the_locate_query(&NO_QUERY, &s(&["lock"])));
+    assert!(!is_the_locate_query(None, &s(&["locate"])));
+    assert!(!is_the_locate_query(None, &s(&["lock"])));
 
     // and the control, so the assertions above are not passing because the
     // predicate is a constant `false`
-    assert!(is_the_locate_query(&Locate::DEFAULT, &s(&["locate"])));
-    assert!(!is_the_locate_query(&Locate::DEFAULT, &s(&[])));
-    assert!(!is_the_locate_query(&Locate::DEFAULT, &s(&["lock"])));
+    assert!(is_the_locate_query(Some(&Locate::DEFAULT), &s(&["locate"])));
+    assert!(!is_the_locate_query(Some(&Locate::DEFAULT), &s(&[])));
+    assert!(!is_the_locate_query(Some(&Locate::DEFAULT), &s(&["lock"])));
 
     // a tool that spells it differently is asked by its own name and not by
     // the conventional one
     const RENAMED: Locate = Locate {
-        subcommand: Some("where"),
+        subcommand: "where",
         ..Locate::DEFAULT
     };
-    assert!(is_the_locate_query(&RENAMED, &s(&["where"])));
-    assert!(!is_the_locate_query(&RENAMED, &s(&["locate"])));
+    assert!(is_the_locate_query(Some(&RENAMED), &s(&["where"])));
+    assert!(!is_the_locate_query(Some(&RENAMED), &s(&["locate"])));
 }

@@ -199,7 +199,7 @@ pub(crate) fn locate(tool: &Tool, raw: &str) -> Result<PathBuf, String> {
 /// so it can.
 pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<PathBuf, String> {
     let scratch = scratch_dir(cache_root);
-    sweep(&scratch);
+    sweep(cache_root);
 
     let mut h = Fnv::new();
     h.write_field(&source.to_string_lossy());
@@ -251,11 +251,17 @@ fn touch(root: &Path) {
 
 /// Delete scratch builds nothing has used for [`SCRATCH_TTL_SECS`].
 ///
+/// Called from the ordinary run as well as from [`build`], because a user who
+/// passes the engine flag once and never again would otherwise keep that
+/// checkout and its target directory forever: the only caller used to be the
+/// path that creates them, which is a sweep that runs exactly when there is
+/// nothing yet to sweep.
+///
 /// Best-effort in every direction: a scratch build is disposable, so a sweep
 /// that cannot read a directory, cannot stat an entry, or cannot remove one has
 /// nothing worth reporting and must never fail a run.
-fn sweep(scratch: &Path) {
-    let Ok(entries) = std::fs::read_dir(scratch) else {
+pub(crate) fn sweep(cache_root: &Path) {
+    let Ok(entries) = std::fs::read_dir(scratch_dir(cache_root)) else {
         return;
     };
     let now = std::time::SystemTime::now();

@@ -1,6 +1,6 @@
 [package]
 name = "renki"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 publish = true
 description = "The launcher half of a pinned-engine command-line tool. Reads the engine version a repo pins, builds it once into a shared cache, and runs it from any working directory."
@@ -12,10 +12,15 @@ readme = "README.md"
 # is where let-chains stabilised, which this uses throughout.
 rust-version = "1.88"
 categories = ["development-tools", "command-line-utilities"]
-# Only the sources and the two files a reader of the package needs. The lint
-# configs and the ignore file are ours and are paid for by everyone who
-# downloads the crate if they are left in.
-include = ["src/**/*.rs", "README.md", "LICENSE"]
+# The sources, the integration tests, and the two files a reader of the package
+# needs. The lint configs and the ignore file are ours and are paid for by
+# everyone who downloads the crate if they are left in.
+#
+# `tests/` is in because the only test guarding the only `compile_error!` lives
+# there, and a package that ships the guard without the thing that checks it
+# invites a reader to verify a claim they have no way to run. cargo warns about
+# the missing target during `cargo package` too.
+include = ["src/**/*.rs", "tests/**/*.rs", "README.md", "LICENSE"]
 keywords = ["launcher", "pinning", "reproducible", "bootstrap", "cli"]
 
 # Curated-minimal, because every dependency is paid at `cargo install` time by

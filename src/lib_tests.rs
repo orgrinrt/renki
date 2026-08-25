@@ -4,22 +4,18 @@
 //--------------------------------------------------------------------------------------------------
 
 use super::*;
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt as _;
 
 const T: Tool = Tool {
-    anchor: Anchor::Marker(".git"),
     short: "widget",
     config_file: "t.toml",
-    pin_prefix: "t",
+    pin_keys: crate::pin_keys!("t"),
     engine_crate: "engine",
-    engine_bin: None,
     cache_namespace: "t",
     default_url: "u",
     launcher_crate: "cargo-widget",
-    workdir: None,
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Locate::DEFAULT,
-    hooks: Hooks::NONE,
+    ..Tool::CONVENTIONS
 };
 
 #[test]
@@ -27,7 +23,7 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
     // The point of the check is that it runs, and a predicate tested only
     // as a predicate stays green when nothing calls it. Every arm below is
     // a descriptor that would otherwise run and misbehave quietly.
-    const BAD: [Tool; 11] = [
+    const BAD: [Tool; 15] = [
         Tool {
             short: "my-tool",
             ..T
@@ -36,8 +32,42 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
             config_file: "",
             ..T
         },
+        // One arm per pin key rather than one for the set. Each is read on a
+        // different pin form, so a check over the set with a single empty
+        // name would leave four of the five unenforced.
         Tool {
-            pin_prefix: "",
+            pin_keys: PinKeys {
+                version: "",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        Tool {
+            pin_keys: PinKeys {
+                rev: "",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        Tool {
+            pin_keys: PinKeys {
+                tag: "",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        Tool {
+            pin_keys: PinKeys {
+                branch: "",
+                ..crate::pin_keys!("t")
+            },
+            ..T
+        },
+        Tool {
+            pin_keys: PinKeys {
+                git: "",
+                ..crate::pin_keys!("t")
+            },
             ..T
         },
         Tool {
@@ -120,6 +150,15 @@ fn s(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| x.to_string()).collect()
 }
 
+/// The answer as text, for a case whose paths are all valid UTF-8. Every
+/// assertion that is about the key names rather than about the bytes reads
+/// better this way, and the byte-level cases below call `locate_answer`
+/// directly.
+fn answer(locate: &Locate, root: &Path, config: &str, workdir: &Path) -> String {
+    let bytes = locate_answer(locate, root, Path::new(config), workdir).expect("refused");
+    String::from_utf8(bytes).expect("the fixture paths are all text")
+}
+
 #[test]
 fn the_locate_answer_uses_the_tools_own_key_names() {
     // All three were hardcoded here while `Locate` documented them as "a
@@ -127,20 +166,20 @@ fn the_locate_answer_uses_the_tools_own_key_names() {
     // conventional spellings anyway and its own shell helpers, parsing the
     // names it had chosen, parsed nothing at all.
     const OWN: Locate = Locate {
-        subcommand: Some("locate"),
+        subcommand: "locate",
         root_key: "repo",
         config_key: "manifest",
-        workdir_key: "mock_dir",
+        workdir_key: "work_dir",
     };
     let d = tempfile::tempdir().unwrap();
-    let wd = d.path().join("mock");
+    let wd = d.path().join("work");
     std::fs::create_dir_all(&wd).unwrap();
 
-    let got = locate_answer(&OWN, d.path(), "/c/x.toml", &wd);
+    let got = answer(&OWN, d.path(), "/c/x.toml", &wd);
     assert_eq!(
         got,
         format!(
-            "repo={}\nmanifest=/c/x.toml\nmock_dir={}\n",
+            "repo={}\nmanifest=/c/x.toml\nwork_dir={}\n",
             d.path().display(),
             wd.display()
         )
@@ -152,7 +191,7 @@ fn the_locate_answer_uses_the_tools_own_key_names() {
     assert!(!got.contains("workdir="), "{got}");
 
     // the default still answers conventionally
-    let d2 = locate_answer(&Locate::DEFAULT, d.path(), "/c/x.toml", &wd);
+    let d2 = answer(&Locate::DEFAULT, d.path(), "/c/x.toml", &wd);
     assert!(d2.starts_with("root="), "{d2}");
     assert!(d2.contains("\nconfig=/c/x.toml\n"), "{d2}");
     assert!(
@@ -167,9 +206,73 @@ fn a_missing_workdir_answers_with_the_key_and_no_value() {
     // launcher too old to answer at all.
     let d = tempfile::tempdir().unwrap();
     let absent = d.path().join("nothing-here");
-    let got = locate_answer(&Locate::DEFAULT, d.path(), "", &absent);
+    let got = answer(&Locate::DEFAULT, d.path(), "", &absent);
     assert!(got.ends_with("workdir=\n"), "{got}");
     assert!(got.contains("\nconfig=\n"), "{got}");
+}
+
+/// The one record whose key is `key`, as bytes, or `None`.
+fn record<'a>(answer: &'a [u8], key: &str) -> Option<&'a [u8]> {
+    let mut want = key.as_bytes().to_vec();
+    want.push(b'=');
+    answer
+        .split(|b| *b == b'\n')
+        .find(|line| line.starts_with(&want))
+        .map(|line| &line[want.len()..])
+}
+
+#[test]
+fn the_answer_carries_the_paths_bytes_rather_than_their_display() {
+    // `Display` on a path replaces whatever is not text with U+FFFD, and a
+    // reader `cd`ing into that gets a directory that does not exist.
+    let root = PathBuf::from(OsString::from_vec(b"/r/\xff\xfe".to_vec()));
+    let config = PathBuf::from(OsString::from_vec(b"/r/\xff\xfe/w.toml".to_vec()));
+    let workdir = PathBuf::from(OsString::from_vec(b"/r/\xff\xfe/work".to_vec()));
+    let got = locate_answer(&Locate::DEFAULT, &root, &config, &workdir).expect("refused");
+
+    assert_eq!(record(&got, "root"), Some(&b"/r/\xff\xfe"[..]));
+    assert_eq!(record(&got, "config"), Some(&b"/r/\xff\xfe/w.toml"[..]));
+    // The working directory is absent on disk here, so it answers empty,
+    // which is the documented shape rather than a byte question.
+    assert_eq!(record(&got, "workdir"), Some(&b""[..]));
+
+    // and the control, which is the whole point: the lossy rendering of
+    // those bytes is not what came out. Without it this passes against a
+    // writer that renders and happens to be compared against a rendering.
+    let lossy = root.display().to_string();
+    assert_ne!(lossy.as_bytes(), b"/r/\xff\xfe");
+    assert_ne!(record(&got, "root"), Some(lossy.as_bytes()));
+}
+
+#[test]
+fn a_path_holding_a_newline_is_refused_by_name_rather_than_answered_wrongly() {
+    // One record per line is the whole format. A newline inside a value
+    // makes a reader see two records, the second with no `=` in it, and
+    // nothing about the answer says so. A newline is legal in a path on
+    // every unix, so this is reachable rather than theoretical.
+    let d = tempfile::tempdir().unwrap();
+    let bad = d.path().join("two\nlines");
+    std::fs::create_dir_all(&bad).unwrap();
+    let plain = d.path().join("one-line");
+    std::fs::create_dir_all(&plain).unwrap();
+
+    // Every value goes through the same writer, so every value refuses, and
+    // each refusal names the key whose path was the problem.
+    for (key, root, config, workdir) in [
+        ("root", &bad, &plain, &plain),
+        ("config", &plain, &bad, &plain),
+        ("workdir", &plain, &plain, &bad),
+    ] {
+        let e = locate_answer(&Locate::DEFAULT, root, config, workdir)
+            .expect_err("a newline was answered rather than refused");
+        assert!(e.contains(key), "the refusal does not name {key}: {e}");
+        assert!(e.contains("newline"), "{e}");
+    }
+
+    // and the control: the same three paths without the newline are
+    // answered, so the refusal is about the byte rather than a writer that
+    // refuses everything.
+    locate_answer(&Locate::DEFAULT, &plain, &plain, &plain).expect("a plain path was refused");
 }
 
 #[test]

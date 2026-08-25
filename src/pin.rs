@@ -207,6 +207,35 @@ pub(crate) fn ls_remote_head(url: &str, branch: &str) -> Result<String, String> 
     Ok(sha)
 }
 
+/// Delete branch resolutions past their own freshness window.
+///
+/// One file per url and branch, seventy bytes each, and nothing removed them:
+/// a repo that once tracked a branch left one behind for good. A resolution
+/// older than [`BRANCH_TTL`] is never read again, since the next run
+/// re-resolves and overwrites it, so anything the window has passed is dead by
+/// definition and a live repo's own file is rewritten before it can be caught.
+///
+/// Best-effort, like every other sweep here: a resolution is re-derived from
+/// the network, so failing to remove one costs nothing and must never fail a
+/// run.
+pub(crate) fn sweep_branch_resolutions(cache_root: &Path) {
+    let Ok(entries) = std::fs::read_dir(cache_root.join("branch-resolutions")) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > BRANCH_TTL);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 fn branch_resolution_path(cache_root: &Path, url: &str, branch: &str) -> std::path::PathBuf {
     let mut h = Fnv::new();
     h.write_field(url);
