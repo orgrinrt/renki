@@ -72,6 +72,11 @@ pub enum Reference {
 }
 
 /// A pinned engine source: where it lives, and which revision.
+///
+/// Produced by parsing, never by a consumer, so it is closed for the same
+/// reason [`Reference`] and [`Header`] are: a field added later would otherwise
+/// be a breaking change.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pin {
     /// Where the engine's source is. The tool's

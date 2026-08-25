@@ -91,7 +91,10 @@ fn the_readme_does_not_promise_a_binary_this_crate_has_none_of() {
 fn the_checks_above_can_fail() {
     // The control on both. Each reads a document, and a parse that quietly finds
     // nothing passes every assertion it feeds.
-    assert_eq!(package_version("\nversion = \"9.9.9\"\nname = \"x\"\n"), "9.9.9");
+    assert_eq!(
+        package_version("\nversion = \"9.9.9\"\nname = \"x\"\n"),
+        "9.9.9"
+    );
     assert_eq!(
         versions_the_readme_names("a\nrenki = \"1.2\"\nb\nrenki = \"3.4\"\n"),
         vec!["1.2", "3.4"]

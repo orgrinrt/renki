@@ -169,9 +169,9 @@ small TOML registry.
 The registry is worth knowing about, since it's the one thing here that records
 something about you and not about a build. One row per repo that's run the tool
 on this machine, and the row holds the lot of it: the repo root, its directory
-name, the working directory the engine gets pointed at, the engine's source url,
-what was pinned and in which form, the build key that resolved to, and when it
-last ran. That's what lets the collector tell a build nothing points at any more
+name, whether that root was found exactly or by walking up, the working
+directory the engine gets pointed at, the engine's source url, what was pinned
+and in which form, the build key that resolved to, and when it last ran. That's what lets the collector tell a build nothing points at any more
 from one that's still wanted. Nothing but the launcher writes it and nothing
 sends it anywhere. It's plain TOML in your own cache directory, so go and read it
 if you like, and deleting the whole cache directory is always safe.

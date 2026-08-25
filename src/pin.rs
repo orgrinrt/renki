@@ -20,9 +20,14 @@ use crate::tool::Tool;
 /// resolution within the window is reused without a network round-trip. Kept
 /// short so a repo tracking a branch picks up new heads within the hour,
 /// matching the launcher's own self-update cadence.
-const BRANCH_TTL: Duration = Duration::from_secs(60 * 60);
+pub(crate) const BRANCH_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// A pin resolved to concrete build attempts.
+///
+/// Produced by parsing, never by a consumer, so it is closed for the same
+/// reason [`crate::Reference`] and [`crate::Header`] are: a field added later
+/// would otherwise be a breaking change.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
     /// The pin this came from, kept so a tool's hooks can derive whatever they

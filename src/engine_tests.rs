@@ -159,7 +159,10 @@ fn value_collapses_missing_into_absent_and_nothing_else() {
     // directory is discarded whether they named one or not.
     assert_eq!(Flag::Absent.value(), None);
     assert_eq!(Flag::Missing.value(), None);
-    assert_eq!(Flag::Value("x".into()).value().as_deref(), Some(std::ffi::OsStr::new("x")));
+    assert_eq!(
+        Flag::Value("x".into()).value().as_deref(),
+        Some(std::ffi::OsStr::new("x"))
+    );
 }
 
 #[test]
@@ -301,4 +304,41 @@ fn a_flag_passed_twice_takes_the_last_one_and_leaves_neither_behind() {
     let (last_empty, rest) = take_flag(strings(&["--engine=/tmp/first", "--engine="]), "--engine");
     assert_eq!(last_empty, Flag::Missing);
     assert!(rest.is_empty());
+}
+
+/// Two engine paths that differ only in bytes no `str` can hold get their own
+/// scratch directories.
+///
+/// The key used to be built from `to_string_lossy`, which maps every invalid
+/// sequence onto one replacement character, so a pair like this collided and
+/// two unrelated `--engine` builds shared a directory. On unix a path is
+/// arbitrary bytes and nothing stops a caller passing one.
+#[test]
+fn the_scratch_key_is_the_path_bytes_and_not_a_lossy_rendering() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let key = |bytes: &[u8]| {
+        let mut h = crate::hash::Fnv::new();
+        h.write_bytes(std::ffi::OsStr::from_bytes(bytes).as_encoded_bytes());
+        h.hex()
+    };
+
+    // Two distinct invalid sequences. `to_string_lossy` renders both as the
+    // same single replacement character, so a lossy key cannot tell them apart.
+    let a = key(b"/tmp/\xc3");
+    let b = key(b"/tmp/\xff");
+    assert_ne!(a, b, "two engine paths collided into one scratch directory");
+
+    // The control, in both directions: the same bytes still key the same, and
+    // the lossy renderings really are equal, which is what made the collision.
+    assert_eq!(key(b"/tmp/\xc3"), a);
+    assert_eq!(
+        std::ffi::OsStr::from_bytes(b"/tmp/\xc3").to_string_lossy(),
+        std::ffi::OsStr::from_bytes(b"/tmp/\xff").to_string_lossy(),
+        "the premise is gone: these no longer render alike"
+    );
+
+    // And an ordinary pair still separates, so this is not simply always unequal.
+    assert_ne!(key(b"/tmp/one"), key(b"/tmp/two"));
+    assert_eq!(key(b"/tmp/one"), key(b"/tmp/one"));
 }

@@ -211,7 +211,7 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
     sweep(cache_root);
 
     let mut h = Fnv::new();
-    h.write_field(&source.to_string_lossy());
+    h.write_bytes(source.as_os_str().as_encoded_bytes());
     let root = scratch.join(h.hex());
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create {}: {e}", root.display()))?;

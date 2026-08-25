@@ -163,9 +163,11 @@ pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
     // ASCII flags and forwards the rest untouched, so nothing here needs the
     // bytes to be text, and the engine gets exactly what the shell passed.
     //
-    // The type is the guard rather than this comment. `args()` yields `String`
-    // and `Vec<OsString>` has no `FromIterator<String>`, so putting the
-    // panicking call back here does not compile.
+    // The type stops the obvious way back: `args()` yields `String` and
+    // `Vec<OsString>` has no `FromIterator<String>`, so swapping the call here
+    // does not compile. It does not stop a deliberate `.map(OsString::from)`,
+    // which compiles and panics exactly as before, so the guard is this one
+    // line rather than the class.
     let raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
     match outcome(tool, &raw) {
         Ok(()) => ExitCode::SUCCESS, // unreachable when the exec succeeds

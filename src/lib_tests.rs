@@ -23,7 +23,7 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
     // The point of the check is that it runs, and a predicate tested only
     // as a predicate stays green when nothing calls it. Every arm below is
     // a descriptor that would otherwise run and misbehave quietly.
-    const BAD: [Tool; 16] = [
+    const BAD: [Tool; 17] = [
         Tool {
             short: "my-tool",
             ..T
@@ -110,6 +110,14 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
         // version.
         Tool {
             cache_retention: std::time::Duration::ZERO,
+            ..T
+        },
+        // Under the hour a branch resolution counts as the branch's tip. The
+        // collector sweeps resolutions on this window, so one would go while it
+        // is still live and a branch-pinned repo would ask the remote on every
+        // single run.
+        Tool {
+            cache_retention: std::time::Duration::from_secs(59 * 60),
             ..T
         },
     ];
