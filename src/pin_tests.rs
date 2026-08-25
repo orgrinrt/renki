@@ -82,15 +82,23 @@ fn a_tool_that_owns_its_crate_name_can_take_the_registry_first() {
 fn the_source_choice_reaches_only_the_version_form() {
     // A rev, a tag and a branch all name something inside the pinned
     // repository already, so there was never a second source for them to
-    // resolve from and the flag must not invent one.
+    // resolve from and the flag must not invent one. Branch is in here rather
+    // than named and skipped: it is the one of the three that goes through a
+    // second function to get its rev, so it is the one that could pick the
+    // setting up by accident.
     const PUBLISHED: Tool = Tool {
         version_source: VersionSource::RegistryThenGitTag,
         ..T
     };
     let d = tempfile::tempdir().unwrap();
+    let path = branch_resolution_path(d.path(), "u", "dev");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, format!("{}\nfeedface99c0ffee\n", unix_now())).unwrap();
+
     for r in [
         Reference::Rev("abc123".into()),
         Reference::Tag("v1.2.3".into()),
+        Reference::Branch("dev".into()),
     ] {
         for t in [&T, &PUBLISHED] {
             let got = resolve(t, &pin(r.clone()), d.path()).unwrap();
@@ -98,6 +106,63 @@ fn the_source_choice_reaches_only_the_version_form() {
             assert!(got.attempts[0].contains(&"--git".to_string()), "{r:?}");
         }
     }
+}
+
+#[test]
+fn the_base_answers_the_source_with_the_one_that_needs_no_promise() {
+    // The security property of the whole field, stated rather than left to be
+    // inferred from every fixture happening to spread the base. Flipping
+    // `CONVENTIONS` would otherwise fail a pile of tests for reasons none of
+    // them names.
+    assert_eq!(Tool::CONVENTIONS.version_source, VersionSource::GitTag);
+}
+
+#[test]
+fn a_hook_that_names_no_tag_is_refused_rather_than_left_with_nothing_to_try() {
+    // Without the registry attempt there is nothing else in the list, so an
+    // empty tag list is zero attempts. The build loop then runs zero times and
+    // reports a failure that names nothing it tried and blames the pin, which
+    // is the one thing that is not wrong.
+    const NO_TAGS: Tool = Tool {
+        hooks: Hooks {
+            version_tags: Some(|_| Vec::new()),
+            ..Hooks::NONE
+        },
+        ..T
+    };
+    let d = tempfile::tempdir().unwrap();
+    let err = resolve(&NO_TAGS, &pin(Reference::Version("0.1.0".into())), d.path()).unwrap_err();
+    assert!(err.contains("version_tags"), "{err}");
+    assert!(err.contains("0.1.0"), "{err}");
+    assert!(err.contains('u'), "the url it would have looked in: {err}");
+
+    // and the opt in is refused too, rather than limping on the registry
+    // attempt alone: a tool naming no tag has lost its fallback, which is the
+    // half of the ordering that makes it safe to have.
+    const PUBLISHED_NO_TAGS: Tool = Tool {
+        version_source: VersionSource::RegistryThenGitTag,
+        ..NO_TAGS
+    };
+    assert!(
+        resolve(
+            &PUBLISHED_NO_TAGS,
+            &pin(Reference::Version("0.1.0".into())),
+            d.path()
+        )
+        .is_err()
+    );
+
+    // the control: the same tool with one tag resolves, so the refusal is
+    // about the empty list and not about the hook being set at all.
+    const ONE_TAG: Tool = Tool {
+        hooks: Hooks {
+            version_tags: Some(|v| vec![format!("v{v}")]),
+            ..Hooks::NONE
+        },
+        ..T
+    };
+    let ok = resolve(&ONE_TAG, &pin(Reference::Version("0.1.0".into())), d.path()).unwrap();
+    assert_eq!(ok.attempts.len(), 1);
 }
 
 #[test]
