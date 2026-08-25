@@ -113,3 +113,70 @@ fn a_directory_the_config_omits_is_reported() {
          way would read as covered"
     );
 }
+
+/// The tests this crate publishes have to run from an unpacked tarball, where
+/// the repository is not there.
+///
+/// Two kinds of test live under `tests/`. One checks the crate and belongs in
+/// the package. The other checks this repository, reads files `include`
+/// deliberately leaves out, and asks git what is tracked. Shipping the second
+/// kind produces a crate whose own suite fails on a file that was never meant
+/// to be in it, and `cargo package` will not catch it, because packaging
+/// compiles the tests and never runs them.
+#[test]
+fn a_shipped_test_does_not_reach_for_the_repository() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let toml = std::fs::read_to_string(manifest.join("Cargo.toml")).expect("no manifest");
+
+    let include = toml
+        .split_once("include = [")
+        .expect("the manifest names no `include`, so everything ships and this check is moot")
+        .1
+        .split_once(']')
+        .expect("`include` is not closed")
+        .0;
+
+    let shipped: Vec<&str> = include
+        .split('"')
+        .filter(|s| s.starts_with("tests/") && s.ends_with(".rs"))
+        .collect();
+
+    assert!(
+        !shipped.is_empty(),
+        "no test file is named in `include`, so this check would hold over an \
+         empty set. If that is deliberate, delete this test rather than \
+         leaving it to pass on nothing."
+    );
+
+    // What a tarball does not have. `ante.toml` is excluded on purpose and the
+    // repository is not shipped at all, so a test touching either cannot run
+    // where the crate is consumed.
+    const ABSENT: [&str; 2] = ["ante.toml", "\"git\""];
+
+    for file in &shipped {
+        let body = std::fs::read_to_string(manifest.join(file))
+            .unwrap_or_else(|e| panic!("`include` names {file}, which is not readable: {e}"));
+
+        for needle in ABSENT {
+            assert!(
+                !body.contains(needle),
+                "{file} is published and reaches for {needle}, which an unpacked \
+                 tarball does not have. Either drop it from `include` because it \
+                 is a check about this repository, or stop it depending on the \
+                 repository because it is a check about the crate."
+            );
+        }
+    }
+
+    // The control. Without it the loop passes on any needle nothing contains,
+    // including a typo, and this file itself is the proof that the needles are
+    // findable in a real test body.
+    let own = std::fs::read_to_string(file!()).expect("this file is not readable");
+    for needle in ABSENT {
+        assert!(
+            own.contains(needle),
+            "the needle {needle} was not found even in a file that plainly uses \
+             it, so the loop above would clear every file it looked at"
+        );
+    }
+}
