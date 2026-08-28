@@ -652,3 +652,45 @@ fn a_config_that_is_toml_and_names_no_pin_still_says_to_add_one() {
         "valid TOML reported as a parse failure: {err}"
     );
 }
+
+#[test]
+fn the_missing_pin_message_names_a_key_that_nearly_was_one() {
+    // `t_ref` is not read for a pin and cannot be refused, since the config
+    // belongs to the tool. What it does is make the message wrong in a way the
+    // reader cannot see: told to add a pin to `t.toml`, they open a file that
+    // already carries something pin-shaped and go looking anywhere else.
+    let d = tempfile::tempdir().unwrap();
+    let config = d.path().join("t.toml");
+    std::fs::write(&config, "t_ref = \"abc123\"\n").unwrap();
+    let located = crate::discover::Located {
+        workdir:     d.path().to_path_buf(),
+        config_path: config.clone(),
+    };
+    let err = resolve_pin(&T, Some(&located), d.path(), d.path()).unwrap_err();
+    assert!(err.contains("t_ref"), "the near miss is not named: {err}");
+    assert!(
+        err.contains("t_version"),
+        "the correct spelling is not given: {err}"
+    );
+}
+
+#[test]
+fn a_config_carrying_nothing_pin_shaped_gets_no_near_miss_line() {
+    // The control. Without it, a near-miss check that fired on every key would
+    // pass the test above while making every other missing-pin message worse.
+    let d = tempfile::tempdir().unwrap();
+    let config = d.path().join("t.toml");
+    std::fs::write(&config, "unrelated = \"value\"\nother = 1\n").unwrap();
+    let located = crate::discover::Located {
+        workdir:     d.path().to_path_buf(),
+        config_path: config.clone(),
+    };
+    let err = resolve_pin(&T, Some(&located), d.path(), d.path()).unwrap_err();
+    assert!(err.contains("t_version"), "{err}");
+    assert!(
+        !err.contains("not one of the keys read"),
+        "a near miss was reported where there is none: {err}"
+    );
+    assert!(!err.contains("unrelated"), "{err}");
+    assert!(!err.contains("other"), "{err}");
+}

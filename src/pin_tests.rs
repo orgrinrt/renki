@@ -447,3 +447,49 @@ fn filetime_back(path: &Path, secs: u64) {
     let f = std::fs::File::options().write(true).open(path).unwrap();
     f.set_modified(t).unwrap();
 }
+
+#[test]
+fn a_pin_that_needs_no_remote_resolves_without_one() {
+    // What this exists for: `engine_args` takes a `&Resolved`, and the two
+    // fields deciding what `git_ref` answers are crate-only, so a consumer had
+    // no way to build one and no way to run its own hook against it.
+    let d = tempfile::tempdir().unwrap();
+
+    let v = Resolved::without_network(&T, &pin(Reference::Version("1.2.3".into()))).unwrap();
+    assert_eq!(v.git_ref(), ("tag", "1.2.3"));
+    assert_eq!(v.key_rev, "v:1.2.3");
+
+    let t = Resolved::without_network(&T, &pin(Reference::Tag("v9".into()))).unwrap();
+    assert_eq!(t.git_ref(), ("tag", "v9"));
+
+    let r = Resolved::without_network(&T, &pin(Reference::Rev("a".repeat(40)))).unwrap();
+    assert_eq!(r.git_ref(), ("rev", "a".repeat(40).as_str()));
+
+    // And it agrees with what a run derives, which is the property that makes
+    // it worth handing to a consumer at all: one code path, so `key_rev`,
+    // `attempts` and `version_tag` cannot be made to disagree here and not
+    // there.
+    for reference in [
+        Reference::Version("1.2.3".into()),
+        Reference::Tag("v9".into()),
+        Reference::Rev("a".repeat(40)),
+    ] {
+        let p = pin(reference);
+        assert_eq!(
+            Resolved::without_network(&T, &p).unwrap(),
+            resolve(&T, &p, d.path()).unwrap(),
+            "{p:?}"
+        );
+    }
+}
+
+#[test]
+fn a_branch_pin_is_refused_rather_than_reaching_the_network() {
+    // The control, and the one arm that genuinely cannot be answered offline: a
+    // branch is whatever the remote says it is now. Without this the function
+    // would either block on `git ls-remote` inside somebody's test suite or
+    // quietly answer from a cache that may be empty.
+    let err = Resolved::without_network(&T, &pin(Reference::Branch("dev".into()))).unwrap_err();
+    assert!(err.contains("dev"), "the branch is not named: {err}");
+    assert!(err.contains("network"), "{err}");
+}

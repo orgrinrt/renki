@@ -534,9 +534,23 @@ fn resolve_pin(
             l.config_path.display()
         ));
     }
+    // A key that was aimed at this tool and missed. Telling somebody to add a
+    // pin to a file that, to them, already carries one sends them looking in
+    // the wrong place, so name what is actually sitting there.
+    let nearly = located
+        .and_then(|l| std::fs::read_to_string(&l.config_path).ok())
+        .and_then(|s| crate::manifest::near_miss(tool, &s))
+        .map(|k| {
+            format!(
+                "\n{} carries `{k}`, which is not one of the keys read for a pin. If \
+                 that was meant to be the pin, the spelling is below.\n",
+                where_to.display(),
+            )
+        })
+        .unwrap_or_default();
     Err(format!(
-        "no {} pin found. add one to {}:\n\n    {} = \"0.1.0\"   # the released engine \
-         version\n",
+        "no {} pin found. add one to {}:\n{nearly}\n    {} = \"0.1.0\"   # the released \
+         engine version\n",
         tool.engine_crate,
         where_to.display(),
         tool.pin_keys.version
