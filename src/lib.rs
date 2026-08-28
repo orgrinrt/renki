@@ -48,6 +48,12 @@
 //!
 //! Everything that is one tool's and no other's goes through [`Hooks`] rather
 //! than into this crate.
+//!
+//! # The name
+//!
+//! `renki` is finnish for a farmhand, the sort who does the fetching and the
+//! carrying so that somebody else can get on with the actual work. Which is
+//! more or less the whole of this crate's job, so it seemed to fit.
 
 // The crate's whole selling point is a small honest surface, and all three of
 // these guard exactly that claim, so all three refuse rather than complain.

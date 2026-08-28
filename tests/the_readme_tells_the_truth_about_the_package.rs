@@ -169,3 +169,248 @@ fn the_checks_above_can_fail() {
         "a comment naming the table read as the table"
     );
 }
+
+// The checks above are about the package: its version, its lack of a binary,
+// how it sells itself. The ones below are about the prose, which makes a great
+// many more claims and had nothing reading any of them. Each names something a
+// reader would act on, so each is worth the readme going red over.
+
+use renki::Tool;
+use std::time::Duration;
+
+/// A descriptor whose only interesting field is the short name every derived
+/// environment variable comes from.
+const WIDGET: Tool = Tool {
+    short: "widget",
+    config_file: "widget.toml",
+    pin_keys: renki::pin_keys!("widget"),
+    engine_crate: "widget-engine",
+    cache_namespace: "widget",
+    default_url: "https://example.invalid/widget.git",
+    launcher_crate: "widget",
+    ..Tool::CONVENTIONS
+};
+
+/// Every backticked `WIDGET_...` the readme names, in the order it names them,
+/// without repeats.
+///
+/// Backticked only, so the same names written inside the fenced usage example
+/// are not counted twice: that comment is prose about the descriptor and the
+/// table below it is the claim.
+fn widget_variables_the_readme_names(readme: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for chunk in readme.split('`').skip(1).step_by(2) {
+        let looks_like_ours = chunk.starts_with("WIDGET_")
+            && chunk
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
+        if looks_like_ours && !out.iter().any(|s| s == chunk) {
+            out.push(chunk.to_string());
+        }
+    }
+    out
+}
+
+#[test]
+fn the_three_variables_the_readme_names_are_the_ones_a_launcher_reads() {
+    // The readme's table is the only place a user is told these exist, and the
+    // names are derived rather than written down anywhere else, so a change to
+    // how they are derived leaves the table naming variables nothing reads.
+    // Neither half is an assertion on its own: the pairing is.
+    assert_eq!(WIDGET.root_env(), "WIDGET_ROOT");
+    assert_eq!(WIDGET.cache_env(), "WIDGET_CACHE");
+    assert_eq!(WIDGET.no_self_update_env(), "WIDGET_NO_SELF_UPDATE");
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("no readme");
+    assert_eq!(
+        widget_variables_the_readme_names(&readme),
+        vec![
+            WIDGET.root_env(),
+            WIDGET.cache_env(),
+            WIDGET.no_self_update_env()
+        ],
+        "the readme names a different set of environment variables than a tool \
+         called `widget` would actually answer to"
+    );
+}
+
+#[test]
+fn the_retention_the_readme_states_is_the_one_the_base_carries() {
+    // Thirty days is a number a reader plans around: it is how long a build
+    // nobody has wanted survives before the collector takes it. It appears in
+    // the readme as a word and in `Tool::CONVENTIONS` as a `Duration`, and
+    // nothing connected the two, so the base could be cut to a week with the
+    // readme still promising a month.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("no readme");
+    assert!(
+        readme.contains("thirty days"),
+        "the readme no longer states the default retention, so this check holds \
+         over nothing. Say the figure, or delete this check on purpose"
+    );
+    assert_eq!(
+        Tool::CONVENTIONS.cache_retention,
+        Duration::from_secs(30 * 24 * 60 * 60),
+        "the readme tells a reader thirty days and the base carries something else"
+    );
+}
+
+/// Every backticked token in the readme shaped like a name from this crate's
+/// own surface: an initial capital, alphanumerics, optionally one `::` segment.
+///
+/// The shape filter is what keeps `TOML`, `PATH`, `FNV`, `WIDGET_ROOT`,
+/// `Cargo.toml` and `--dir` out of it, none of which this crate declares. A
+/// token whose letters are all uppercase is a shouted noun rather than a type,
+/// and a token carrying a `.`, a `-`, a space or a `_` in its first segment is
+/// not a Rust path.
+fn surface_names_the_readme_uses(readme: &str) -> Vec<String> {
+    let segment_ok = |s: &str| {
+        let mut c = s.chars();
+        c.next()
+            .is_some_and(|f| f.is_ascii_alphabetic() || f == '_')
+            && c.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    };
+    let mut out: Vec<String> = Vec::new();
+    for chunk in readme.split('`').skip(1).step_by(2) {
+        let mut parts = chunk.split("::");
+        let (Some(head), tail) = (parts.next(), parts.collect::<Vec<_>>()) else {
+            continue;
+        };
+        let shaped = tail.len() <= 1
+            && head.starts_with(|c: char| c.is_ascii_uppercase())
+            && head.chars().all(|c| c.is_ascii_alphanumeric())
+            && tail.iter().all(|t| segment_ok(t));
+        let shouted = chunk
+            .chars()
+            .filter(char::is_ascii_alphabetic)
+            .all(|c| c.is_ascii_uppercase());
+        if shaped && !shouted && !out.iter().any(|s| s == chunk) {
+            out.push(chunk.to_string());
+        }
+    }
+    out
+}
+
+/// The surface the readme is allowed to name, each entry backed by a reference
+/// below that does not compile if the item stops existing under that spelling.
+///
+/// A list rather than a source scan, because a scan for `pub struct X` reads a
+/// comment mentioning one as a declaration, which is the defect `declares_a_bin`
+/// above was written twice for. The list is not a free-standing declaration:
+/// `every_name_here_is_a_name_this_crate_has` is what makes each entry cost
+/// something, and adding a row without adding its reference there is what a
+/// reviewer looks for.
+const NAMEABLE: &[&str] = &[
+    "Anchor",
+    "Anchor::ConfigFile",
+    "Anchor::Marker",
+    "Check",
+    "Cli",
+    "Hooks",
+    "Locate",
+    "Pin",
+    "PinKeys",
+    "Reference",
+    "RegistryThenGitTag",
+    "Resolved",
+    "SelfUpdate",
+    "SelfUpdate::Never",
+    "Tool",
+    "Tool::CONVENTIONS",
+    "Tool::cache_retention",
+    "VersionSource",
+    "VersionSource::GitTag",
+    "Workdir",
+];
+
+#[test]
+fn every_name_here_is_a_name_this_crate_has() {
+    // The other half of `NAMEABLE`. Every row above is referenced here in a way
+    // the compiler checks, so a rename that leaves the readme behind fails the
+    // build of this test rather than shipping a readme naming a type nobody has.
+    let _: Option<renki::Anchor> = Some(renki::Anchor::ConfigFile);
+    let _: renki::Anchor = renki::Anchor::Marker(".git");
+    let _: Option<renki::Check> = None;
+    let _ = renki::Cli::DIR_FLAG;
+    let _: renki::Hooks = renki::Hooks::NONE;
+    let _: renki::Locate = renki::Locate::DEFAULT;
+    let _: fn(&renki::Pin) -> (&str, &renki::Reference) = |p| (&p.url, &p.reference);
+    let _: renki::PinKeys = renki::pin_keys!("widget");
+    let _ = renki::VersionSource::RegistryThenGitTag;
+    let _: fn(&renki::Resolved) -> &renki::Pin = |r| &r.pin;
+    let _: renki::SelfUpdate = renki::SelfUpdate::Never;
+    let _: renki::Tool = Tool::CONVENTIONS;
+    let _: Duration = Tool::CONVENTIONS.cache_retention;
+    let _: renki::VersionSource = renki::VersionSource::GitTag;
+    let _: Option<renki::Workdir> = Tool::CONVENTIONS.workdir;
+    assert_eq!(
+        NAMEABLE.len(),
+        20,
+        "a row was added without a reference above"
+    );
+}
+
+#[test]
+fn the_readme_names_nothing_this_crate_does_not_have() {
+    // Containment rather than equality: dropping a mention is an editorial
+    // choice, and naming a type that does not exist is a reader following a
+    // link into nothing. Only the second is a defect, so only the second is red.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("no readme");
+    let used = surface_names_the_readme_uses(&readme);
+    assert!(
+        !used.is_empty(),
+        "the readme names none of this crate's types, so the check below held \
+         over an empty set"
+    );
+    for name in &used {
+        assert!(
+            NAMEABLE.contains(&name.as_str()),
+            "the readme names `{name}`, which is not on the list of things this \
+             crate has. Either it was renamed, or the list wants a row and a \
+             reference in `every_name_here_is_a_name_this_crate_has`"
+        );
+    }
+}
+
+#[test]
+fn the_prose_checks_above_can_fail() {
+    // Controls. Each of the three readers finds nothing on the wrong input and
+    // something on the right one, and a reader that quietly finds nothing
+    // passes every assertion it feeds.
+    assert_eq!(
+        widget_variables_the_readme_names("| `WIDGET_ROOT` | a |\n| `WIDGET_CACHE` | b |"),
+        vec!["WIDGET_ROOT", "WIDGET_CACHE"]
+    );
+    assert!(
+        widget_variables_the_readme_names("WIDGET_ROOT with no backticks").is_empty(),
+        "an unbackticked name in the usage example counted as a claim"
+    );
+    assert_eq!(
+        widget_variables_the_readme_names("`WIDGET_ROOT` and `WIDGET_ROOT` again"),
+        vec!["WIDGET_ROOT"],
+        "the same variable named twice counted twice"
+    );
+
+    assert_eq!(
+        surface_names_the_readme_uses("`Tool` and `Tool::CONVENTIONS` and `Anchor::Marker`"),
+        vec!["Tool", "Tool::CONVENTIONS", "Anchor::Marker"]
+    );
+    for not_a_type in ["`TOML`", "`PATH`", "`FNV`", "`WIDGET_ROOT`", "`Cargo.toml`"] {
+        assert!(
+            surface_names_the_readme_uses(not_a_type).is_empty(),
+            "{not_a_type} was read as a name this crate declares"
+        );
+    }
+    assert!(
+        surface_names_the_readme_uses("`renki` and `--dir` and `cargo add renki`").is_empty(),
+        "a lowercase word, a flag or a command line read as a type"
+    );
+
+    // And the one that must fail: a readme naming a type that is not there.
+    assert!(
+        !NAMEABLE.contains(&"Widget"),
+        "the guard list would accept a name this crate has never had"
+    );
+}
