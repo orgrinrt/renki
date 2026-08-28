@@ -212,7 +212,7 @@ fn widget_variables_the_readme_names(readme: &str) -> Vec<String> {
 }
 
 #[test]
-fn the_three_variables_the_readme_names_are_the_ones_a_launcher_reads() {
+fn the_variables_the_readme_names_are_the_ones_a_launcher_reads() {
     // The readme's table is the only place a user is told these exist, and the
     // names are derived rather than written down anywhere else, so a change to
     // how they are derived leaves the table naming variables nothing reads.
@@ -221,18 +221,61 @@ fn the_three_variables_the_readme_names_are_the_ones_a_launcher_reads() {
     assert_eq!(WIDGET.cache_env(), "WIDGET_CACHE");
     assert_eq!(WIDGET.no_self_update_env(), "WIDGET_NO_SELF_UPDATE");
 
+    // The two a tool command inherits are derived by `extension::command` from
+    // the same short name, so they are taken from a real `Command` rather than
+    // spelled out here: a spelling written twice is a spelling that can drift.
+    let spawned = variables_a_tool_command_inherits("widget");
+    assert_eq!(spawned, vec!["WIDGET_WORKSPACE", "WIDGET_TOOL_ROOT"]);
+
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let readme = std::fs::read_to_string(root.join("README.md")).expect("no readme");
+    let mut want = vec![
+        WIDGET.root_env(),
+        WIDGET.cache_env(),
+        WIDGET.no_self_update_env(),
+    ];
+    want.extend(spawned);
     assert_eq!(
         widget_variables_the_readme_names(&readme),
-        vec![
-            WIDGET.root_env(),
-            WIDGET.cache_env(),
-            WIDGET.no_self_update_env()
-        ],
+        want,
         "the readme names a different set of environment variables than a tool \
          called `widget` would actually answer to"
     );
+}
+
+/// The variables `extension::command` puts in a child's environment, read off
+/// the `Command` it builds rather than written down a second time.
+fn variables_a_tool_command_inherits(short: &str) -> Vec<String> {
+    use renki::extension::{command, Descriptor, Located};
+
+    static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // Per call, not per process: the pattern this branch spent a blocker
+    // removing from `place_via_scratch`, and no more correct in a test.
+    let dir = std::env::temp_dir().join(format!(
+        "renki-readme-{}-{}",
+        std::process::id(),
+        NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("commands")).unwrap();
+    std::fs::write(dir.join("commands/go"), "#!/bin/sh\n").unwrap();
+
+    let d = Descriptor::parse(
+        "[tool]\nname=\"t\"\nsummary=\"s\"\nbackend=\"local\"\n\
+         [tool.source]\npath = { path = \"tools/t\" }\n\
+         [[tool.commands]]\nname=\"go\"\nsummary=\"g\"\nrun=\"commands/go\"\n",
+    )
+    .expect("the fixture descriptor should parse");
+
+    let at = Located { root: dir.clone() };
+    let cmd = command(&d, &at, "go", short, &dir, &[]).expect("the fixture command should build");
+    let mut names: Vec<String> = cmd
+        .get_envs()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
+        .collect();
+    names.sort_by_key(|n| n.ends_with("_TOOL_ROOT"));
+    let _ = std::fs::remove_dir_all(&dir);
+    names
 }
 
 #[test]
@@ -305,13 +348,22 @@ const NAMEABLE: &[&str] = &[
     "Anchor",
     "Anchor::ConfigFile",
     "Anchor::Marker",
+    "Backend",
+    "Cargo",
     "Check",
     "Cli",
+    "Descriptor",
+    "Descriptor::check",
+    "Git",
     "Hooks",
+    "Local",
     "Locate",
+    "Located",
     "Pin",
     "PinKeys",
     "Reference",
+    "Registered",
+    "Registered::of",
     "RegistryThenGitTag",
     "Resolved",
     "SelfUpdate",
@@ -322,6 +374,11 @@ const NAMEABLE: &[&str] = &[
     "VersionSource",
     "VersionSource::GitTag",
     "Workdir",
+    "command",
+    "fingerprint",
+    "locate",
+    "materialise",
+    "places_itself",
 ];
 
 #[test]
@@ -344,9 +401,22 @@ fn every_name_here_is_a_name_this_crate_has() {
     let _: Duration = Tool::CONVENTIONS.cache_retention;
     let _: renki::VersionSource = renki::VersionSource::GitTag;
     let _: Option<renki::Workdir> = Tool::CONVENTIONS.workdir;
+
+    // The extension half.
+    let _: fn() -> String = <renki::extension::Cargo as renki::extension::Backend>::fingerprint;
+    let _: fn(&renki::extension::Descriptor, &Path) -> Result<(), String> =
+        <renki::extension::Git as renki::extension::Backend>::materialise;
+    let _: fn() -> bool = <renki::extension::Local as renki::extension::Backend>::places_itself;
+    let _: fn(&renki::extension::Descriptor) -> Result<(), String> =
+        renki::extension::Descriptor::check;
+    let _: renki::extension::Registered = renki::extension::Registered::of::<renki::extension::Local>();
+    let _: fn(&renki::extension::Located) -> &std::path::PathBuf = |l| &l.root;
+    let _ = renki::extension::locate;
+    let _ = renki::extension::command;
+
     assert_eq!(
         NAMEABLE.len(),
-        20,
+        34,
         "a row was added without a reference above"
     );
 }

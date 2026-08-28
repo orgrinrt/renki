@@ -147,28 +147,15 @@ pub(crate) fn ensure_built(
         "{}: building the engine for this pin (once per version) ...",
         tool.short
     );
-    let mut failures = Vec::new();
-    for attempt in &resolved.attempts {
-        let status = Command::new("cargo")
-            .arg("install")
-            .args(attempt)
-            .arg("--root")
-            .arg(&root)
-            .arg("--force")
-            .status()
-            .map_err(|e| format!("could not run cargo install: {e}"))?;
-        if status.success() {
-            if bin.is_file() {
-                return Ok(bin);
-            }
-            failures.push(format!(
-                "{attempt:?} reported success but produced no binary"
-            ));
-        } else {
-            failures.push(format!("{attempt:?} failed"));
-        }
-    }
-    Err(build_failure(tool, &failures))
+    crate::extension::materialise_once::<crate::extension::Cargo>(
+        &crate::extension::CargoPlan {
+            attempts:   resolved.attempts.clone(),
+            bin:        tool.engine_bin_name().into(),
+            crate_name: tool.engine_crate.into(),
+        },
+        &root,
+    )?;
+    Ok(bin)
 }
 
 /// What the operator reads when no attempt produced a binary.
@@ -184,14 +171,14 @@ pub(crate) fn ensure_built(
 /// Measured rather than reasoned: installing one engine over `--git` failed
 /// under rustc 1.94 on a transitive crate requiring 1.96, and succeeded
 /// unchanged from a directory pinning a newer toolchain.
-fn build_failure(tool: &Tool, failures: &[String]) -> String {
+pub(crate) fn build_failure(engine_crate: &str, failures: &[String]) -> String {
     format!(
         "could not build the {} engine for this pin; nothing was cached.\n  \
          tried, in order:\n    - {}\n  \
          the pin may be wrong, the release may not exist yet, the build may have broken, \
          or the toolchain in effect here ({}) may be older than one of the engine's \
          dependencies requires.",
-        tool.engine_crate,
+        engine_crate,
         failures.join("\n    - "),
         rustc_version_line()
     )

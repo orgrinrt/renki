@@ -20,7 +20,7 @@ const T: Tool = Tool {
 
 #[test]
 fn the_build_failure_names_every_cause_including_the_toolchain() {
-    let msg = build_failure(&T, &["a failed".to_string(), "b failed".to_string()]);
+    let msg = build_failure(T.engine_crate, &["a failed".to_string(), "b failed".to_string()]);
     // the engine it could not build, and each attempt in order
     assert!(msg.contains("engine"), "{msg}");
     assert!(

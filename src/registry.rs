@@ -429,6 +429,23 @@ pub(crate) fn record_and_collect(
         // forever, and for branch resolutions meant never.
         crate::engine::sweep(cache_root);
         crate::pin::sweep_branch_resolutions(cache_root, tool.cache_retention);
+        // And the tool cache, which nothing else reaches. A tool has no
+        // registry row to evict on, because it is named by a workspace's own
+        // configuration rather than resolved through a pin, so it ages out on
+        // last use instead. Without this every superseded revision, and every
+        // scratch left by a fetch that died, stayed on disk forever.
+        let gone = crate::extension::collect(
+            cache_root,
+            tool.cache_retention,
+            std::time::SystemTime::now(),
+        );
+        if !gone.is_empty() {
+            eprintln!(
+                "{}: cache gc removed {} unused tool(s)",
+                tool.short,
+                gone.len()
+            );
+        }
     }
     reg.save(&path);
 }
