@@ -162,3 +162,50 @@ mod tests;
 pub(crate) fn syntax_error(text: &str) -> Option<String> {
     text.parse::<toml::Table>().err().map(|e| e.to_string())
 }
+
+/// A top-level key that looks like it was meant to be a pin key and is not.
+///
+/// The config belongs to the tool and carries whatever keys it likes, so an
+/// unknown one cannot be refused and is not refused. What this catches is the
+/// narrower case where the reader is about to be told to add a pin to a file
+/// that, to them, already has one: `mockspace_ref` sits there looking like a
+/// pin, matches none of the five, and reads as no pin at all.
+///
+/// The test is the prefix the five share. A tool's keys are conventionally one
+/// name plus a suffix, so `widget_` is what they have in common and a sixth key
+/// starting with it was aimed at this tool. Where they share nothing, there is
+/// no way to tell a near miss from any other key the config carries, and this
+/// answers `None` rather than guessing.
+pub(crate) fn near_miss(tool: &Tool, text: &str) -> Option<String> {
+    let table = text.parse::<toml::Table>().ok()?;
+    let k = &tool.pin_keys;
+    let known = [k.version, k.rev, k.tag, k.branch, k.git];
+    let prefix = shared_prefix(&known);
+    // Two characters, so a tool whose keys happen to start with the same letter
+    // does not read every key in the file as a near miss.
+    if prefix.len() < 2 {
+        return None;
+    }
+    table
+        .keys()
+        .find(|name| name.starts_with(prefix) && !known.contains(&name.as_str()))
+        .cloned()
+}
+
+/// The longest prefix every one of `names` begins with.
+///
+/// Byte-wise, and the keys are ASCII by construction: `Tool::defect` refuses a
+/// pin key that is not, so there is no character boundary to land inside.
+fn shared_prefix<'a>(names: &[&'a str]) -> &'a str {
+    let Some(first) = names.first() else {
+        return "";
+    };
+    let mut len = first.len();
+    for n in &names[1 ..] {
+        len = len.min(n.len());
+        while !first.as_bytes()[.. len].eq(&n.as_bytes()[.. len]) {
+            len -= 1;
+        }
+    }
+    &first[.. len]
+}

@@ -180,3 +180,82 @@ fn a_missing_or_unparseable_manifest_names_the_path() {
     let err = package_name(broken.path()).unwrap_err();
     assert!(err.contains("Cargo.toml"), "{err}");
 }
+
+#[test]
+fn a_key_aimed_at_this_tool_and_missing_is_named() {
+    // A config carrying `eng_ref` reads as carrying no pin at all, so the
+    // reader is told to add one to a file that, to them, already has one.
+    assert_eq!(
+        near_miss(&T, "eng_ref = \"abc\"\n").as_deref(),
+        Some("eng_ref")
+    );
+    // Whatever else the tool keeps its own config in is not a near miss. The
+    // file belongs to the tool and an unknown key cannot be refused, which is
+    // the whole reason this is narrow.
+    assert_eq!(near_miss(&T, "work_dir = \"w\"\n"), None);
+    assert_eq!(near_miss(&T, "unrelated = 1\n"), None);
+    // Nor is a key that is one of the five.
+    for k in [
+        T.pin_keys.version,
+        T.pin_keys.rev,
+        T.pin_keys.tag,
+        T.pin_keys.branch,
+        T.pin_keys.git,
+    ] {
+        assert_eq!(near_miss(&T, &format!("{k} = \"x\"\n")), None, "{k}");
+    }
+    // And a file that is not toml at all answers nothing rather than failing:
+    // `resolve_pin` reports the syntax error itself, before it gets here.
+    assert_eq!(near_miss(&T, "eng_ref = \n"), None);
+}
+
+#[test]
+fn a_tool_whose_keys_share_almost_nothing_gets_no_near_miss() {
+    // The guard, and it is the reason `near_miss` can be wrong only by staying
+    // quiet. With keys sharing one character or none there is no way to tell a
+    // near miss from any other key the config carries, so every key in the file
+    // would be reported and the message would be noise.
+    let one = Tool {
+        pin_keys: crate::PinKeys {
+            version: "vv",
+            rev: "vr",
+            tag: "tt",
+            branch: "bb",
+            git: "gg",
+        },
+        ..T
+    };
+    assert_eq!(near_miss(&one, "vx = \"1\"\n"), None);
+
+    let shared = Tool {
+        pin_keys: crate::PinKeys {
+            version: "ab_version",
+            rev: "ab_rev",
+            tag: "ab_tag",
+            branch: "ab_branch",
+            git: "ab_git",
+        },
+        ..T
+    };
+    assert_eq!(
+        near_miss(&shared, "ab_ref = \"1\"\n").as_deref(),
+        Some("ab_ref"),
+        "a two-character shared prefix is enough and is the boundary"
+    );
+}
+
+#[test]
+fn the_shared_prefix_is_the_longest_every_name_begins_with() {
+    assert_eq!(shared_prefix(&["eng_version", "eng_rev", "eng_tag"]), "eng_");
+    // No overlap at all.
+    assert_eq!(shared_prefix(&["a", "b"]), "");
+    // One name is itself the prefix, so the answer cannot be longer than it.
+    assert_eq!(shared_prefix(&["ab", "abc", "abcd"]), "ab");
+    // Identical names.
+    assert_eq!(shared_prefix(&["same", "same"]), "same");
+    // A single name is its own prefix, and an empty list has none.
+    assert_eq!(shared_prefix(&["only"]), "only");
+    assert_eq!(shared_prefix(&[]), "");
+    // An empty name drives the answer to nothing whatever sits beside it.
+    assert_eq!(shared_prefix(&["eng_version", ""]), "");
+}

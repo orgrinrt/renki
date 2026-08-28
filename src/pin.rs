@@ -77,12 +77,51 @@ impl Resolved {
             Reference::Rev(_) | Reference::Branch(_) => ("rev", self.key_rev.as_str()),
         }
     }
+
+    /// Resolve a pin without touching the network, so a tool can build one of
+    /// these and run its own hooks against it.
+    ///
+    /// A hook takes a `&Resolved`, and the two fields that decide what
+    /// [`git_ref`](Resolved::git_ref) answers are crate-only, because they have
+    /// to agree with each other. That is right for the invariant and it left
+    /// every hook untestable outside this crate, which is what this is for.
+    /// It goes through the same derivation a run does, so the pair cannot be
+    /// made to disagree here either.
+    ///
+    /// A branch pin is refused. Resolving one means asking the remote where the
+    /// branch points, and a test that reaches the network is not a test.
+    /// Everything else, a version, a tag and a rev, is already immutable and
+    /// resolves the same way here as it does in a run.
+    pub fn without_network(tool: &Tool, pin: &Pin) -> Result<Self, String> {
+        build(tool, pin, |b| {
+            Err(format!(
+                "the branch pin {b} cannot be resolved without the network: a branch \
+                 is whatever the remote says it is right now. Pin a version, a tag or \
+                 a rev instead.",
+            ))
+        })
+    }
 }
 
 /// Resolve a pin to concrete build attempts. A branch resolves to its current
 /// head via `git ls-remote`, cached with a TTL; a rev, tag or version is
 /// already immutable.
 pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resolved, String> {
+    build(tool, pin, |b| resolve_branch(pin, b, cache_root))
+}
+
+/// The derivation itself, with the one part that needs a remote handed in.
+///
+/// Everything but a branch is immutable and derives from the pin alone, so the
+/// only difference between a run and [`Resolved::without_network`] is what the
+/// branch arm does. Keeping that the only difference is the point: `key_rev`,
+/// `attempts` and `version_tag` have to agree, and one code path is what makes
+/// that hold for both callers rather than for the one somebody remembered.
+fn build(
+    tool: &Tool,
+    pin: &Pin,
+    branch_sha: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Resolved, String> {
     let git = |sel: &[&str]| -> Vec<String> {
         let mut a = vec!["--git".to_string(), pin.url.clone()];
         a.extend(sel.iter().map(|s| s.to_string()));
@@ -137,7 +176,7 @@ pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resol
         Reference::Rev(r) => (r.clone(), vec![git(&["--rev", r])]),
         Reference::Tag(t) => (format!("tag:{t}"), vec![git(&["--tag", t])]),
         Reference::Branch(b) => {
-            let sha = resolve_branch(pin, b, cache_root)?;
+            let sha = branch_sha(b)?;
             let attempts = vec![git(&["--rev", &sha])];
             (sha, attempts)
         }
