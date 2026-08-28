@@ -15,7 +15,7 @@ const T: Tool = Tool {
     default_url: "ssh://default",
     launcher_crate: "t-launcher",
     workdir: Some(Workdir {
-        key: "work_dir",
+        key:          "work_dir",
         root_default: "work",
     }),
     ..Tool::CONVENTIONS
@@ -218,10 +218,10 @@ fn a_tool_whose_keys_share_almost_nothing_gets_no_near_miss() {
     let one = Tool {
         pin_keys: crate::PinKeys {
             version: "vv",
-            rev: "vr",
-            tag: "tt",
-            branch: "bb",
-            git: "gg",
+            rev:     "vr",
+            tag:     "tt",
+            branch:  "bb",
+            git:     "gg",
         },
         ..T
     };
@@ -230,10 +230,10 @@ fn a_tool_whose_keys_share_almost_nothing_gets_no_near_miss() {
     let shared = Tool {
         pin_keys: crate::PinKeys {
             version: "ab_version",
-            rev: "ab_rev",
-            tag: "ab_tag",
-            branch: "ab_branch",
-            git: "ab_git",
+            rev:     "ab_rev",
+            tag:     "ab_tag",
+            branch:  "ab_branch",
+            git:     "ab_git",
         },
         ..T
     };
@@ -246,7 +246,10 @@ fn a_tool_whose_keys_share_almost_nothing_gets_no_near_miss() {
 
 #[test]
 fn the_shared_prefix_is_the_longest_every_name_begins_with() {
-    assert_eq!(shared_prefix(&["eng_version", "eng_rev", "eng_tag"]), "eng_");
+    assert_eq!(
+        shared_prefix(&["eng_version", "eng_rev", "eng_tag"]),
+        "eng_"
+    );
     // No overlap at all.
     assert_eq!(shared_prefix(&["a", "b"]), "");
     // One name is itself the prefix, so the answer cannot be longer than it.

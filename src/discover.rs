@@ -23,7 +23,7 @@ pub(crate) struct Located {
     /// The config to read the pin from.
     pub config_path: PathBuf,
     /// The absolute directory the engine runs against.
-    pub workdir: PathBuf,
+    pub workdir:     PathBuf,
 }
 
 /// The repo root.
@@ -119,7 +119,7 @@ pub(crate) fn locate(tool: &Tool, root: &Path) -> Result<Option<Located>, String
         1 => {
             let (config_path, dir) = found.into_iter().next().unwrap();
             Ok(Some(located(tool, root, &dir, config_path)))
-        }
+        },
         _ => {
             let list = found
                 .iter()
@@ -131,7 +131,7 @@ pub(crate) fn locate(tool: &Tool, root: &Path) -> Result<Option<Located>, String
                  repo root, or in a single subdir). Remove the extras, keep one:\n{list}",
                 tool.config_file
             ))
-        }
+        },
     }
 }
 
@@ -200,11 +200,13 @@ fn no_root_with(tool: &Tool, from_env: Option<std::ffi::OsString>) -> String {
     };
     let env = tool.root_env();
     match from_env {
-        Some(v) => format!(
-            "no {what} found in this directory or any above it. {env} is set to {}, which is \
+        Some(v) => {
+            format!(
+                "no {what} found in this directory or any above it. {env} is set to {}, which is \
              not a directory, so it was ignored",
-            Path::new(&v).display()
-        ),
+                Path::new(&v).display()
+            )
+        },
         None => format!("no {what} found in this directory or any above it, and {env} is unset"),
     }
 }

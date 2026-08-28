@@ -33,10 +33,10 @@ pub struct Resolved {
     /// The pin this came from, kept so a tool's hooks can derive whatever they
     /// need to hand the engine without re-reading the config. A dependency that
     /// must match the exact revision the engine was built from is the case.
-    pub pin: Pin,
+    pub pin:                Pin,
     /// The stable component of the cache key: `v:<version>` for a release, the
     /// concrete rev for a rev or branch pin, `tag:<t>` for a tag.
-    pub key_rev: String,
+    pub key_rev:            String,
     /// One or more `cargo install` argument lists, source selectors and package
     /// name included, tried in order until one succeeds. `--root` and `--force`
     /// are added by the cache. A version pin tries the registry first, then the
@@ -45,7 +45,7 @@ pub struct Resolved {
     /// Not public. It is the build plan rather than anything a hook needs, and
     /// leaving it reachable would mean a caller could rewrite the plan out from
     /// under the rest of the struct.
-    pub(crate) attempts: Vec<Vec<String>>,
+    pub(crate) attempts:    Vec<Vec<String>>,
     /// The tag a version pin resolved to, which is the bare version unless the
     /// tool said its repository spells tags differently. Empty for every other
     /// reference kind, which carries its own ref already.
@@ -172,14 +172,14 @@ fn build(
             // first here whichever one existed. See `Resolved::git_ref`.
             version_tag = tags[0].clone();
             (key, attempts)
-        }
+        },
         Reference::Rev(r) => (r.clone(), vec![git(&["--rev", r])]),
         Reference::Tag(t) => (format!("tag:{t}"), vec![git(&["--tag", t])]),
         Reference::Branch(b) => {
             let sha = branch_sha(b)?;
             let attempts = vec![git(&["--rev", &sha])];
             (sha, attempts)
-        }
+        },
     };
     Ok(Resolved {
         pin: pin.clone(),
@@ -208,7 +208,7 @@ fn resolve_branch(pin: &Pin, branch: &str, cache_root: &Path) -> Result<String, 
             eprintln!("{e}");
             eprintln!("using the last known revision for {branch}: {sha}");
             return Ok(sha);
-        }
+        },
     };
     if let Some(parent) = cache.parent() {
         let _ = std::fs::create_dir_all(parent);

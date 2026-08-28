@@ -67,25 +67,25 @@ pub enum Anchor {
 /// that line is the whole rule for where a new member belongs.
 pub struct Tool {
     /// How the repo root is found. See [`Anchor`].
-    pub anchor: Anchor,
+    pub anchor:          Anchor,
     /// The short name this launcher answers to, used in its own diagnostics
     /// (`widget: ...`) and, uppercased, as the prefix of the environment
     /// variables it reads: `WIDGET_ROOT` overrides discovery, `WIDGET_CACHE`
     /// overrides where the built engines go, and `WIDGET_NO_SELF_UPDATE` turns
     /// the update check off.
-    pub short: &'static str,
+    pub short:           &'static str,
     /// The one config file a repo carries, e.g. `widget.toml`.
-    pub config_file: &'static str,
+    pub config_file:     &'static str,
     /// What the pin keys inside that config are called. See [`PinKeys`].
-    pub pin_keys: PinKeys,
+    pub pin_keys:        PinKeys,
     /// The engine's package name, which is what `cargo install` is asked for.
-    pub engine_crate: &'static str,
+    pub engine_crate:    &'static str,
     /// The binary that package installs, when it is not named after the
     /// package. A crate `widget-engine` whose `[[bin]]` is `widget` names
     /// `Some("widget")` here.
     ///
     /// `None` is the ordinary case and means the two are the same.
-    pub engine_bin: Option<&'static str>,
+    pub engine_bin:      Option<&'static str>,
     /// The directory under `$XDG_CACHE_HOME` (or `~/.cache`) this launcher
     /// owns. Distinct per tool so two tools never share a build cache.
     ///
@@ -107,37 +107,37 @@ pub struct Tool {
     /// build output directory adds its own, which is worth doing: a stray file
     /// with this tool's config name anywhere in scope is a hard error that
     /// blocks every run, not a scan result.
-    pub scan_skip: &'static [&'static str],
+    pub scan_skip:       &'static [&'static str],
     /// The engine's source when the config names none.
-    pub default_url: &'static str,
+    pub default_url:     &'static str,
     /// Where a `version` pin is allowed to look. See [`VersionSource`].
-    pub version_source: VersionSource,
+    pub version_source:  VersionSource,
     /// This launcher's own package name, which is how it recognises its own
     /// entry in cargo's install ledger when checking for an update.
-    pub launcher_crate: &'static str,
+    pub launcher_crate:  &'static str,
     /// The working subdirectory the engine is pointed at, when the tool has
     /// one. `None` runs the engine against the repo root.
-    pub workdir: Option<Workdir>,
+    pub workdir:         Option<Workdir>,
     /// The flag the engine takes its absolute working directory on. The
     /// launcher always passes it, and strips any copy the user wrote, so the
     /// engine never has to decide which of two answers is right.
     ///
     /// [`Cli::DIR_FLAG`] is the conventional `--dir`.
-    pub dir_flag: &'static str,
+    pub dir_flag:        &'static str,
     /// The flag that points the launcher at a checkout on disk instead of the
     /// pinned engine. Consumed by the launcher and never forwarded, so an
     /// engine wanting a flag of this name needs a different one here.
     ///
     /// [`Cli::ENGINE_FLAG`] is the conventional `--engine`.
-    pub engine_flag: &'static str,
+    pub engine_flag:     &'static str,
     /// The query the launcher answers itself, and what it calls the parts of
     /// its answer. `None` for a tool that answers no such query and forwards
     /// every subcommand to the engine. See [`Locate`].
-    pub locate: Option<Locate>,
+    pub locate:          Option<Locate>,
     /// Whether this launcher keeps itself current. See [`SelfUpdate`].
-    pub self_update: SelfUpdate,
+    pub self_update:     SelfUpdate,
     /// The tool-specific parts, all optional.
-    pub hooks: Hooks,
+    pub hooks:           Hooks,
 }
 
 /// Where a `version` pin is allowed to resolve the engine from.
@@ -197,13 +197,13 @@ impl Cli {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Locate {
     /// The subcommand that triggers the query.
-    pub subcommand: &'static str,
+    pub subcommand:  &'static str,
     /// What the answer calls the repo root.
-    pub root_key: &'static str,
+    pub root_key:    &'static str,
     /// What the answer calls the config file's path. Empty in the answer when
     /// the repo has a working directory and no config, which is a real shape
     /// rather than a broken one.
-    pub config_key: &'static str,
+    pub config_key:  &'static str,
     /// What the answer calls the working directory. Empty in the answer when
     /// there is no such directory on disk.
     pub workdir_key: &'static str,
@@ -213,9 +213,9 @@ impl Locate {
     /// The conventional spelling: a `locate` subcommand answering under `root`,
     /// `config` and `workdir`.
     pub const DEFAULT: Locate = Locate {
-        subcommand: "locate",
-        root_key: "root",
-        config_key: "config",
+        subcommand:  "locate",
+        root_key:    "root",
+        config_key:  "config",
         workdir_key: "workdir",
     };
 
@@ -272,14 +272,14 @@ pub struct PinKeys {
     /// second.
     pub version: &'static str,
     /// An exact commit.
-    pub rev: &'static str,
+    pub rev:     &'static str,
     /// A tag.
-    pub tag: &'static str,
+    pub tag:     &'static str,
     /// A moving branch head.
-    pub branch: &'static str,
+    pub branch:  &'static str,
     /// Where the engine's source is, overriding
     /// [`Tool::default_url`](crate::Tool::default_url).
-    pub git: &'static str,
+    pub git:     &'static str,
 }
 
 impl PinKeys {
@@ -327,10 +327,10 @@ macro_rules! pin_keys {
     ($prefix:literal) => {
         $crate::PinKeys {
             version: ::core::concat!($prefix, "_version"),
-            rev: ::core::concat!($prefix, "_rev"),
-            tag: ::core::concat!($prefix, "_tag"),
-            branch: ::core::concat!($prefix, "_branch"),
-            git: ::core::concat!($prefix, "_git"),
+            rev:     ::core::concat!($prefix, "_rev"),
+            tag:     ::core::concat!($prefix, "_tag"),
+            branch:  ::core::concat!($prefix, "_branch"),
+            git:     ::core::concat!($prefix, "_git"),
         }
     };
 }
@@ -371,7 +371,7 @@ pub type Check = fn(&Path) -> Result<(), String>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Workdir {
     /// The config key naming it, e.g. `widget_dir`.
-    pub key: &'static str,
+    pub key:          &'static str,
     /// What a root-level config means when it does not set the key.
     pub root_default: &'static str,
 }
@@ -412,7 +412,9 @@ impl Workdir {
 /// ```
 /// # use renki::Hooks;
 /// const HOOKS: Hooks = Hooks {
-///     prepare_repo: Some(|_root| { /* plant whatever this tool keeps in a repo */ }),
+///     prepare_repo: Some(
+///         |_root| { /* plant whatever this tool keeps in a repo */ },
+///     ),
 ///     ..Hooks::NONE
 /// };
 /// ```
@@ -420,11 +422,11 @@ pub struct Hooks {
     /// Run once the repo and its config are located, before the engine is
     /// built. Whatever a tool must keep planted in a repo goes here, and it is
     /// best-effort by contract: it cannot fail the command the user ran.
-    pub prepare_repo: Option<fn(&Path)>,
+    pub prepare_repo:      Option<fn(&Path)>,
     /// Extra arguments passed to the engine ahead of the user's, derived from
     /// the resolved pin. This is how a tool hands the engine something that
     /// must match the exact revision the engine was built from.
-    pub engine_args: Option<fn(&Resolved) -> Vec<String>>,
+    pub engine_args:       Option<fn(&Resolved) -> Vec<String>>,
     /// The same, for the `--engine <path>` override, where there is no pin and
     /// the source is a working tree.
     pub engine_args_local: Option<fn(&Path) -> Vec<String>>,
@@ -434,7 +436,7 @@ pub struct Hooks {
     pub verify_engine_dir: Option<Check>,
     /// A last-resort pin for a repo that has not adopted an explicit one,
     /// given the working directory. Keeps a repo mid-migration running.
-    pub legacy_pin: Option<fn(&Path) -> Option<Pin>>,
+    pub legacy_pin:        Option<fn(&Path) -> Option<Pin>>,
     /// The tag a released version is under, where the repository does not name
     /// its tags after the bare version.
     ///
@@ -446,7 +448,7 @@ pub struct Hooks {
     ///
     /// Every string this returns is tried in order, so a repository that
     /// changed convention partway can name both.
-    pub version_tags: Option<fn(&str) -> Vec<String>>,
+    pub version_tags:      Option<fn(&str) -> Vec<String>>,
     /// Refuse a repo state that would silently route the user somewhere else,
     /// given the repo root.
     ///
@@ -461,12 +463,12 @@ impl Hooks {
     /// A tool that needs none of the extension points, and the base every other
     /// tool spreads.
     pub const NONE: Hooks = Hooks {
-        prepare_repo: None,
-        engine_args: None,
+        prepare_repo:      None,
+        engine_args:       None,
         engine_args_local: None,
         verify_engine_dir: None,
-        version_tags: None,
-        legacy_pin: None,
+        version_tags:      None,
+        legacy_pin:        None,
         verify_repo_state: None,
     };
 }
@@ -510,30 +512,30 @@ impl Tool {
     /// what buys the compatibility, so the guarantee is theirs and nobody
     /// else's.
     pub const CONVENTIONS: Tool = Tool {
-        anchor: Anchor::Marker(".git"),
-        short: "",
-        config_file: "",
-        pin_keys: PinKeys {
+        anchor:          Anchor::Marker(".git"),
+        short:           "",
+        config_file:     "",
+        pin_keys:        PinKeys {
             version: "",
-            rev: "",
-            tag: "",
-            branch: "",
-            git: "",
+            rev:     "",
+            tag:     "",
+            branch:  "",
+            git:     "",
         },
-        engine_crate: "",
-        engine_bin: None,
+        engine_crate:    "",
+        engine_bin:      None,
         cache_namespace: "",
         cache_retention: Duration::from_secs(30 * 24 * 60 * 60),
-        scan_skip: &[".git", "target", "node_modules"],
-        default_url: "",
-        version_source: VersionSource::GitTag,
-        launcher_crate: "",
-        workdir: None,
-        dir_flag: Cli::DIR_FLAG,
-        engine_flag: Cli::ENGINE_FLAG,
-        locate: Some(Locate::DEFAULT),
-        self_update: SelfUpdate::ChaseTheBranch,
-        hooks: Hooks::NONE,
+        scan_skip:       &[".git", "target", "node_modules"],
+        default_url:     "",
+        version_source:  VersionSource::GitTag,
+        launcher_crate:  "",
+        workdir:         None,
+        dir_flag:        Cli::DIR_FLAG,
+        engine_flag:     Cli::ENGINE_FLAG,
+        locate:          Some(Locate::DEFAULT),
+        self_update:     SelfUpdate::ChaseTheBranch,
+        hooks:           Hooks::NONE,
     };
 
     /// The file name of the binary the engine's build produces.
@@ -688,20 +690,14 @@ impl Tool {
         let k = &self.pin_keys;
         // Written out rather than looped, because a `const fn` cannot build the
         // array of `&str` this would iterate over, and the pairs are few.
-        let names: [&'static str; 6] = [
-            k.version,
-            k.rev,
-            k.tag,
-            k.branch,
-            k.git,
-            match self.workdir {
+        let names: [&'static str; 6] =
+            [k.version, k.rev, k.tag, k.branch, k.git, match self.workdir {
                 // A tool with no working directory has five names to compare,
                 // and repeating one of them against itself is the cheapest way
                 // to say so in a const context: it collides with nothing new.
                 Some(w) => w.key,
                 None => k.version,
-            },
-        ];
+            }];
         let mut i = 0;
         while i < names.len() {
             let mut j = i + 1;
@@ -789,11 +785,7 @@ impl Tool {
         let Some(wd) = &self.workdir else {
             return root.to_path_buf();
         };
-        let default = if config_dir == root {
-            wd.root_default
-        } else {
-            "."
-        };
+        let default = if config_dir == root { wd.root_default } else { "." };
         normalize(config_dir.join(declared.unwrap_or_else(|| default.to_string())))
     }
 

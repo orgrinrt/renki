@@ -81,7 +81,7 @@ pub enum Reference {
 pub struct Pin {
     /// Where the engine's source is. The tool's
     /// [`default_url`](crate::Tool::default_url) when the config names none.
-    pub url: String,
+    pub url:       String,
     /// Which revision of it, in whichever of the four forms the config used.
     pub reference: Reference,
 }
@@ -98,9 +98,9 @@ pub struct Header {
     /// names it.
     pub workdir: Option<String>,
     /// The declared engine source, if any.
-    pub url: Option<String>,
+    pub url:     Option<String>,
     /// The declared revision, in whichever form the config used.
-    pub pin: Option<Reference>,
+    pub pin:     Option<Reference>,
 }
 
 impl Header {
@@ -140,7 +140,7 @@ impl Header {
     /// when it names no url of its own.
     pub fn to_pin(&self, tool: &Tool) -> Option<Pin> {
         Some(Pin {
-            url: self
+            url:       self
                 .url
                 .clone()
                 .unwrap_or_else(|| tool.default_url.to_string()),

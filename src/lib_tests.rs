@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: MPL-2.0     https://mozilla.org/MPL/2.0        contact@hiisi.digital
 //--------------------------------------------------------------------------------------------------
 
-use super::*;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
+
+use super::*;
 
 const T: Tool = Tool {
     short: "widget",
@@ -96,7 +97,10 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
             default_url: "",
             ..T
         },
-        Tool { dir_flag: "", ..T },
+        Tool {
+            dir_flag: "",
+            ..T
+        },
         // The same string for both, so `normalize_args` strips the user's
         // copy as the directory flag and `dispatch` then finds no override
         // to act on. The launcher runs and quietly ignores what was asked.
@@ -125,14 +129,14 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
         // empty is what these are.
         Tool {
             workdir: Some(Workdir {
-                key: "",
+                key:          "",
                 root_default: "src",
             }),
             ..T
         },
         Tool {
             workdir: Some(Workdir {
-                key: "t_dir",
+                key:          "t_dir",
                 root_default: "",
             }),
             ..T
@@ -228,7 +232,7 @@ fn a_launcher_with_a_broken_descriptor_refuses_to_start() {
         // revision are read out of the same table.
         Tool {
             workdir: Some(Workdir {
-                key: "t_branch",
+                key:          "t_branch",
                 root_default: "sub",
             }),
             ..T
@@ -370,7 +374,7 @@ fn a_sound_descriptor_is_not_refused() {
     // this is what says the stand-in is not itself read as a collision.
     const WITH_WORKDIR: Tool = Tool {
         workdir: Some(Workdir {
-            key: "t_dir",
+            key:          "t_dir",
             root_default: "sub",
         }),
         ..T
@@ -463,9 +467,9 @@ fn the_locate_answer_uses_the_tools_own_key_names() {
     // conventional spellings anyway and its own shell helpers, parsing the
     // names it had chosen, parsed nothing at all.
     const OWN: Locate = Locate {
-        subcommand: "locate",
-        root_key: "repo",
-        config_key: "manifest",
+        subcommand:  "locate",
+        root_key:    "repo",
+        config_key:  "manifest",
         workdir_key: "work_dir",
     };
     let d = tempfile::tempdir().unwrap();
@@ -515,7 +519,7 @@ fn record<'a>(answer: &'a [u8], key: &str) -> Option<&'a [u8]> {
     answer
         .split(|b| *b == b'\n')
         .find(|line| line.starts_with(&want))
-        .map(|line| &line[want.len()..])
+        .map(|line| &line[want.len() ..])
 }
 
 #[test]
@@ -618,7 +622,7 @@ fn a_config_that_is_not_toml_is_reported_as_that_and_not_as_a_missing_pin() {
     let config = d.path().join("t.toml");
     std::fs::write(&config, "t_version = \"0.1.0\"\nbroken = [1, 2\n").unwrap();
     let located = crate::discover::Located {
-        workdir: d.path().to_path_buf(),
+        workdir:     d.path().to_path_buf(),
         config_path: config.clone(),
     };
     let err = resolve_pin(&T, Some(&located), d.path(), d.path()).unwrap_err();
@@ -642,7 +646,7 @@ fn a_config_that_is_toml_and_names_no_pin_still_says_to_add_one() {
     let config = d.path().join("t.toml");
     std::fs::write(&config, "unrelated = \"value\"\n").unwrap();
     let located = crate::discover::Located {
-        workdir: d.path().to_path_buf(),
+        workdir:     d.path().to_path_buf(),
         config_path: config.clone(),
     };
     let err = resolve_pin(&T, Some(&located), d.path(), d.path()).unwrap_err();

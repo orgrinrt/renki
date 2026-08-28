@@ -167,16 +167,17 @@ impl Descriptor {
             ))
         };
         match &self.source {
-            Source::Git { url, rev } => {
+            Source::Git {
+                url,
+                rev,
+            } => {
                 // A full object name, which is what git can fetch by: forty hex
                 // under sha-1 and sixty-four under sha-256, both of which a
                 // repository may use. A short prefix is neither: `git fetch
                 // --depth 1 origin <7-hex>` fails with `couldn't find remote
                 // ref`, measured against git 2.55, so accepting one only defers
                 // the error to the fetch.
-                if !rev.chars().all(|c| c.is_ascii_hexdigit())
-                    || !matches!(rev.len(), 40 | 64)
-                {
+                if !rev.chars().all(|c| c.is_ascii_hexdigit()) || !matches!(rev.len(), 40 | 64) {
                     return bad("revision", rev);
                 }
                 let ok = ["https://", "ssh://", "git://", "git@"];
@@ -191,7 +192,9 @@ impl Descriptor {
                     return bad("url", url);
                 }
             },
-            Source::Path { path } => {
+            Source::Path {
+                path,
+            } => {
                 if path.is_empty() || path.starts_with('-') {
                     return bad("path", path);
                 }
@@ -219,12 +222,9 @@ impl Descriptor {
     /// and a root or prefix component is what makes `join` throw the root away.
     fn stays_inside(p: &str) -> bool {
         use std::path::Component;
-        Path::new(p).components().all(|c| {
-            matches!(
-                c,
-                Component::Normal(_) | Component::CurDir
-            )
-        })
+        Path::new(p)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
     }
 
     /// Read a descriptor from a `tool.toml`.
@@ -392,7 +392,10 @@ fn place_via_scratch(
         },
         Err(e) => {
             let _ = std::fs::remove_dir_all(&scratch);
-            Err(format!("could not place the tool at {}: {e}", root.display()))
+            Err(format!(
+                "could not place the tool at {}: {e}",
+                root.display()
+            ))
         },
     }
 }
@@ -404,11 +407,11 @@ fn place_via_scratch(
 #[derive(Debug, Clone, Copy)]
 pub struct Registered {
     /// The name a descriptor matches against.
-    pub name:        &'static str,
-    fingerprint:     fn() -> String,
-    materialise:     fn(&Descriptor, &Path) -> Result<(), String>,
-    caches:          fn() -> bool,
-    places_itself:   fn() -> bool,
+    pub name:      &'static str,
+    fingerprint:   fn() -> String,
+    materialise:   fn(&Descriptor, &Path) -> Result<(), String>,
+    caches:        fn() -> bool,
+    places_itself: fn() -> bool,
 }
 
 impl Registered {
@@ -420,10 +423,10 @@ impl Registered {
     /// reached statically instead, through [`materialise_once`].
     pub const fn of<B: Backend<Plan = Descriptor>>() -> Self {
         Self {
-            name:        B::NAME,
-            fingerprint: B::fingerprint,
-            materialise: B::materialise,
-            caches:      B::caches,
+            name:          B::NAME,
+            fingerprint:   B::fingerprint,
+            materialise:   B::materialise,
+            caches:        B::caches,
             places_itself: B::places_itself,
         }
     }
@@ -456,7 +459,9 @@ pub struct Registry {
 impl Registry {
     /// A registry over a static backend table.
     pub const fn new(backends: &'static [Registered]) -> Self {
-        Self { backends }
+        Self {
+            backends,
+        }
     }
 
     /// The backend a descriptor names, if this registry has it.
@@ -485,7 +490,11 @@ impl Registry {
 /// this is `pub`, so a host reaching it directly would otherwise get the exact
 /// collision `locate` exists to prevent.
 pub fn cache_key(descriptor: &Descriptor, backend: &Registered) -> Result<String, String> {
-    let Source::Git { url, rev } = &descriptor.source else {
+    let Source::Git {
+        url,
+        rev,
+    } = &descriptor.source
+    else {
         return Err(format!(
             "the tool `{}` names a path, which is relative to one workspace, \
              and a cache key is shared by all of them",
@@ -539,7 +548,10 @@ pub fn locate(
     })?;
 
     if !backend.caches() {
-        let Source::Path { path } = &descriptor.source else {
+        let Source::Path {
+            path,
+        } = &descriptor.source
+        else {
             return Err(format!(
                 "the backend `{}` does not cache, so the tool `{}` must name a path source",
                 descriptor.backend, descriptor.name
@@ -553,7 +565,9 @@ pub fn locate(
                 root.display()
             ));
         }
-        return Ok(Located { root });
+        return Ok(Located {
+            root,
+        });
     }
 
     // This is where a caching backend with a path source is refused, since a
@@ -566,14 +580,18 @@ pub fn locate(
         // fetch time would say a tool used every day had not been touched since
         // the day it arrived.
         touch(&root);
-        return Ok(Located { root });
+        return Ok(Located {
+            root,
+        });
     }
 
     place(&root, backend.places_itself(), |into| {
         (backend.materialise)(descriptor, into)
     })?;
     touch(&root);
-    Ok(Located { root })
+    Ok(Located {
+        root,
+    })
 }
 
 /// The command line for one of a tool's commands.
@@ -603,7 +621,11 @@ pub fn command(
 ) -> Result<Command, String> {
     descriptor.check()?;
     let def = descriptor.command(name).ok_or_else(|| {
-        let known: Vec<&str> = descriptor.commands.iter().map(|c| c.name.as_str()).collect();
+        let known: Vec<&str> = descriptor
+            .commands
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
         if known.is_empty() {
             format!("the tool `{}` offers no commands", descriptor.name)
         } else {
@@ -665,9 +687,9 @@ pub fn command(
 pub struct Local;
 
 impl Backend for Local {
-    const NAME: &'static str = "local";
-
     type Plan = Descriptor;
+
+    const NAME: &'static str = "local";
 
     fn fingerprint() -> String {
         String::new()
@@ -686,9 +708,9 @@ impl Backend for Local {
 pub struct Git;
 
 impl Backend for Git {
-    const NAME: &'static str = "git";
-
     type Plan = Descriptor;
+
+    const NAME: &'static str = "git";
 
     /// Nothing. A checkout is the same bytes whatever is installed on the
     /// machine that took it, so there is no environment to key on.
@@ -697,7 +719,11 @@ impl Backend for Git {
     }
 
     fn materialise(descriptor: &Descriptor, into: &Path) -> Result<(), String> {
-        let Source::Git { url, rev } = &descriptor.source else {
+        let Source::Git {
+            url,
+            rev,
+        } = &descriptor.source
+        else {
             return Err(format!(
                 "the tool `{}` uses the git backend and names no git source",
                 descriptor.name
@@ -748,11 +774,11 @@ mod tests;
 #[derive(Debug, Clone)]
 pub struct CargoPlan {
     /// The argument lists, tried in order.
-    pub attempts: Vec<Vec<String>>,
+    pub attempts:   Vec<Vec<String>>,
     /// The binary the install must produce under `<root>/bin`, checked because
     /// cargo reporting success is not the same as cargo having built the thing
     /// that was wanted.
-    pub bin:      String,
+    pub bin:        String,
     /// Named in the failure message, so an operator reads the crate that did
     /// not build rather than the launcher that asked for it.
     pub crate_name: String,
@@ -769,9 +795,9 @@ pub struct CargoPlan {
 pub struct Cargo;
 
 impl Backend for Cargo {
-    const NAME: &'static str = "cargo";
-
     type Plan = CargoPlan;
+
+    const NAME: &'static str = "cargo";
 
     /// `rustc -vV`, which carries the version, the commit hash, the host triple
     /// and the LLVM version.

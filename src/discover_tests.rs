@@ -18,7 +18,7 @@ const REPO: Tool = Tool {
     default_url: "u",
     launcher_crate: "t-launcher",
     workdir: Some(Workdir {
-        key: "work_dir",
+        key:          "work_dir",
         root_default: "work",
     }),
     ..Tool::CONVENTIONS

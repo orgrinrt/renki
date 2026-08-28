@@ -42,9 +42,9 @@ struct Marker;
 static MATERIALISED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl Backend for Marker {
-    const NAME: &'static str = "marker";
-
     type Plan = Descriptor;
+
+    const NAME: &'static str = "marker";
 
     fn fingerprint() -> String {
         "marker-v1".into()
@@ -62,9 +62,9 @@ impl Backend for Marker {
 struct Broken;
 
 impl Backend for Broken {
-    const NAME: &'static str = "broken";
-
     type Plan = Descriptor;
+
+    const NAME: &'static str = "broken";
 
     fn fingerprint() -> String {
         String::new()
@@ -105,13 +105,10 @@ fn a_descriptor_parses_every_field() {
     assert_eq!(d.tags, vec!["rules", "docs"]);
     assert_eq!(d.backend, "git");
     assert!(d.promote);
-    assert_eq!(
-        d.source,
-        Source::Git {
-            url: "https://example.invalid/rules.git".into(),
-            rev: "0123456789abcdef0123456789abcdef01234567".into(),
-        }
-    );
+    assert_eq!(d.source, Source::Git {
+        url: "https://example.invalid/rules.git".into(),
+        rev: "0123456789abcdef0123456789abcdef01234567".into(),
+    });
 }
 
 #[test]
@@ -120,8 +117,14 @@ fn the_command_table_is_the_dispatch_table() {
     // dispatches them, without fetching anything.
     let d = desc();
     assert_eq!(d.commands.len(), 2);
-    assert_eq!(d.command("show").map(|c| c.run.as_str()), Some("commands/show"));
-    assert_eq!(d.command("list").map(|c| c.summary.as_str()), Some("every rule"));
+    assert_eq!(
+        d.command("show").map(|c| c.run.as_str()),
+        Some("commands/show")
+    );
+    assert_eq!(
+        d.command("list").map(|c| c.summary.as_str()),
+        Some("every rule")
+    );
     assert!(d.command("nope").is_none());
 }
 
@@ -169,7 +172,11 @@ fn nonsense_is_refused() {
 /// The same descriptor with one field changed, for the key tests below.
 fn with_url(url: &str) -> Descriptor {
     let mut d = desc();
-    let Source::Git { rev, .. } = &d.source else {
+    let Source::Git {
+        rev,
+        ..
+    } = &d.source
+    else {
         unreachable!("the fixture is a git source")
     };
     d.source = Source::Git {
@@ -268,7 +275,9 @@ fn a_path_source_resolves_against_the_workspace_and_is_not_cached() {
     std::fs::create_dir_all(root.join("tools/x")).unwrap();
     let mut d = desc();
     d.backend = "local".into();
-    d.source = Source::Path { path: "tools/x".into() };
+    d.source = Source::Path {
+        path: "tools/x".into(),
+    };
 
     let cache = root.join("cache");
     let at = locate(&d, &registry(), &root, &cache).unwrap();
@@ -284,7 +293,9 @@ fn a_missing_local_directory_is_reported_against_the_path() {
     let root = scratch("absent");
     let mut d = desc();
     d.backend = "local".into();
-    d.source = Source::Path { path: "tools/absent".into() };
+    d.source = Source::Path {
+        path: "tools/absent".into(),
+    };
     let err = locate(&d, &registry(), &root, &root.join("cache")).unwrap_err();
     assert!(err.contains("absent"), "{err}");
 }
@@ -305,7 +316,6 @@ fn materialising_happens_once_and_the_second_call_is_a_cache_hit() {
     let mut d = desc();
     d.backend = "marker".into();
 
-
     // Counted as a delta rather than against an absolute. The counter is a
     // global and the tests run in parallel threads, so an absolute reading is a
     // claim about every other test that touches this backend, and it broke each
@@ -314,7 +324,10 @@ fn materialising_happens_once_and_the_second_call_is_a_cache_hit() {
     let before = count();
 
     let first = locate(&d, &registry(), &root, &cache).unwrap();
-    assert_eq!(std::fs::read_to_string(first.root.join("who")).unwrap(), "rules");
+    assert_eq!(
+        std::fs::read_to_string(first.root.join("who")).unwrap(),
+        "rules"
+    );
     let after_first = count();
     assert!(
         after_first > before,
@@ -358,7 +371,9 @@ fn runnable(root: &Path) {
 fn a_command_runs_the_file_the_descriptor_names() {
     let root = scratch("run");
     runnable(&root);
-    let at = Located { root: root.clone() };
+    let at = Located {
+        root: root.clone(),
+    };
     let cmd = command(&desc(), &at, "list", "renki", &root, &[]).unwrap();
     assert_eq!(cmd.get_program(), root.join("commands/list").as_os_str());
 }
@@ -373,7 +388,9 @@ fn a_command_is_told_which_workspace_it_is_acting_on() {
     let ws = root.join("somewhere-else");
     std::fs::create_dir_all(&ws).unwrap();
 
-    let at = Located { root: root.clone() };
+    let at = Located {
+        root: root.clone(),
+    };
 
     // Both variables, under two different hosts, because the names are derived
     // from the host's short name rather than fixed. Asserting one name under one
@@ -408,7 +425,10 @@ fn a_command_is_told_which_workspace_it_is_acting_on() {
         // spellings would fail here rather than passing twice.
         for absent in ["HOMMA_WORKSPACE", "RENKI_WORKSPACE", "MOCK_WORKSPACE"] {
             if absent != ws_var {
-                assert!(got(absent).is_none(), "{absent} set under {short}: {envs:?}");
+                assert!(
+                    got(absent).is_none(),
+                    "{absent} set under {short}: {envs:?}"
+                );
             }
         }
         assert_eq!(cmd.get_current_dir(), Some(ws.as_path()));
@@ -419,17 +439,24 @@ fn a_command_is_told_which_workspace_it_is_acting_on() {
 fn arguments_are_forwarded() {
     let root = scratch("args");
     runnable(&root);
-    let at = Located { root: root.clone() };
+    let at = Located {
+        root: root.clone(),
+    };
     let args = vec!["--load".to_string(), "always".to_string()];
     let cmd = command(&desc(), &at, "list", "renki", &root, &args).unwrap();
-    let got: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    let got: Vec<_> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     assert_eq!(got, args);
 }
 
 #[test]
 fn an_unknown_command_lists_the_ones_that_exist() {
     let root = scratch("typo");
-    let at = Located { root: root.clone() };
+    let at = Located {
+        root: root.clone(),
+    };
     let err = command(&desc(), &at, "shwo", "renki", &root, &[]).unwrap_err();
     assert!(err.contains("shwo"), "{err}");
     assert!(err.contains("list") && err.contains("show"), "{err}");
@@ -438,7 +465,9 @@ fn an_unknown_command_lists_the_ones_that_exist() {
 #[test]
 fn a_command_whose_file_is_missing_says_so_before_running_anything() {
     let root = scratch("missing");
-    let at = Located { root: root.clone() };
+    let at = Located {
+        root: root.clone(),
+    };
     let err = command(&desc(), &at, "list", "renki", &root, &[]).unwrap_err();
     assert!(err.contains("commands/list"), "{err}");
 }
@@ -446,7 +475,9 @@ fn a_command_whose_file_is_missing_says_so_before_running_anything() {
 #[test]
 fn a_tool_with_no_commands_says_that_rather_than_listing_nothing() {
     let root = scratch("nocmds");
-    let at = Located { root: root.clone() };
+    let at = Located {
+        root: root.clone(),
+    };
     let mut d = desc();
     d.commands.clear();
     let err = command(&d, &at, "anything", "renki", &root, &[]).unwrap_err();
@@ -493,13 +524,20 @@ fn a_url_on_no_known_scheme_is_refused() {
         with_source(r#"git = { url = "--config=core.sshCommand=id", rev = "0123456789abcdef0123456789abcdef01234567" }"#)
             .is_err()
     );
-    assert!(with_source(r#"git = { url = "file:///etc", rev = "0123456789abcdef0123456789abcdef01234567" }"#).is_err());
+    assert!(
+        with_source(
+            r#"git = { url = "file:///etc", rev = "0123456789abcdef0123456789abcdef01234567" }"#
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn every_accepted_scheme_is_accepted() {
     for u in ["https://e.invalid/x.git", "ssh://e.invalid/x.git", "git@e.invalid:x.git"] {
-        let r = with_source(&format!(r#"git = {{ url = "{u}", rev = "0123456789abcdef0123456789abcdef01234567" }}"#));
+        let r = with_source(&format!(
+            r#"git = {{ url = "{u}", rev = "0123456789abcdef0123456789abcdef01234567" }}"#
+        ));
         assert!(r.is_ok(), "{u} was refused: {r:?}");
     }
 }
@@ -537,7 +575,9 @@ fn an_absolute_run_cannot_name_an_executable_outside_the_tool() {
     // descriptor was materialised into is never consulted.
     let root = scratch("run-absolute");
     runnable(&root);
-    let at = Located { root: root.clone() };
+    let at = Located {
+        root: root.clone(),
+    };
 
     let err = command(&with_run("/bin/sh"), &at, "go", "renki", &root, &[]).unwrap_err();
     assert!(err.contains("/bin/sh"), "{err}");
@@ -555,7 +595,9 @@ fn a_run_climbing_out_of_the_tool_is_refused() {
     let deep = root.join("a/b/c");
     std::fs::create_dir_all(deep.join("commands")).unwrap();
     std::fs::write(deep.join("commands/list"), "#!/bin/sh\n").unwrap();
-    let at = Located { root: deep.clone() };
+    let at = Located {
+        root: deep.clone(),
+    };
 
     let err = command(&with_run("../../../sh"), &at, "go", "renki", &root, &[]).unwrap_err();
     assert!(err.contains("not inside it"), "{err}");
@@ -576,7 +618,9 @@ fn a_run_that_is_a_symlink_out_of_the_tool_is_refused() {
     std::fs::write(outside.join("sh"), "#!/bin/sh\n").unwrap();
     std::fs::create_dir_all(root.join("commands")).unwrap();
     std::os::unix::fs::symlink(outside.join("sh"), root.join("commands/list")).unwrap();
-    let at = Located { root: root.clone() };
+    let at = Located {
+        root: root.clone(),
+    };
 
     let err = command(&desc(), &at, "list", "renki", &root, &[]).unwrap_err();
     assert!(err.contains("outside the tool"), "{err}");
@@ -607,7 +651,10 @@ fn an_unknown_field_in_a_descriptor_is_refused_rather_than_ignored() {
     let base = "[tool]\nname=\"x\"\nsummary=\"y\"\nbackend=\"git\"\n\
                 [tool.source]\ngit = { url = \"https://e.invalid/x.git\", \
                 rev = \"0123456789abcdef0123456789abcdef01234567\" }\n";
-    assert!(Descriptor::parse(base).is_ok(), "the control does not parse");
+    assert!(
+        Descriptor::parse(base).is_ok(),
+        "the control does not parse"
+    );
     assert!(Descriptor::parse(&format!("{base}promoted = true\n")).is_err());
     assert!(Descriptor::parse(&format!("{base}tag = [\"a\"]\n")).is_err());
     assert!(
@@ -655,9 +702,9 @@ fn two_threads_racing_on_one_key_publish_one_fetch_whole() {
     struct Slow;
 
     impl Backend for Slow {
-        const NAME: &'static str = "slow";
-
         type Plan = Descriptor;
+
+        const NAME: &'static str = "slow";
 
         fn fingerprint() -> String {
             String::new()
@@ -723,14 +770,15 @@ fn two_threads_racing_on_one_key_publish_one_fetch_whole() {
 /// Records the directory it was handed, so a test can tell whether it was given
 /// the destination or a scratch beside it.
 static PLACED_IN_PLACE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
-static PLACED_VIA_SCRATCH: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+static PLACED_VIA_SCRATCH: std::sync::Mutex<Option<std::path::PathBuf>> =
+    std::sync::Mutex::new(None);
 
 struct PlacesItself;
 
 impl Backend for PlacesItself {
-    const NAME: &'static str = "places-itself";
-
     type Plan = Descriptor;
+
+    const NAME: &'static str = "places-itself";
 
     fn fingerprint() -> String {
         String::new()
@@ -770,7 +818,10 @@ fn a_backend_that_places_itself_is_handed_the_destination() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|n| n.starts_with('.'))
         .collect();
-    assert!(siblings.is_empty(), "a scratch was made anyway: {siblings:?}");
+    assert!(
+        siblings.is_empty(),
+        "a scratch was made anyway: {siblings:?}"
+    );
 }
 
 #[test]
@@ -780,7 +831,10 @@ fn a_backend_that_does_not_is_handed_a_scratch_and_renamed_into_place() {
     let root = scratch("via-scratch").join("dest");
     materialise_once::<PlacesElsewhere>(&desc(), &root).unwrap();
 
-    assert!(root.join("elsewhere").is_file(), "nothing arrived at the destination");
+    assert!(
+        root.join("elsewhere").is_file(),
+        "nothing arrived at the destination"
+    );
     assert_ne!(
         PLACED_VIA_SCRATCH.lock().unwrap().as_deref(),
         Some(root.as_path()),
@@ -791,7 +845,10 @@ fn a_backend_that_does_not_is_handed_a_scratch_and_renamed_into_place() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|n| n.starts_with('.'))
         .collect();
-    assert!(siblings.is_empty(), "the scratch was left behind: {siblings:?}");
+    assert!(
+        siblings.is_empty(),
+        "the scratch was left behind: {siblings:?}"
+    );
 }
 
 #[test]
@@ -828,10 +885,9 @@ fn the_cargo_backend_reports_every_attempt_that_failed() {
     std::fs::create_dir_all(&into).unwrap();
     let err = Cargo::materialise(
         &CargoPlan {
-            attempts:   vec![
-                vec!["--no-such-flag-alpha".into()],
-                vec!["--no-such-flag-beta".into()],
-            ],
+            attempts:   vec![vec!["--no-such-flag-alpha".into()], vec![
+                "--no-such-flag-beta".into(),
+            ]],
             bin:        "nothing".into(),
             crate_name: "the-engine".into(),
         },
@@ -847,9 +903,9 @@ fn the_cargo_backend_reports_every_attempt_that_failed() {
 struct PlacesElsewhere;
 
 impl Backend for PlacesElsewhere {
-    const NAME: &'static str = "places-elsewhere";
-
     type Plan = Descriptor;
+
+    const NAME: &'static str = "places-elsewhere";
 
     fn fingerprint() -> String {
         String::new()
@@ -884,16 +940,18 @@ fn a_cargo_install_that_succeeds_without_the_binary_is_a_failure() {
 
     let into = base.join("root");
     std::fs::create_dir_all(&into).unwrap();
-    let plan = |bin: &str| CargoPlan {
-        attempts:   vec![
-            "--path".into(),
-            src.display().to_string(),
-            "--target-dir".into(),
-            into.join("target").display().to_string(),
-        ]
-        .pipe_one(),
-        bin:        bin.into(),
-        crate_name: "alpha".into(),
+    let plan = |bin: &str| {
+        CargoPlan {
+            attempts:   vec![
+                "--path".into(),
+                src.display().to_string(),
+                "--target-dir".into(),
+                into.join("target").display().to_string(),
+            ]
+            .pipe_one(),
+            bin:        bin.into(),
+            crate_name: "alpha".into(),
+        }
     };
 
     // The control first, so a failure below is about the name rather than about
@@ -1004,7 +1062,10 @@ fn a_tool_with_no_marker_is_stamped_rather_than_evicted() {
 
     let removed = collect(&cache, std::time::Duration::from_secs(0), later(365 * DAY));
 
-    assert!(removed.is_empty(), "it evicted an unmarked tool: {removed:?}");
+    assert!(
+        removed.is_empty(),
+        "it evicted an unmarked tool: {removed:?}"
+    );
     assert!(tools.join("cccc/payload").is_file());
     assert!(
         tools.join("cccc/.last-used").is_file(),
@@ -1081,7 +1142,10 @@ fn a_scratch_this_process_owns_is_never_collected() {
 
     assert_eq!(removed, vec![".aaaa.999999.0".to_string()]);
     assert!(mine.exists(), "it collected its own in-flight scratch");
-    assert!(!theirs.exists(), "the control survived, so nothing was collected");
+    assert!(
+        !theirs.exists(),
+        "the control survived, so nothing was collected"
+    );
 }
 
 #[test]
