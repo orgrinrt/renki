@@ -52,7 +52,7 @@ use crate::hash::Fnv;
 /// nothing to fetch and copying it would put a stale duplicate between the
 /// author and their own edits.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Source {
     /// A remote repository and the revision to take. The revision is a commit
     /// rather than a branch wherever it matters: a branch means the tool can
@@ -80,6 +80,7 @@ pub enum Source {
 /// hand-written command list cannot drift from the dispatch table: this **is**
 /// the dispatch table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommandDef {
     /// What the host invokes it as.
     pub name:    String,
@@ -95,6 +96,7 @@ pub struct CommandDef {
 
 /// A parsed `tool.toml`. No i/o has happened and none is needed to read it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Descriptor {
     /// What the host invokes the tool as. Matches the directory it was found
     /// in, where it was found in one.
@@ -127,19 +129,35 @@ impl Descriptor {
         let d = toml::from_str::<Outer>(text)
             .map(|o| o.tool)
             .map_err(|e| format!("could not read the tool descriptor: {e}"))?;
-        d.check_source()?;
+        d.check()?;
         Ok(d)
     }
 
-    /// Refuse a source that a fetcher would read as its own flags.
+    /// Refuse a descriptor whose values a fetcher or a spawn would read as
+    /// something other than data.
     ///
     /// A descriptor can arrive from a git ref, so its values are not the
-    /// workspace author's word. A `rev` of `--upload-pack=...` is a command to
-    /// git rather than a revision, and a leading dash anywhere is the shape of
-    /// that whole class. The callers also put a `--` sentinel in the argv; this
-    /// is the other half, because a sentinel does not help for a value that is
-    /// legal in the position it lands in.
-    fn check_source(&self) -> Result<(), String> {
+    /// workspace author's word. Two classes, and both are checked here because
+    /// both reach a process:
+    ///
+    /// A `rev` of `--upload-pack=...` is a command to git rather than a
+    /// revision, and a leading dash anywhere is the shape of that whole class.
+    /// The callers also put a `--` sentinel in the argv; this is the other
+    /// half, because a sentinel does not help for a value that is legal in the
+    /// position it lands in.
+    ///
+    /// A `run` of `/bin/sh`, or of `../../../sh`, is the same class pointed at
+    /// [`command`] instead of at git. `Path::join` discards its left side when
+    /// the right is absolute, so an unchecked `run` names any executable on the
+    /// machine and the tool root the descriptor was materialised into is not
+    /// consulted at all.
+    ///
+    /// **This is public and is called again by [`locate`] and [`command`].**
+    /// The fields are public and `Deserialize` is derived, so a descriptor can
+    /// reach either of those without passing through [`Descriptor::parse`], and
+    /// a check that only runs at construction guards nothing about a value that
+    /// was never constructed that way.
+    pub fn check(&self) -> Result<(), String> {
         let bad = |what: &str, v: &str| {
             Err(format!(
                 "the tool `{}` has a {what} of `{v}`, which is not one",
@@ -148,21 +166,59 @@ impl Descriptor {
         };
         match &self.source {
             Source::Git { url, rev } => {
-                if !rev.chars().all(|c| c.is_ascii_hexdigit()) || !(7 ..= 64).contains(&rev.len()) {
+                // Forty hex is a full object name and is what git can fetch by.
+                // A short prefix is not: `git fetch --depth 1 origin <7-hex>`
+                // fails with `couldn't find remote ref`, measured against git
+                // 2.55, so accepting one only defers the error to the fetch.
+                if !rev.chars().all(|c| c.is_ascii_hexdigit()) || rev.len() != 40 {
                     return bad("revision", rev);
                 }
                 let ok = ["https://", "ssh://", "git://", "git@"];
-                if !ok.iter().any(|p| url.starts_with(p)) {
+                let Some(rest) = ok.iter().find_map(|p| url.strip_prefix(p)) else {
+                    return bad("url", url);
+                };
+                // A dash after the scheme is a host git reads as an ssh flag,
+                // `ssh://-oProxyCommand=...`. Current git refuses those itself;
+                // this does not rely on that, because the version in front of
+                // the user is not this crate's to choose.
+                if rest.starts_with('-') || rest.is_empty() {
                     return bad("url", url);
                 }
             },
             Source::Path { path } => {
-                if path.starts_with('-') || path.starts_with('/') || path.contains("..") {
+                if path.is_empty() || path.starts_with('-') {
+                    return bad("path", path);
+                }
+                if !Self::stays_inside(path) {
                     return bad("path", path);
                 }
             },
         }
+        for c in &self.commands {
+            if c.run.is_empty() || c.run.starts_with('-') || !Self::stays_inside(&c.run) {
+                return Err(format!(
+                    "the tool `{}` has a command `{}` that runs `{}`, which is not inside it",
+                    self.name, c.name, c.run
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// Whether a relative path can only ever resolve under the root it is
+    /// joined to.
+    ///
+    /// Component-wise rather than by substring. `..` as a substring catches
+    /// `a..b`, which is a legal name, and misses nothing a component scan does;
+    /// and a root or prefix component is what makes `join` throw the root away.
+    fn stays_inside(p: &str) -> bool {
+        use std::path::Component;
+        Path::new(p).components().all(|c| {
+            matches!(
+                c,
+                Component::Normal(_) | Component::CurDir
+            )
+        })
     }
 
     /// Read a descriptor from a `tool.toml`.
@@ -313,19 +369,27 @@ pub fn cache_key(descriptor: &Descriptor, backend: &Registered) -> String {
 /// about exactly one backend and it stops being true here.
 ///
 /// So this does not take a lock; it makes one unnecessary. The backend
-/// materialises into a scratch directory beside the destination, and the
-/// finished directory is then moved into place with a single rename. Two
-/// processes racing on the same key both do the work and one rename wins, which
-/// costs a duplicated fetch in a rare case and can never expose a half-written
-/// tool to a reader. A lock would trade that for a lock file to leak, a stale
-/// one to detect, and a failure mode where one crashed process blocks every
-/// other.
+/// materialises into a scratch directory of its own, and the finished directory
+/// is then moved into place with a single rename. Two callers racing on the same
+/// key both do the work and one rename wins, which costs a duplicated fetch in a
+/// rare case. A lock would trade that for a lock file to leak, a stale one to
+/// detect, and a failure mode where one crashed process blocks every other.
+///
+/// **The scratch name is unique per call, not per process**, and that is the
+/// load bearing part rather than a detail. A name derived from the process id
+/// alone is shared by every thread in it: `locate` takes shared references and
+/// is `pub`, so two threads on one key wrote into one scratch, and the published
+/// tree was spliced from both fetches while both callers returned `Ok`. The
+/// counter below is what makes each caller's scratch its own, and it is why the
+/// cleanup on the error and lost-race paths can remove a directory without
+/// removing somebody else's work.
 pub fn locate(
     descriptor: &Descriptor,
     registry: &Registry,
     workspace: &Path,
     cache: &Path,
 ) -> Result<Located, String> {
+    descriptor.check()?;
     let backend = registry.get(&descriptor.backend).ok_or_else(|| {
         format!(
             "the tool `{}` names the backend `{}`, which is not one of: {}",
@@ -353,6 +417,18 @@ pub fn locate(
         return Ok(Located { root });
     }
 
+    // A path is relative to a workspace and the cache is shared by all of them,
+    // so the two cannot be combined: the key would be a workspace-relative
+    // string, and two workspaces each holding a `tools/x` would collide on one
+    // entry holding whichever content got there first.
+    if let Source::Path { path } = &descriptor.source {
+        return Err(format!(
+            "the tool `{}` is at the path `{path}`, and the backend `{}` caches; \
+             a path is relative to one workspace and the cache is shared by all of them",
+            descriptor.name, descriptor.backend
+        ));
+    }
+
     let key = cache_key(descriptor, backend);
     let root = cache.join("tools").join(&key);
     if root.is_dir() {
@@ -363,11 +439,17 @@ pub fn locate(
         .map_err(|e| format!("could not create the tool cache: {e}"))?;
 
     // Beside the destination rather than in the system temp directory, so the
-    // rename below is within one filesystem and therefore atomic.
+    // rename below is within one filesystem and therefore atomic. Unique per
+    // call rather than per process, per the note above: the counter is what
+    // separates two threads racing on one key.
+    static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nth = NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let scratch = cache
         .join("tools")
-        .join(format!(".{key}.{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
+        .join(format!(".{key}.{}.{nth}", std::process::id()));
+    // No pre-emptive remove. The name is this call's alone, so anything already
+    // at it would be a collision that cannot happen, and the remove that used to
+    // be here is what deleted a sibling thread's in-flight materialise.
     (backend.materialise)(descriptor, &scratch).inspect_err(|_| {
         let _ = std::fs::remove_dir_all(&scratch);
     })?;
@@ -388,18 +470,30 @@ pub fn locate(
 
 /// The command line for one of a tool's commands.
 ///
-/// `workspace` reaches the child as `HOMMA_WORKSPACE` and as its working
+/// `workspace` reaches the child as `<SHORT>_WORKSPACE` and as its working
 /// directory, and that is the load bearing part of this function. A tool's code
 /// lives in a cache shared by every workspace on the machine; its data does
 /// not. So a tool may never derive a data path from its own location, and the
 /// only way it can know which workspace it is acting on is because it was told.
+///
+/// `short` is the host's own short name, and the variable is derived from it the
+/// same way [`Tool::root_env`](crate::Tool::root_env) and its siblings are. It
+/// is a parameter rather than a constant because this crate is the launcher
+/// framework and not any one launcher: a variable named for one host, welded
+/// into a published crate, is that host's policy in everybody else's contract
+/// with every child process they spawn.
+///
+/// `<SHORT>_TOOL_ROOT` reaches the child too, naming the tool's own materialised
+/// root, so a command can find files it shipped beside itself.
 pub fn command(
     descriptor: &Descriptor,
     located: &Located,
     name: &str,
+    short: &str,
     workspace: &Path,
     args: &[String],
 ) -> Result<Command, String> {
+    descriptor.check()?;
     let def = descriptor.command(name).ok_or_else(|| {
         let known: Vec<&str> = descriptor.commands.iter().map(|c| c.name.as_str()).collect();
         if known.is_empty() {
@@ -421,12 +515,38 @@ pub fn command(
             exe.display()
         ));
     }
+    // The check above established the `run` string cannot escape. This
+    // establishes the resolved file does not either, which is a different claim:
+    // a symlink inside the tool tree pointing out of it passes every check on
+    // the string and lands wherever it points. Both are needed and neither
+    // implies the other.
+    //
+    // The resolved pair is used for the comparison and thrown away. `Command`
+    // gets the path as written, because canonicalising rewrites it (`/var`
+    // becomes `/private/var` here) and the caller asked to run a file at a
+    // place, not at that place's other name.
+    let (Ok(real), Ok(root)) = (exe.canonicalize(), located.root.canonicalize()) else {
+        return Err(format!(
+            "`{} {name}` should run {}, which could not be resolved",
+            descriptor.name,
+            exe.display()
+        ));
+    };
+    if !real.starts_with(&root) {
+        return Err(format!(
+            "`{} {name}` resolves to {}, which is outside the tool at {}",
+            descriptor.name,
+            real.display(),
+            root.display()
+        ));
+    }
 
+    let up = short.to_uppercase();
     let mut cmd = Command::new(&exe);
     cmd.args(args)
         .current_dir(workspace)
-        .env("HOMMA_WORKSPACE", workspace)
-        .env("RENKI_TOOL_ROOT", &located.root);
+        .env(format!("{up}_WORKSPACE"), workspace)
+        .env(format!("{up}_TOOL_ROOT"), &located.root);
     Ok(cmd)
 }
 
