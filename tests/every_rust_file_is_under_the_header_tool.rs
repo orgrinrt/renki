@@ -300,10 +300,45 @@ fn the_toolchain_pin_governs_the_checkout_and_never_the_package() {
          belongs in the package. Name what ships instead."
     );
 
-    let shipped: Vec<&&str> = entries.iter().filter(|e| e.contains("rust-toolchain")).collect();
+    // The manifest is the intent and the tarball is the fact, so the fact is
+    // what gets asserted. `include` is not the only thing deciding what ships:
+    // cargo has its own always-included set and its own exclusions, and a
+    // reading of the list cannot see either.
+    let out = Command::new(env!("CARGO"))
+        .arg("package")
+        .args(["--list", "--allow-dirty"])
+        .current_dir(manifest_dir)
+        .output()
+        .expect("cargo could not be run");
+    assert!(
+        out.status.success(),
+        "cargo package --list failed, so what ships is unknown rather than \
+         known good: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let listed: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect();
+
+    // Without this the assertion below holds over an empty list, which is what
+    // a cargo that printed nothing and still exited zero would produce.
+    assert!(
+        listed.iter().any(|f| f == "Cargo.toml"),
+        "cargo listed no `Cargo.toml`, so it listed nothing recognisable and \
+         the check below would pass over an empty set: {listed:?}"
+    );
+
+    let shipped: Vec<&String> = listed
+        .iter()
+        .filter(|f| f.contains("rust-toolchain"))
+        .collect();
     assert!(
         shipped.is_empty(),
-        "`include` names the toolchain pin: {shipped:?}\n\
+        "the package carries the toolchain pin: {shipped:?}\n\
          Shipping it makes every `cargo install` of this crate build under our \
          nightly, which is the one thing targeting stable was for."
     );
