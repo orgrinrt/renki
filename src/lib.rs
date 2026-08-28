@@ -91,6 +91,7 @@ mod args;
 mod cache;
 mod discover;
 mod engine;
+pub mod extension;
 mod env;
 mod hash;
 mod manifest;
