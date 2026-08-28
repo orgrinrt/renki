@@ -8,7 +8,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/issues)
 ![License](https://img.shields.io/github/license/orgrinrt/renki?color=%23009689)
 
-> A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared build cache and the handover. Unix only, two dependencies.
+> A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, two dependencies.
 
 </div>
 
@@ -165,6 +165,64 @@ Switch over to `RegistryThenGitTag` once you own the name and want the faster
 cold build. Do note that it's a promise you're making about that name, and not
 something anyone can check on your behalf.
 
+## Backends and extensions
+
+Fetching and building is a contract. `Backend` is a trait of associated
+functions with no `self`, since a backend is a policy and not a value, and
+`Registered::of::<B>()` is its const fn-pointer form, so a host holds a
+`&'static [Registered]` of several with no allocation and no dynamic dispatch.
+`Cargo`, `Local` and `Git` ship, and yours goes beside them.
+
+A backend says three things about itself. `fingerprint` is whatever about its
+own environment belongs in the cache key, so a compiler that moved re-keys and
+forces a coherent rebuild, and a backend that only copies bytes returns nothing.
+`materialise` puts the material somewhere. `places_itself` says whether it takes
+the destination directly or a scratch that gets renamed into place once it's
+finished, which is where they actually differ: `cargo install --root` holds
+cargo's own lock over the install root and moves the binary in itself, so a
+scratch around that would be a second, weaker mechanism over a working one, and
+would discard the incremental target directory on every build. Everything
+fetched takes the scratch, which is what keeps a reader from seeing a
+half-written tree.
+
+Extensions are the other half. A host reads tool descriptors out of its own
+config, so the tools are heterogeneous, the backend is named by a string rather
+than known at compile time, and listing what a tool offers mustn't fetch
+anything. So the api splits on whether it touches the disk: `Descriptor` is a
+parsed `tool.toml`, `Located` is what it becomes once a backend has put it
+somewhere, and only running resolves.
+
+```toml
+[tool]
+name    = "rules"
+summary = "read the workspace rules"
+tags    = ["rules", "docs"]
+backend = "git"
+promote = true
+
+[tool.source]
+git = { url = "https://github.com/o/rules.git", rev = "0123456789abcdef0123456789abcdef01234567" }
+
+[[tool.commands]]
+name    = "list"
+summary = "every rule"
+run     = "commands/list"
+```
+
+The commands sit in the descriptor rather than behind the tool's own `--help`,
+which lets a host print what a tool offers without fetching it, and means the
+list can't drift from what dispatches, since this is what dispatches. `run` is a
+path and not a shell string, so a command is a file with a shebang and a test on
+it, where shell inside a toml value is unquotable and invisible to every lint
+you own.
+
+A descriptor can arrive from a git ref, so `Descriptor::check` refuses values
+that would read as something other than data: a `rev` that's a flag to git, a
+url on no scheme it knows, a `run` that's absolute or climbs out of the tool. It
+runs at parse and again at `locate` and `command`, since the fields are public
+and a descriptor deserialises straight out of toml, so one reaches either
+without having been parsed at all.
+
 ## What the launcher answers on its own
 
 `widget locate` prints the repo root, the config and the working directory, one
@@ -211,18 +269,35 @@ next pass, which is what happens when a repo re-pins to a newer engine, or when
 the repo is simply gone. One that's still pinned but that nobody has wanted for
 `Tool::cache_retention`, thirty days by default, goes the same way.
 
-Three environment variables, all named after your `short`:
+Materialised tools sit beside the builds under `tools/`, keyed on the source,
+the revision and whatever the backend said about its own environment. The
+workspace is not in that key, so twenty workspaces on the same tool at the same
+revision share one copy.
+
+Those age out on last use rather than on a registry row, since nothing records
+who wants a tool, and the same `cache_retention` applies. One with no mark yet
+gets stamped instead of taken. A scratch left by a fetch that died goes after an
+hour.
+
+Five environment variables, all named after your `short`:
 
 | Variable | What |
 |---|---|
 | `WIDGET_ROOT` | Use this repo root instead of walking up for the anchor. |
 | `WIDGET_CACHE` | Put the cache here. The whole path, not a parent to append the namespace to. |
-| `WIDGET_NO_SELF_UPDATE` | Don't check whether the launcher itself has moved on. |
+| `WIDGET_NO_SELF_UPDATE` | Do not check whether the launcher itself has moved on. |
+| `WIDGET_WORKSPACE` | Set on a tool command, naming the workspace it acts on. |
+| `WIDGET_TOOL_ROOT` | Set alongside it, naming that tool's materialised root. |
 
-That last one is the user's own way out of the self-update, which otherwise
-checks at most once an hour. A version, tag or rev install is immutable so that
-one is left alone anyway, and `SelfUpdate::Never` in your `Tool` turns the whole
-thing off for everybody if it's not wanted at all.
+The last two are what a tool command inherits. A tool's code sits in a cache
+shared by every workspace on the machine and its data does not, so it can't
+work a data path out from where it happens to be installed, and knows which
+workspace it's on because it was told.
+
+`WIDGET_NO_SELF_UPDATE` is the way out of the self-update, which otherwise
+checks at most once an hour. A version, tag or rev install is immutable so
+that one is left alone anyway, and `SelfUpdate::Never` in your `Tool` turns
+it off for everybody if it isn't wanted at all.
 
 ## What this isn't
 

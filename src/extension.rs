@@ -261,10 +261,8 @@ pub trait Backend {
     /// so it is reached through [`materialise_once`] directly and never sits in
     /// a registry.
     ///
-    /// That is the split, and it is the reason this is an associated type
-    /// rather than a fixed `&Descriptor`. One contract, two ways of picking the
-    /// impl: statically where the host knows which backend it wants, and
-    /// through the table where it does not.
+    /// One contract, two ways of picking the impl: statically where the host
+    /// knows which backend it wants, and through the table where it does not.
     type Plan;
 
     /// The part of a cache key that is about this backend's own environment
@@ -343,13 +341,10 @@ pub fn materialise_once<B: Backend>(plan: &B::Plan, root: &Path) -> Result<(), S
 /// for every backend, and monomorphising it per backend would duplicate it for
 /// no reason.
 ///
-/// **The scratch name is unique per call, not per process**, and that is the
-/// load bearing part rather than a detail. A name derived from the process id
-/// alone is shared by every thread in it, and two threads on one key then wrote
-/// into one scratch and published a tree spliced from both fetches, with both
-/// callers returning `Ok`. The counter is what makes each caller's scratch its
-/// own, and it is why the cleanup paths below can remove a directory without
-/// removing somebody else's work.
+/// The scratch name is unique per call rather than per process, since `locate`
+/// takes shared references and is `pub`, so several threads reach one key at
+/// once. That is also what lets the cleanup paths remove a directory without
+/// touching another caller's.
 fn place_via_scratch(
     root: &Path,
     parent: &Path,
@@ -492,14 +487,9 @@ pub fn cache_key(descriptor: &Descriptor, backend: &Registered) -> String {
 /// rare case. A lock would trade that for a lock file to leak, a stale one to
 /// detect, and a failure mode where one crashed process blocks every other.
 ///
-/// **The scratch name is unique per call, not per process**, and that is the
-/// load bearing part rather than a detail. A name derived from the process id
-/// alone is shared by every thread in it: `locate` takes shared references and
-/// is `pub`, so two threads on one key wrote into one scratch, and the published
-/// tree was spliced from both fetches while both callers returned `Ok`. The
-/// counter below is what makes each caller's scratch its own, and it is why the
-/// cleanup on the error and lost-race paths can remove a directory without
-/// removing somebody else's work.
+/// The scratch is named per call rather than per process, since this takes
+/// shared references and is `pub`, so several threads reach one key at once and
+/// a per-process name would be shared between them.
 pub fn locate(
     descriptor: &Descriptor,
     registry: &Registry,

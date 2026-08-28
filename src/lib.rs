@@ -49,6 +49,19 @@
 //! Everything that is one tool's and no other's goes through [`Hooks`] rather
 //! than into this crate.
 //!
+//! # Backends and extensions
+//!
+//! Fetching and building is a contract, [`extension::Backend`], with
+//! [`extension::Cargo`], [`extension::Local`] and [`extension::Git`] shipped
+//! and a host's own going in the same table.
+//!
+//! The extension half is for a host reading tool descriptors out of its own
+//! configuration, where the backends are named by a string rather than known at
+//! compile time and listing what a tool offers must not fetch anything.
+//! [`extension::Descriptor`] is a parsed `tool.toml`, and
+//! [`extension::locate`] is what turns one into something on disk. The whole of
+//! it is in [`extension`].
+//!
 //! # The name
 //!
 //! `renki` is finnish for a farmhand, the sort who does the fetching and the
