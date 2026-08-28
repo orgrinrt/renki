@@ -26,7 +26,6 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::hash::Fnv;
 use crate::tool::Tool;
@@ -234,32 +233,25 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
         tool.short,
         source.display()
     );
-    let status = Command::new("cargo")
-        .arg("install")
-        .arg("--path")
-        .arg(source)
-        .arg("--root")
-        .arg(&root)
-        .arg("--target-dir")
-        .arg(root.join("target"))
-        .arg("--force")
-        .status()
-        .map_err(|e| format!("could not run cargo install: {e}"))?;
-    if !status.success() {
-        return Err(format!(
-            "the engine at {} did not build; nothing was installed",
-            source.display()
-        ));
-    }
+    // The same backend the pinned build uses, with a one-attempt plan. The
+    // target directory is named so it lands inside the scratch root and is kept
+    // between runs, which is what makes an unchanged rebuild cheap.
+    crate::extension::materialise_once::<crate::extension::Cargo>(
+        &crate::extension::CargoPlan {
+            attempts:   vec![vec![
+                "--path".into(),
+                source.display().to_string(),
+                "--target-dir".into(),
+                root.join("target").display().to_string(),
+            ]],
+            bin:        tool.engine_bin_name().into(),
+            crate_name: tool.engine_crate.into(),
+        },
+        &root,
+    )
+    .map_err(|e| format!("the engine at {} did not build.\n{e}", source.display()))?;
 
-    let bin = root.join("bin").join(tool.engine_bin_name());
-    if !bin.is_file() {
-        return Err(format!(
-            "cargo install reported success but produced no binary under {}",
-            root.display()
-        ));
-    }
-    Ok(bin)
+    Ok(root.join("bin").join(tool.engine_bin_name()))
 }
 
 /// Record that this scratch build is in use, for the sweep to read later.

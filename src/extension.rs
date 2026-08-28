@@ -29,6 +29,7 @@
 //! # struct Git;
 //! # impl Backend for Git {
 //! #     const NAME: &'static str = "git";
+//! #     type Plan = Descriptor;
 //! #     fn fingerprint() -> String { String::new() }
 //! #     fn materialise(_: &Descriptor, _: &std::path::Path) -> Result<(), String> { Ok(()) }
 //! # }
@@ -38,6 +39,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 use serde::Deserialize;
 
@@ -250,6 +252,21 @@ pub trait Backend {
     /// The string a descriptor's `backend =` field names.
     const NAME: &'static str;
 
+    /// What this backend is told to materialise.
+    ///
+    /// A [`Descriptor`] for anything a host dispatches by name out of a
+    /// [`Registry`], because a runtime table has to hold one plan type for
+    /// every row. The launcher half's [`Cargo`] backend takes a
+    /// [`CargoPlan`](crate::CargoPlan) instead: it is chosen at compile time,
+    /// so it is reached through [`materialise_once`] directly and never sits in
+    /// a registry.
+    ///
+    /// That is the split, and it is the reason this is an associated type
+    /// rather than a fixed `&Descriptor`. One contract, two ways of picking the
+    /// impl: statically where the host knows which backend it wants, and
+    /// through the table where it does not.
+    type Plan;
+
     /// The part of a cache key that is about this backend's own environment
     /// rather than about the tool.
     ///
@@ -265,7 +282,7 @@ pub trait Backend {
     ///
     /// Called at most once per cache key. It may take as long as it needs; the
     /// caller has already told the operator that something is being fetched.
-    fn materialise(descriptor: &Descriptor, into: &Path) -> Result<(), String>;
+    fn materialise(plan: &Self::Plan, into: &Path) -> Result<(), String>;
 
     /// Whether a materialised copy is wanted at all.
     ///
@@ -274,6 +291,94 @@ pub trait Backend {
     /// default is `true` and is right for anything fetched.
     fn caches() -> bool {
         true
+    }
+
+    /// Whether [`materialise`](Backend::materialise) writes into its final
+    /// destination and holds its own exclusion while it does.
+    ///
+    /// The default is `false`, and [`materialise_once`] then builds into a
+    /// scratch directory and renames the finished tree into place, so a reader
+    /// never sees a half-written tool and two callers racing cost one wasted
+    /// fetch.
+    ///
+    /// `true` for a backend that already has a lock of its own over the
+    /// destination. [`Cargo`](crate::Cargo) is the case: `cargo install --root`
+    /// takes cargo's own lock on the install root and moves the binary in
+    /// itself, so a scratch and a rename would add a second, weaker mechanism
+    /// on top of a working one, and would throw away cargo's incremental
+    /// target directory every time.
+    fn places_itself() -> bool {
+        false
+    }
+}
+
+/// Put a backend's material at `root`, once, however that backend places it.
+///
+/// The shared core of both halves of the crate. The launcher calls it with
+/// [`Cargo`](crate::Cargo) named at compile time; [`locate`] calls it with a
+/// backend the registry found by name. Which mechanism keeps two concurrent
+/// callers from tripping over each other is [`Backend::places_itself`], because
+/// that is a fact about the backend rather than about the caller.
+///
+/// Does nothing when `root` already holds something. Whether that is the right
+/// question is the caller's: the launcher asks whether its binary is there,
+/// which is stricter than whether the directory is.
+pub fn materialise_once<B: Backend>(plan: &B::Plan, root: &Path) -> Result<(), String> {
+    if B::places_itself() {
+        std::fs::create_dir_all(root)
+            .map_err(|e| format!("could not create {}: {e}", root.display()))?;
+        return B::materialise(plan, root);
+    }
+    let parent = root
+        .parent()
+        .ok_or_else(|| format!("{} has no parent", root.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    place_via_scratch(root, parent, |into| B::materialise(plan, into))
+}
+
+/// Build into a scratch beside `root` and rename the finished tree into place.
+///
+/// Split out of [`materialise_once`] so it is not generic: the body is the same
+/// for every backend, and monomorphising it per backend would duplicate it for
+/// no reason.
+///
+/// **The scratch name is unique per call, not per process**, and that is the
+/// load bearing part rather than a detail. A name derived from the process id
+/// alone is shared by every thread in it, and two threads on one key then wrote
+/// into one scratch and published a tree spliced from both fetches, with both
+/// callers returning `Ok`. The counter is what makes each caller's scratch its
+/// own, and it is why the cleanup paths below can remove a directory without
+/// removing somebody else's work.
+fn place_via_scratch(
+    root: &Path,
+    parent: &Path,
+    materialise: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nth = NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let leaf = root.file_name().unwrap_or_default().to_string_lossy();
+    // Beside the destination rather than in the system temp directory, so the
+    // rename is within one filesystem and therefore atomic.
+    let scratch = parent.join(format!(".{leaf}.{}.{nth}", std::process::id()));
+    // No pre-emptive remove. The name is this call's alone, so anything already
+    // at it would be a collision that cannot happen, and the remove that used to
+    // be here is what deleted a sibling thread's in-flight materialise.
+    materialise(&scratch).inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(&scratch);
+    })?;
+
+    match std::fs::rename(&scratch, root) {
+        Ok(()) => Ok(()),
+        // Lost the race. The winner's copy is the same bytes, so use it.
+        Err(_) if root.is_dir() => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            Ok(())
+        },
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            Err(format!("could not place the tool at {}: {e}", root.display()))
+        },
     }
 }
 
@@ -288,16 +393,23 @@ pub struct Registered {
     fingerprint:     fn() -> String,
     materialise:     fn(&Descriptor, &Path) -> Result<(), String>,
     caches:          fn() -> bool,
+    places_itself:   fn() -> bool,
 }
 
 impl Registered {
     /// The vtable for one backend.
-    pub const fn of<B: Backend>() -> Self {
+    ///
+    /// Only a backend whose [`Plan`](Backend::Plan) is a [`Descriptor`] can go
+    /// in a registry, because a runtime table dispatched by name has to hold
+    /// one plan type across every row. A backend planned on something else is
+    /// reached statically instead, through [`materialise_once`].
+    pub const fn of<B: Backend<Plan = Descriptor>>() -> Self {
         Self {
             name:        B::NAME,
             fingerprint: B::fingerprint,
             materialise: B::materialise,
             caches:      B::caches,
+            places_itself: B::places_itself,
         }
     }
 
@@ -309,6 +421,11 @@ impl Registered {
     /// See [`Backend::caches`].
     pub fn caches(&self) -> bool {
         (self.caches)()
+    }
+
+    /// What [`Backend::places_itself`] says.
+    pub fn places_itself(&self) -> bool {
+        (self.places_itself)()
     }
 }
 
@@ -432,40 +549,26 @@ pub fn locate(
     let key = cache_key(descriptor, backend);
     let root = cache.join("tools").join(&key);
     if root.is_dir() {
+        // On the hit rather than only on the fetch, which is the whole point:
+        // [`collect`] ages a tool out on last use, and a marker written once at
+        // fetch time would say a tool used every day had not been touched since
+        // the day it arrived.
+        touch(&root);
         return Ok(Located { root });
     }
 
-    std::fs::create_dir_all(cache.join("tools"))
-        .map_err(|e| format!("could not create the tool cache: {e}"))?;
-
-    // Beside the destination rather than in the system temp directory, so the
-    // rename below is within one filesystem and therefore atomic. Unique per
-    // call rather than per process, per the note above: the counter is what
-    // separates two threads racing on one key.
-    static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let nth = NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let scratch = cache
-        .join("tools")
-        .join(format!(".{key}.{}.{nth}", std::process::id()));
-    // No pre-emptive remove. The name is this call's alone, so anything already
-    // at it would be a collision that cannot happen, and the remove that used to
-    // be here is what deleted a sibling thread's in-flight materialise.
-    (backend.materialise)(descriptor, &scratch).inspect_err(|_| {
-        let _ = std::fs::remove_dir_all(&scratch);
-    })?;
-
-    match std::fs::rename(&scratch, &root) {
-        Ok(()) => Ok(Located { root }),
-        // Lost the race. The winner's copy is the same bytes, so use it.
-        Err(_) if root.is_dir() => {
-            let _ = std::fs::remove_dir_all(&scratch);
-            Ok(Located { root })
-        },
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&scratch);
-            Err(format!("could not place the tool at {}: {e}", root.display()))
-        },
+    let parent = cache.join("tools");
+    if backend.places_itself() {
+        std::fs::create_dir_all(&root)
+            .map_err(|e| format!("could not create {}: {e}", root.display()))?;
+        (backend.materialise)(descriptor, &root)?;
+    } else {
+        std::fs::create_dir_all(&parent)
+            .map_err(|e| format!("could not create the tool cache: {e}"))?;
+        place_via_scratch(&root, &parent, |into| (backend.materialise)(descriptor, into))?;
     }
+    touch(&root);
+    Ok(Located { root })
 }
 
 /// The command line for one of a tool's commands.
@@ -559,6 +662,8 @@ pub struct Local;
 impl Backend for Local {
     const NAME: &'static str = "local";
 
+    type Plan = Descriptor;
+
     fn fingerprint() -> String {
         String::new()
     }
@@ -577,6 +682,8 @@ pub struct Git;
 
 impl Backend for Git {
     const NAME: &'static str = "git";
+
+    type Plan = Descriptor;
 
     /// Nothing. A checkout is the same bytes whatever is installed on the
     /// machine that took it, so there is no environment to key on.
@@ -627,3 +734,159 @@ pub static BUILTIN: &[Registered] = &[Registered::of::<Local>(), Registered::of:
 #[cfg(test)]
 #[path = "extension_tests.rs"]
 mod tests;
+
+/// What a [`Cargo`] build is told to install.
+///
+/// `attempts` are argument lists tried in order until one succeeds, source
+/// selector and package name included; `--root` and `--force` are added here.
+/// A version pin has two, the registry and then the matching git tag.
+#[derive(Debug, Clone)]
+pub struct CargoPlan {
+    /// The argument lists, tried in order.
+    pub attempts: Vec<Vec<String>>,
+    /// The binary the install must produce under `<root>/bin`, checked because
+    /// cargo reporting success is not the same as cargo having built the thing
+    /// that was wanted.
+    pub bin:      String,
+    /// Named in the failure message, so an operator reads the crate that did
+    /// not build rather than the launcher that asked for it.
+    pub crate_name: String,
+}
+
+/// Building something with cargo.
+///
+/// The launcher half's backend, and the reason [`Backend`] is a contract rather
+/// than the one thing this crate happens to do. It is picked at compile time by
+/// the launcher, so it goes through [`materialise_once`] directly and is not in
+/// any [`Registry`]: its [`Plan`](Backend::Plan) is a [`CargoPlan`] rather than
+/// a [`Descriptor`], and a table dispatched by a descriptor's `backend =` field
+/// has nothing to hand it.
+pub struct Cargo;
+
+impl Backend for Cargo {
+    const NAME: &'static str = "cargo";
+
+    type Plan = CargoPlan;
+
+    /// `rustc -vV`, which carries the version, the commit hash, the host triple
+    /// and the LLVM version.
+    ///
+    /// rustc is part of the compilation input, so a toolchain change re-keys and
+    /// forces a coherent rebuild. A frozen binary paired with a moved toolchain
+    /// is the failure this prevents.
+    fn fingerprint() -> String {
+        crate::cache::rustc_fingerprint()
+    }
+
+    /// `cargo install --root <into> --force`, per attempt, first success wins.
+    fn materialise(plan: &Self::Plan, into: &Path) -> Result<(), String> {
+        let mut failures = Vec::new();
+        for attempt in &plan.attempts {
+            let status = Command::new("cargo")
+                .arg("install")
+                .args(attempt)
+                .arg("--root")
+                .arg(into)
+                .arg("--force")
+                .status()
+                .map_err(|e| format!("could not run cargo install: {e}"))?;
+            if !status.success() {
+                failures.push(format!("{attempt:?} failed"));
+                continue;
+            }
+            if into.join("bin").join(&plan.bin).is_file() {
+                return Ok(());
+            }
+            failures.push(format!(
+                "{attempt:?} reported success but produced no binary"
+            ));
+        }
+        Err(crate::cache::build_failure(&plan.crate_name, &failures))
+    }
+
+    /// `cargo install --root` takes cargo's own lock on the install root and
+    /// moves the binary in itself, so a scratch and a rename would stack a
+    /// second, weaker mechanism on a working one and throw away the incremental
+    /// target directory on every build.
+    fn places_itself() -> bool {
+        true
+    }
+}
+
+/// The file whose timestamp says when a materialised tool was last used.
+///
+/// The directory's own timestamp will not do. A directory's modification time
+/// moves when an entry is added to it or removed from it, and not when
+/// something inside an entry is read, so a tool used daily would carry the time
+/// it was fetched and be swept as though it had never been touched.
+const USED_MARKER: &str = ".last-used";
+
+/// Record that a tool is in use, for [`collect`] to read later.
+///
+/// Best effort. A marker that cannot be written costs a re-fetch after the
+/// retention window and nothing else, so it is not worth failing a run over.
+fn touch(root: &Path) {
+    let _ = std::fs::write(root.join(USED_MARKER), b"");
+}
+
+/// Remove materialised tools nothing has used within `retention`, and any
+/// scratch left by a fetch that died partway.
+///
+/// Returns what went, for the caller to report.
+///
+/// Nothing else collects `<cache>/tools`. The build registry knows which repo
+/// pins which engine and can evict on that; there is no equivalent record for
+/// tools, because a tool is named by a workspace's own configuration rather
+/// than resolved through a pin. So this ages them out on last use instead,
+/// which is the same mechanism the scratch engine builds already use and needs
+/// no bookkeeping to stay correct.
+///
+/// A scratch is taken on a shorter rule: it is a partial tree by definition, it
+/// is never read, and one that outlived its fetch is one whose process is gone.
+/// An hour is far longer than any fetch and short enough that a crashed run does
+/// not leave a copy of a repository lying around until the retention window.
+pub fn collect(cache: &Path, retention: std::time::Duration, now: SystemTime) -> Vec<String> {
+    const SCRATCH_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+    let dir = cache.join("tools");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut removed = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let scratch = name.starts_with('.');
+        let ttl = if scratch { SCRATCH_TTL } else { retention };
+
+        // A tool's age is its marker's; a scratch has none and is judged on the
+        // directory, which is right there because a scratch is only ever
+        // written to during the one fetch that owns it.
+        let stamp = if scratch {
+            path.metadata().and_then(|m| m.modified()).ok()
+        } else {
+            path.join(USED_MARKER)
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+        };
+        // No marker at all means it predates this mechanism, so it is stamped
+        // now and swept on a later pass if it stays unused. Deleting it here
+        // would evict every tool on disk the first time a launcher with this
+        // code runs.
+        let Some(stamp) = stamp else {
+            if !scratch {
+                touch(&path);
+            }
+            continue;
+        };
+        if now.duration_since(stamp).is_ok_and(|age| age > ttl) {
+            let _ = std::fs::remove_dir_all(&path);
+            removed.push(name);
+        }
+    }
+    removed
+}

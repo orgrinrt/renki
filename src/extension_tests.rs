@@ -44,6 +44,8 @@ static MATERIALISED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicU
 impl Backend for Marker {
     const NAME: &'static str = "marker";
 
+    type Plan = Descriptor;
+
     fn fingerprint() -> String {
         "marker-v1".into()
     }
@@ -61,6 +63,8 @@ struct Broken;
 
 impl Backend for Broken {
     const NAME: &'static str = "broken";
+
+    type Plan = Descriptor;
 
     fn fingerprint() -> String {
         String::new()
@@ -302,19 +306,26 @@ fn materialising_happens_once_and_the_second_call_is_a_cache_hit() {
     d.backend = "marker".into();
 
 
+    // Counted as a delta rather than against an absolute. The counter is a
+    // global and the tests run in parallel threads, so an absolute reading is a
+    // claim about every other test that touches this backend, and it broke each
+    // time one was added.
+    let count = || MATERIALISED.load(std::sync::atomic::Ordering::SeqCst);
+    let before = count();
+
     let first = locate(&d, &registry(), &root, &cache).unwrap();
     assert_eq!(std::fs::read_to_string(first.root.join("who")).unwrap(), "rules");
-    assert_eq!(
-        MATERIALISED.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "the first call should have fetched exactly once"
+    let after_first = count();
+    assert!(
+        after_first > before,
+        "the first call did not fetch at all: {before} -> {after_first}"
     );
 
     let second = locate(&d, &registry(), &root, &cache).unwrap();
     assert_eq!(second.root, first.root);
     assert_eq!(
-        MATERIALISED.load(std::sync::atomic::Ordering::SeqCst),
-        1,
+        count(),
+        after_first,
         "the second call fetched again instead of hitting the cache"
     );
 }
@@ -646,6 +657,8 @@ fn two_threads_racing_on_one_key_publish_one_fetch_whole() {
     impl Backend for Slow {
         const NAME: &'static str = "slow";
 
+        type Plan = Descriptor;
+
         fn fingerprint() -> String {
             String::new()
         }
@@ -676,9 +689,12 @@ fn two_threads_racing_on_one_key_publish_one_fetch_whole() {
     });
 
     let published = locate(&d, &Registry::new(SLOW), &root, &root).unwrap();
+    // The last-used marker is the launcher's, not the fetch's, so it is not part
+    // of what this counts.
     let mut names: Vec<String> = std::fs::read_dir(&published.root)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.'))
         .collect();
     names.sort();
 
@@ -700,4 +716,324 @@ fn two_threads_racing_on_one_key_publish_one_fetch_whole() {
         .filter(|n| n.starts_with('.'))
         .collect();
     assert!(leftovers.is_empty(), "scratch left behind: {leftovers:?}");
+}
+
+// --- one contract, two ways of picking the impl ---------------------------
+
+/// Records the directory it was handed, so a test can tell whether it was given
+/// the destination or a scratch beside it.
+static PLACED_IN_PLACE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+static PLACED_VIA_SCRATCH: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+struct PlacesItself;
+
+impl Backend for PlacesItself {
+    const NAME: &'static str = "places-itself";
+
+    type Plan = Descriptor;
+
+    fn fingerprint() -> String {
+        String::new()
+    }
+
+    fn materialise(_: &Descriptor, into: &Path) -> Result<(), String> {
+        *PLACED_IN_PLACE.lock().unwrap() = Some(into.to_path_buf());
+        std::fs::create_dir_all(into).map_err(|e| e.to_string())?;
+        std::fs::write(into.join("in-place"), "x").map_err(|e| e.to_string())
+    }
+
+    fn places_itself() -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_backend_that_places_itself_is_handed_the_destination() {
+    // `cargo install --root` holds cargo's own lock over the install root and
+    // moves the binary in itself, so wrapping it in a scratch and a rename would
+    // stack a weaker mechanism on a working one and throw away the incremental
+    // target directory every build. The backend says which it is, and this is
+    // what that says.
+    let root = scratch("in-place").join("dest");
+    materialise_once::<PlacesItself>(&desc(), &root).unwrap();
+
+    assert_eq!(
+        PLACED_IN_PLACE.lock().unwrap().as_deref(),
+        Some(root.as_path()),
+        "it was handed a scratch rather than the destination"
+    );
+    assert!(root.join("in-place").is_file());
+
+    // And nothing beside it: the scratch path is not taken at all.
+    let siblings: Vec<String> = std::fs::read_dir(root.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with('.'))
+        .collect();
+    assert!(siblings.is_empty(), "a scratch was made anyway: {siblings:?}");
+}
+
+#[test]
+fn a_backend_that_does_not_is_handed_a_scratch_and_renamed_into_place() {
+    // The control for the test above, and the default. The backend never sees
+    // the destination, so a reader cannot observe a half-written tree.
+    let root = scratch("via-scratch").join("dest");
+    materialise_once::<PlacesElsewhere>(&desc(), &root).unwrap();
+
+    assert!(root.join("elsewhere").is_file(), "nothing arrived at the destination");
+    assert_ne!(
+        PLACED_VIA_SCRATCH.lock().unwrap().as_deref(),
+        Some(root.as_path()),
+        "the backend was handed the destination rather than a scratch"
+    );
+    let siblings: Vec<String> = std::fs::read_dir(root.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with('.'))
+        .collect();
+    assert!(siblings.is_empty(), "the scratch was left behind: {siblings:?}");
+}
+
+#[test]
+fn the_launcher_backend_is_one_impl_of_the_same_contract() {
+    // The whole point of the trait. `Cargo` is planned on a `CargoPlan` rather
+    // than a `Descriptor`, so it is picked at compile time and cannot go in a
+    // registry, and it is still the same contract the fetching backends satisfy.
+    assert_eq!(<Cargo as Backend>::NAME, "cargo");
+    assert!(<Cargo as Backend>::places_itself());
+    assert!(<Cargo as Backend>::caches());
+
+    // The fingerprint is the toolchain, which is what makes a compiler change
+    // re-key rather than reuse what the old one produced.
+    assert_eq!(
+        <Cargo as Backend>::fingerprint(),
+        crate::cache::rustc_fingerprint()
+    );
+    assert!(
+        !<Cargo as Backend>::fingerprint().is_empty(),
+        "rustc is not on PATH, so this measures nothing"
+    );
+
+    // And it is absent from the shipped registry, because a descriptor naming
+    // `backend = \"cargo\"` has no plan to hand it.
+    assert!(Registry::new(BUILTIN).get("cargo").is_none());
+}
+
+#[test]
+fn the_cargo_backend_reports_every_attempt_that_failed() {
+    // Two attempts is the real shape: a version pin tries the registry and then
+    // the matching git tag. Both fail here, and the message has to name both
+    // rather than only the last.
+    let into = scratch("cargo-fail").join("root");
+    std::fs::create_dir_all(&into).unwrap();
+    let err = Cargo::materialise(
+        &CargoPlan {
+            attempts:   vec![
+                vec!["--no-such-flag-alpha".into()],
+                vec!["--no-such-flag-beta".into()],
+            ],
+            bin:        "nothing".into(),
+            crate_name: "the-engine".into(),
+        },
+        &into,
+    )
+    .unwrap_err();
+
+    assert!(err.contains("the-engine"), "{err}");
+    assert!(err.contains("alpha") && err.contains("beta"), "{err}");
+}
+
+/// The scratch-path counterpart of `PlacesItself`, recording the same way.
+struct PlacesElsewhere;
+
+impl Backend for PlacesElsewhere {
+    const NAME: &'static str = "places-elsewhere";
+
+    type Plan = Descriptor;
+
+    fn fingerprint() -> String {
+        String::new()
+    }
+
+    fn materialise(_: &Descriptor, into: &Path) -> Result<(), String> {
+        *PLACED_VIA_SCRATCH.lock().unwrap() = Some(into.to_path_buf());
+        std::fs::create_dir_all(into).map_err(|e| e.to_string())?;
+        std::fs::write(into.join("elsewhere"), "x").map_err(|e| e.to_string())
+    }
+}
+
+#[test]
+fn a_cargo_install_that_succeeds_without_the_binary_is_a_failure() {
+    // cargo reporting success is not the same as cargo having built the thing
+    // that was wanted. A crate whose binary is named something else installs
+    // cleanly and leaves nothing at `plan.bin`, and returning Ok there hands the
+    // launcher a path to a file that is not on disk.
+    //
+    // A real install rather than a stub, because the claim is about what cargo
+    // actually does. No dependencies, so it builds offline in a second or two.
+    let base = scratch("cargo-wrong-bin");
+    let src = base.join("crate");
+    std::fs::create_dir_all(src.join("src")).unwrap();
+    std::fs::write(
+        src.join("Cargo.toml"),
+        "[package]\nname = \"alpha\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"alpha\"\npath = \"src/main.rs\"\n",
+    )
+    .unwrap();
+    std::fs::write(src.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    let into = base.join("root");
+    std::fs::create_dir_all(&into).unwrap();
+    let plan = |bin: &str| CargoPlan {
+        attempts:   vec![
+            "--path".into(),
+            src.display().to_string(),
+            "--target-dir".into(),
+            into.join("target").display().to_string(),
+        ]
+        .pipe_one(),
+        bin:        bin.into(),
+        crate_name: "alpha".into(),
+    };
+
+    // The control first, so a failure below is about the name rather than about
+    // the crate not building at all.
+    Cargo::materialise(&plan("alpha"), &into).expect("the fixture crate should install");
+    assert!(into.join("bin/alpha").is_file());
+
+    let err = Cargo::materialise(&plan("beta"), &into).unwrap_err();
+    assert!(err.contains("produced no binary"), "{err}");
+    assert!(err.contains("alpha"), "{err}");
+}
+
+/// One attempt as the list of attempts. Named rather than written inline
+/// because `vec![vec![..]]` reads as a mistake.
+trait PipeOne {
+    fn pipe_one(self) -> Vec<Vec<String>>;
+}
+
+impl PipeOne for Vec<String> {
+    fn pipe_one(self) -> Vec<Vec<String>> {
+        vec![self]
+    }
+}
+
+// --- collecting -----------------------------------------------------------
+
+// --- collecting -----------------------------------------------------------
+
+/// A tool tree, marked used now.
+fn marked_tool(dir: &Path, name: &str) -> std::path::PathBuf {
+    let root = dir.join(name);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("payload"), "x").unwrap();
+    std::fs::write(root.join(".last-used"), b"").unwrap();
+    root
+}
+
+/// `now`, moved forward by `secs`.
+///
+/// The clock moves rather than the files. Ageing a marker backwards means
+/// setting an mtime, which needs a dependency this crate does not have and
+/// behaves differently on a directory; `collect` already takes the time it
+/// should judge against, so there is nothing to reach for.
+fn later(secs: u64) -> SystemTime {
+    SystemTime::now() + std::time::Duration::from_secs(secs)
+}
+
+const DAY: u64 = 86400;
+
+#[test]
+fn a_tool_nothing_has_used_is_collected_and_a_fresh_one_is_not() {
+    // Nothing else reaches `<cache>/tools`: a tool has no registry row to evict
+    // on, because it is named by a workspace's configuration rather than
+    // resolved through a pin. Without this every superseded revision stayed on
+    // disk forever.
+    let cache = scratch("collect");
+    let tools = cache.join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let a = marked_tool(&tools, "aaaa");
+
+    // Nothing goes while the window holds, which is the control: a collector
+    // that took everything would pass the second half alone.
+    assert!(collect(&cache, std::time::Duration::from_secs(30 * DAY), later(DAY)).is_empty());
+    assert!(a.exists());
+
+    let removed = collect(
+        &cache,
+        std::time::Duration::from_secs(30 * DAY),
+        later(90 * DAY),
+    );
+    assert_eq!(removed, vec!["aaaa".to_string()]);
+    assert!(!a.exists(), "the stale tool is still on disk");
+}
+
+#[test]
+fn a_scratch_from_a_dead_fetch_goes_on_a_much_shorter_rule() {
+    // A scratch is a partial tree by definition and is never read, so one that
+    // outlived its fetch is one whose process is gone. An hour is far longer
+    // than any fetch and short enough that a crashed run does not leave a copy
+    // of a repository sitting until the retention window.
+    let cache = scratch("collect-scratch");
+    let tools = cache.join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let tool = marked_tool(&tools, "aaaa");
+    let scratch_dir = tools.join(".aaaa.999.0");
+    std::fs::create_dir_all(&scratch_dir).unwrap();
+
+    // A retention window far longer than the scratch rule, so a scratch judged
+    // on the tool rule would survive this and the assertion would fail.
+    let removed = collect(
+        &cache,
+        std::time::Duration::from_secs(365 * DAY),
+        later(4 * 3600),
+    );
+
+    assert_eq!(removed, vec![".aaaa.999.0".to_string()]);
+    assert!(!scratch_dir.exists());
+    assert!(tool.exists(), "the tool went with the scratch");
+}
+
+#[test]
+fn a_tool_with_no_marker_is_stamped_rather_than_evicted() {
+    // Everything already on disk predates this mechanism and carries no marker.
+    // Reading that as "never used" would evict every tool on the machine the
+    // first time a launcher with this code runs.
+    let cache = scratch("collect-unmarked");
+    let tools = cache.join("tools");
+    std::fs::create_dir_all(tools.join("cccc")).unwrap();
+    std::fs::write(tools.join("cccc/payload"), "x").unwrap();
+
+    let removed = collect(&cache, std::time::Duration::from_secs(0), later(365 * DAY));
+
+    assert!(removed.is_empty(), "it evicted an unmarked tool: {removed:?}");
+    assert!(tools.join("cccc/payload").is_file());
+    assert!(
+        tools.join("cccc/.last-used").is_file(),
+        "it left the tool unmarked, so the next pass makes the same decision"
+    );
+}
+
+#[test]
+fn locating_a_cached_tool_marks_it_used() {
+    // The marker moves on the hit, not only on the fetch. Written once at fetch
+    // time it says a tool used every day has not been touched since the day it
+    // arrived, and the collector then takes it.
+    let cache = scratch("collect-touch");
+    let mut d = desc();
+    d.backend = "marker".into();
+
+    let at = locate(&d, &registry(), &cache, &cache).unwrap();
+    let marker = at.root.join(".last-used");
+    assert!(marker.is_file(), "a fresh fetch left no marker");
+    let fetched_at = marker.metadata().unwrap().modified().unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    // The second call is a cache hit, and the hit is what has to move the mark.
+    locate(&d, &registry(), &cache, &cache).unwrap();
+
+    assert!(
+        marker.metadata().unwrap().modified().unwrap() > fetched_at,
+        "a cache hit left the mark where the fetch put it"
+    );
 }
