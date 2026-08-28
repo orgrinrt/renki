@@ -69,38 +69,54 @@ impl PinForm {
 }
 
 /// The whole registry file.
+///
+/// No schema tag. One was declared here and never written, so every file on
+/// disk carried the same absent value and a migration reading it would have
+/// learned nothing it did not already know from the field being missing. A
+/// version that needs to tell two shapes apart adds the tag then and reads its
+/// absence as the shape that came before, which is what it would have had to do
+/// anyway. Unknown keys are ignored on load, so a file written by such a
+/// version still parses here.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Registry {
-    /// Schema tag for forward migrations; absent on the first write.
-    #[serde(default)]
-    pub schema: u32,
     /// Unix seconds of the last GC pass, throttling the next one.
     #[serde(default)]
-    pub last_gc: u64,
+    pub last_gc:   u64,
     #[serde(default, rename = "consumer")]
     pub consumers: Vec<Consumer>,
     #[serde(default, rename = "build")]
-    pub builds: Vec<Build>,
+    pub builds:    Vec<Build>,
 }
 
 /// One repo the launcher has run in.
+///
+/// Six of these fields the collector never reads: `name`, `workdir`,
+/// `engine_url`, `pin_form`, `pin_value`, and `key` outside the sweep. They are
+/// here for the person who opens the file, which is a real reader and the only
+/// one there is: the registry sits at a known path under the cache root and
+/// answers "why did this rebuild" in a way no log line does. Dropping them
+/// would shrink the file and leave that question unanswerable.
+///
+/// So this is a record, not internal state, and a field is added here when it
+/// answers something a reader would otherwise have to guess. A field nothing
+/// reads and nobody would look for does not belong.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Consumer {
     /// Absolute repo root.
-    pub root: String,
+    pub root:       String,
     /// Repo name (the root dir basename today; a real project name later).
-    pub name: String,
+    pub name:       String,
     /// Absolute working directory the engine is run from.
-    pub workdir: String,
+    pub workdir:    String,
     /// The engine source url this repo builds from.
     pub engine_url: String,
     /// `version` / `branch` / `rev` / `tag` / `legacy`.
-    pub pin_form: String,
+    pub pin_form:   String,
     /// The pin value (version string, branch name, rev, tag), empty for legacy.
     #[serde(default)]
-    pub pin_value: String,
+    pub pin_value:  String,
     /// The build key this consumer last resolved to.
-    pub key: String,
+    pub key:        String,
     /// Whether [`Consumer::root`] is the repo root exactly, rather than its
     /// lossy rendering.
     ///
@@ -122,7 +138,7 @@ pub(crate) struct Consumer {
     #[serde(default = "yes")]
     pub root_exact: bool,
     /// Unix seconds of the last run in this repo.
-    pub last_seen: u64,
+    pub last_seen:  u64,
 }
 
 /// The default for [`Consumer::root_exact`] on a row that predates it.
@@ -131,15 +147,19 @@ fn yes() -> bool {
 }
 
 /// One cached engine build.
+///
+/// `last_used` is what the collector decides on. The rest, like [`Consumer`]'s,
+/// is for whoever opens the file: which engine and revision a directory of
+/// build output came from, under which toolchain, and when.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Build {
-    pub key: String,
+    pub key:        String,
     pub engine_url: String,
-    pub key_rev: String,
+    pub key_rev:    String,
     #[serde(default)]
-    pub toolchain: String,
-    pub built_at: u64,
-    pub last_used: u64,
+    pub toolchain:  String,
+    pub built_at:   u64,
+    pub last_used:  u64,
 }
 
 /// The registry file path under the cache root.
@@ -204,29 +224,33 @@ impl Registry {
                 c.key = key.to_string();
                 c.root_exact = root_exact;
                 c.last_seen = now;
-            }
-            None => self.consumers.push(Consumer {
-                root: root.to_string(),
-                name: name.to_string(),
-                workdir: workdir.to_string(),
-                engine_url: engine_url.to_string(),
-                pin_form: form.as_str().to_string(),
-                pin_value: pin_value.to_string(),
-                key: key.to_string(),
-                root_exact,
-                last_seen: now,
-            }),
+            },
+            None => {
+                self.consumers.push(Consumer {
+                    root: root.to_string(),
+                    name: name.to_string(),
+                    workdir: workdir.to_string(),
+                    engine_url: engine_url.to_string(),
+                    pin_form: form.as_str().to_string(),
+                    pin_value: pin_value.to_string(),
+                    key: key.to_string(),
+                    root_exact,
+                    last_seen: now,
+                })
+            },
         }
         match self.builds.iter_mut().find(|b| b.key == key) {
             Some(b) => b.last_used = now,
-            None => self.builds.push(Build {
-                key: key.to_string(),
-                engine_url: engine_url.to_string(),
-                key_rev: key_rev.to_string(),
-                toolchain: toolchain.to_string(),
-                built_at: now,
-                last_used: now,
-            }),
+            None => {
+                self.builds.push(Build {
+                    key:        key.to_string(),
+                    engine_url: engine_url.to_string(),
+                    key_rev:    key_rev.to_string(),
+                    toolchain:  toolchain.to_string(),
+                    built_at:   now,
+                    last_used:  now,
+                })
+            },
         }
     }
 
@@ -299,27 +323,27 @@ impl Registry {
 /// rows are quietly wrong; named fields make the same mistake a build error.
 pub(crate) struct Recording<'a> {
     /// The absolute repo root, as text.
-    pub root: &'a str,
+    pub root:       &'a str,
     /// Whether that text is the root exactly. See [`Consumer::root_exact`].
     pub root_exact: bool,
     /// The repo name.
-    pub name: &'a str,
+    pub name:       &'a str,
     /// The absolute working directory the engine runs against, as text.
-    pub workdir: &'a str,
+    pub workdir:    &'a str,
     /// The engine source this repo builds from.
     pub engine_url: &'a str,
     /// Which of the pin forms the repo used.
-    pub form: PinForm,
+    pub form:       PinForm,
     /// The pin value, empty for a legacy pin.
-    pub pin_value: &'a str,
+    pub pin_value:  &'a str,
     /// The build key the run resolved to.
-    pub key: &'a str,
+    pub key:        &'a str,
     /// The revision that key was computed from.
-    pub key_rev: &'a str,
+    pub key_rev:    &'a str,
     /// The toolchain identity folded into the key.
-    pub toolchain: &'a str,
+    pub toolchain:  &'a str,
     /// Unix seconds of this run.
-    pub now: u64,
+    pub now:        u64,
 }
 
 /// Whether `key` is a key this crate wrote: exactly the 16 lowercase hex
@@ -332,7 +356,7 @@ fn is_build_key(key: &str) -> bool {
     key.len() == 16
         && key
             .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            .all(|b| b.is_ascii_digit() || (b'a' ..= b'f').contains(&b))
 }
 
 /// The registry pin form and value for a resolved pin. Legacy overrides the
@@ -342,15 +366,17 @@ pub(crate) fn pin_form_and_value(pin: &Pin, source: PinSource) -> (PinForm, Stri
     let value = match &pin.reference {
         Reference::Version(v) | Reference::Branch(v) | Reference::Rev(v) | Reference::Tag(v) => {
             v.clone()
-        }
+        },
     };
     let form = match source {
         PinSource::Legacy => PinForm::Legacy,
-        PinSource::Config => match &pin.reference {
-            Reference::Version(_) => PinForm::Version,
-            Reference::Branch(_) => PinForm::Branch,
-            Reference::Rev(_) => PinForm::Rev,
-            Reference::Tag(_) => PinForm::Tag,
+        PinSource::Config => {
+            match &pin.reference {
+                Reference::Version(_) => PinForm::Version,
+                Reference::Branch(_) => PinForm::Branch,
+                Reference::Rev(_) => PinForm::Rev,
+                Reference::Tag(_) => PinForm::Tag,
+            }
         },
     };
     (form, value)
@@ -408,7 +434,24 @@ pub(crate) fn record_and_collect(
         // once and never again kept the checkout and its target directory
         // forever, and for branch resolutions meant never.
         crate::engine::sweep(cache_root);
-        crate::pin::sweep_branch_resolutions(cache_root);
+        crate::pin::sweep_branch_resolutions(cache_root, tool.cache_retention);
+        // And the tool cache, which nothing else reaches. A tool has no
+        // registry row to evict on, because it is named by a workspace's own
+        // configuration rather than resolved through a pin, so it ages out on
+        // last use instead. Without this every superseded revision, and every
+        // scratch left by a fetch that died, stayed on disk forever.
+        let gone = crate::extension::collect(
+            cache_root,
+            tool.cache_retention,
+            std::time::SystemTime::now(),
+        );
+        if !gone.is_empty() {
+            eprintln!(
+                "{}: cache gc removed {} unused tool(s)",
+                tool.short,
+                gone.len()
+            );
+        }
     }
     reg.save(&path);
 }

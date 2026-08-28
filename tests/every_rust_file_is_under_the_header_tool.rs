@@ -159,9 +159,16 @@ fn include_ships_the_crate_tests_and_none_of_the_repository_ones() {
 
     let shipped: BTreeSet<String> = entries.into_iter().map(str::to_owned).collect();
 
-    // What an unpacked tarball does not have: `ante.toml` is excluded on
-    // purpose, and neither the repository nor a rustup toolchain list is in
-    // there at all.
+    // The reaches outside the package that this repository's tests actually
+    // make, not an account of every reach a test could make. `ante.toml` is
+    // excluded from the package on purpose, and neither the repository nor a
+    // rustup toolchain list is in a tarball at all.
+    //
+    // A test reaching outside some other way is classified as a crate test and
+    // ships, and the failure shows up as that test going red on a consumer's
+    // first `cargo test` rather than here. Adding the reach to this list is the
+    // repair, and the control below is what keeps the list from rotting into
+    // needles that match nothing.
     const ABSENT: [&str; 3] = ["ante.toml", "\"git\"", "\"rustup\""];
 
     let mut every = Vec::new();
@@ -234,5 +241,105 @@ fn include_ships_the_crate_tests_and_none_of_the_repository_ones() {
         !repository_only.is_empty(),
         "nothing classified as a repository check, so the first assertion held \
          over an empty intersection and checked nothing"
+    );
+    // And the other side of it. A classifier that answered "repository check"
+    // for everything would pass every assertion above too, and the second one
+    // in particular would hold over an empty set.
+    assert!(
+        every.iter().any(|n| !repository_only.contains(n)),
+        "every test classified as a repository check, so nothing was ever \
+         expected in `include` and the second assertion checked nothing"
+    );
+}
+
+/// The toolchain pin governs this checkout and never a consumer's.
+///
+/// This crate is meant to be installed with `cargo install` by people who have
+/// no reason to hold our nightly, and a `rust-toolchain.toml` inside a package
+/// is honoured by whoever builds it. The pin exists so `cargo fmt` here
+/// reproduces the shared config, which stable cannot: it discards 49 of that
+/// file's 76 keys and disagrees with the tree in 120 places.
+///
+/// `include` is an allowlist, so leaving the pin off it is what keeps it out of
+/// the tarball. That is a fact about a list nobody looks at twice, which is
+/// exactly the kind that gets undone by a later edit adding a convenient glob.
+///
+/// Checked in both directions: the pin is here, and it does not ship.
+#[test]
+fn the_toolchain_pin_governs_the_checkout_and_never_the_package() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        manifest_dir.join("rust-toolchain.toml").is_file(),
+        "no `rust-toolchain.toml`, so this checkout formats to whatever the \
+         caller happens to have, and the shared rustfmt config describes a \
+         formatting nothing here can reproduce"
+    );
+
+    let toml = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("no manifest");
+    let include = toml
+        .split_once("include = [")
+        .expect("the manifest names no `include`, so everything ships, the pin included")
+        .1
+        .split_once(']')
+        .expect("`include` is not closed")
+        .0;
+
+    let entries: Vec<&str> = include.split('"').skip(1).step_by(2).collect();
+
+    // A glob is the way this comes undone, since `*.toml` at the root reads as
+    // an ordinary tidy-up and carries the pin in with it.
+    let reaching: Vec<&&str> = entries
+        .iter()
+        .filter(|e| e.contains('*') && !e.starts_with("src/") && !e.starts_with("tests/"))
+        .collect();
+    assert!(
+        reaching.is_empty(),
+        "`include` carries a glob outside `src/` and `tests/`: {reaching:?}\n\
+         A glob at the root cannot tell the toolchain pin from a file that \
+         belongs in the package. Name what ships instead."
+    );
+
+    // The manifest is the intent and the tarball is the fact, so the fact is
+    // what gets asserted. `include` is not the only thing deciding what ships:
+    // cargo has its own always-included set and its own exclusions, and a
+    // reading of the list cannot see either.
+    let out = Command::new(env!("CARGO"))
+        .arg("package")
+        .args(["--list", "--allow-dirty"])
+        .current_dir(manifest_dir)
+        .output()
+        .expect("cargo could not be run");
+    assert!(
+        out.status.success(),
+        "cargo package --list failed, so what ships is unknown rather than \
+         known good: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let listed: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect();
+
+    // Without this the assertion below holds over an empty list, which is what
+    // a cargo that printed nothing and still exited zero would produce.
+    assert!(
+        listed.iter().any(|f| f == "Cargo.toml"),
+        "cargo listed no `Cargo.toml`, so it listed nothing recognisable and \
+         the check below would pass over an empty set: {listed:?}"
+    );
+
+    let shipped: Vec<&String> = listed
+        .iter()
+        .filter(|f| f.contains("rust-toolchain"))
+        .collect();
+    assert!(
+        shipped.is_empty(),
+        "the package carries the toolchain pin: {shipped:?}\n\
+         Shipping it makes every `cargo install` of this crate build under our \
+         nightly, which is the one thing targeting stable was for."
     );
 }

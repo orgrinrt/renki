@@ -21,18 +21,24 @@
 //! Declare a [`Tool`] as a `const`, and hand it over:
 //!
 //! ```no_run
-//! use renki::{pin_keys, Tool};
+//! use renki::{Tool, pin_keys};
 //!
 //! const TOOL: Tool = Tool {
-//!     short:           "widget",
-//!     config_file:     "widget.toml",
-//!     pin_keys:        pin_keys!("widget"),
-//!     engine_crate:    "widget-engine",
+//!     short: "widget",
+//!     config_file: "widget.toml",
+//!     pin_keys: pin_keys!("widget"),
+//!     engine_crate: "widget-engine",
 //!     cache_namespace: "widget",
-//!     default_url:     "https://github.com/o/widget.git",
-//!     launcher_crate:  "widget",
+//!     default_url: "https://github.com/o/widget.git",
+//!     launcher_crate: "widget",
 //!     ..Tool::CONVENTIONS
 //! };
+//!
+//! // The descriptor is checked at build time rather than on the first run.
+//! // Every name in it ends up in a path, a command line or a config key, and
+//! // an empty one produces a launcher that runs and does the wrong thing
+//! // quietly. Put this beside the descriptor.
+//! const _: () = assert!(TOOL.defect().is_none());
 //!
 //! fn main() -> std::process::ExitCode {
 //!     // SAFETY: the first statement of main, before any thread exists.
@@ -42,16 +48,34 @@
 //!
 //! Everything that is one tool's and no other's goes through [`Hooks`] rather
 //! than into this crate.
+//!
+//! # Backends and extensions
+//!
+//! Fetching and building is a contract, [`extension::Backend`], with
+//! [`extension::Cargo`], [`extension::Local`] and [`extension::Git`] shipped
+//! and a host's own going in the same table.
+//!
+//! The extension half is for a host reading tool descriptors out of its own
+//! configuration, where the backends are named by a string rather than known at
+//! compile time and listing what a tool offers must not fetch anything.
+//! [`extension::Descriptor`] is a parsed `tool.toml`, and
+//! [`extension::locate`] is what turns one into something on disk. The whole of
+//! it is in [`extension`].
+//!
+//! # The name
+//!
+//! `renki` is finnish for a farmhand, the sort who does the fetching and the
+//! carrying so that somebody else can get on with the actual work. Which is
+//! more or less the whole of this crate's job, so it seemed to fit.
 
-// The crate's whole selling point is a small honest surface, and both of these
-// guard exactly that claim. `unreachable_pub` caught thirty-one items marked
-// public inside private modules, and one genuinely public type hiding in that
-// noise that the crate root had forgotten to re-export.
-#![warn(unreachable_pub, missing_docs)]
-// A dead link renders as plain text on the page a stranger lands on, and a
-// published version's documentation cannot be replaced. Warned about, it
-// ships; denied, it does not build.
-#![deny(rustdoc::broken_intra_doc_links)]
+// The crate's whole selling point is a small honest surface, and all three of
+// these guard exactly that claim, so all three refuse rather than complain.
+// `unreachable_pub` caught thirty-one items marked public inside private
+// modules, and one genuinely public type hiding in that noise that the crate
+// root had forgotten to re-export. An undocumented public item and a dead
+// intra-doc link both land on the page a stranger reads, and a published
+// version's documentation cannot be replaced.
+#![deny(unreachable_pub, missing_docs, rustdoc::broken_intra_doc_links)]
 
 // The README's `rust` block is compiled as a doctest. Only that one: the shell
 // and toml blocks are prose as far as this is concerned, and changing the fence
@@ -81,6 +105,7 @@ mod cache;
 mod discover;
 mod engine;
 mod env;
+pub mod extension;
 mod hash;
 mod manifest;
 mod pin;
@@ -88,17 +113,28 @@ mod registry;
 mod selfupdate;
 mod tool;
 
+use std::ffi::OsString;
 use std::io::Write as _;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::args::{is_the_locate_query, normalize_args};
-
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
 pub use crate::manifest::{Header, Pin, Reference, package_name};
 pub use crate::pin::Resolved;
-pub use crate::tool::{Anchor, Check, Cli, Hooks, Locate, PinKeys, SelfUpdate, Tool, Workdir};
+pub use crate::tool::{
+    Anchor,
+    Check,
+    Cli,
+    Hooks,
+    Locate,
+    PinKeys,
+    SelfUpdate,
+    Tool,
+    VersionSource,
+    Workdir,
+};
 
 /// Where a resolved pin came from, so the registry can tell a repo that has
 /// adopted an explicit pin from one still on whatever legacy fallback the tool
@@ -155,13 +191,25 @@ pub unsafe fn run(tool: &Tool) -> ExitCode {
 /// this when the caller has already sanitised, or when it knows it is not a
 /// hook descendant.
 pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
-    let raw: Vec<String> = std::env::args().collect();
+    // `args_os`, never `args`. The latter panics on an argument that is not
+    // valid UTF-8, and on unix argv is arbitrary bytes: a latin-1 filename
+    // handed through by a script would kill the launcher with a std panic
+    // before any of its own diagnostics ran. Everything below compares against
+    // ASCII flags and forwards the rest untouched, so nothing here needs the
+    // bytes to be text, and the engine gets exactly what the shell passed.
+    //
+    // The type stops the obvious way back: `args()` yields `String` and
+    // `Vec<OsString>` has no `FromIterator<String>`, so swapping the call here
+    // does not compile. It does not stop a deliberate `.map(OsString::from)`,
+    // which compiles and panics exactly as before, so the guard is this one
+    // line rather than the class.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
     match outcome(tool, &raw) {
         Ok(()) => ExitCode::SUCCESS, // unreachable when the exec succeeds
         Err(e) => {
             eprintln!("{}: {e}", tool.short);
             ExitCode::FAILURE
-        }
+        },
     }
 }
 
@@ -173,7 +221,7 @@ pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
 /// passes just as well against a launcher that got as far as looking for a
 /// repository and did not find one, which is not the same thing at all and is
 /// how the check ends up unwired without anything reporting it.
-fn outcome(tool: &Tool, raw: &[String]) -> Result<(), String> {
+fn outcome(tool: &Tool, raw: &[OsString]) -> Result<(), String> {
     // Refused before anything else, because what a bad descriptor produces is
     // silence rather than an error: a short name no shell can spell leaves both
     // overrides unsettable, and an empty engine binary name rebuilds the engine
@@ -298,7 +346,7 @@ fn eviction_exhausted(bin: &std::path::Path) -> String {
     )
 }
 
-fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
+fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
     // `--engine <path>` is the launcher's, so it comes off before anything
     // reads the arguments, the same as `--dir`.
     let (engine_override, args) = engine::take_flag(args.to_vec(), tool.engine_flag);
@@ -432,7 +480,7 @@ fn dispatch(tool: &Tool, args: &[String]) -> Result<(), String> {
     // repeatedly, which is not something to keep trying forever either, since
     // a build that keeps vanishing is a fault rather than a race.
     let mut bin = bin;
-    for _ in 0..EVICTION_RETRIES {
+    for _ in 0 .. EVICTION_RETRIES {
         if bin.is_file() {
             break;
         }
@@ -481,9 +529,36 @@ fn resolve_pin(
     let where_to = located
         .map(|l| l.config_path.clone())
         .unwrap_or_else(|| root.join(tool.config_file));
+    // A config that is not TOML parses to an empty header, which reaches here
+    // looking exactly like a config that names no pin. The repair for the two
+    // is not the same, and telling somebody to add a key that is sitting in
+    // front of them sends them looking in the wrong place.
+    if let Some(l) = located
+        && let Ok(s) = std::fs::read_to_string(&l.config_path)
+        && let Some(why) = crate::manifest::syntax_error(&s)
+    {
+        return Err(format!(
+            "{} is not readable as TOML, so no pin could be read from it:\n\n{why}\n",
+            l.config_path.display()
+        ));
+    }
+    // A key that was aimed at this tool and missed. Telling somebody to add a
+    // pin to a file that, to them, already carries one sends them looking in
+    // the wrong place, so name what is actually sitting there.
+    let nearly = located
+        .and_then(|l| std::fs::read_to_string(&l.config_path).ok())
+        .and_then(|s| crate::manifest::near_miss(tool, &s))
+        .map(|k| {
+            format!(
+                "\n{} carries `{k}`, which is not one of the keys read for a pin. If \
+                 that was meant to be the pin, the spelling is below.\n",
+                where_to.display(),
+            )
+        })
+        .unwrap_or_default();
     Err(format!(
-        "no {} pin found. add one to {}:\n\n    {} = \"0.1.0\"   # the released engine \
-         version\n",
+        "no {} pin found. add one to {}:\n{nearly}\n    {} = \"0.1.0\"   # the released \
+         engine version\n",
         tool.engine_crate,
         where_to.display(),
         tool.pin_keys.version
@@ -493,3 +568,7 @@ fn resolve_pin(
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "prose_tests.rs"]
+mod prose_tests;

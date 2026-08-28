@@ -43,8 +43,11 @@ registries = []
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# Workspace-internal crates are path deps without a version; that is not a
-# real wildcard hazard, so allow it.
+# This crate is not in a cargo workspace and has no path dependencies, so
+# nothing here is a path dep without a version and the exemption has nothing to
+# exempt. Left on because it is what would be wanted the day one arrives, and
+# turning it off would read as a decision against path deps rather than as a
+# fact about there being none.
 allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"

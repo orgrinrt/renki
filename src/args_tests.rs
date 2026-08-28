@@ -17,8 +17,12 @@ const T: Tool = Tool {
     ..Tool::CONVENTIONS
 };
 
-fn s(v: &[&str]) -> Vec<String> {
-    v.iter().map(|x| (*x).to_string()).collect()
+/// Arguments, as the launcher actually receives them.
+///
+/// `OsString` rather than `String`, because argv is bytes on unix and the
+/// launcher carries it that way from `args_os` all the way to `exec`.
+fn s(v: &[&str]) -> Vec<std::ffi::OsString> {
+    v.iter().map(|x| std::ffi::OsString::from(*x)).collect()
 }
 
 #[test]
@@ -42,7 +46,7 @@ fn a_cargo_subcommand_drops_the_repeated_name() {
     );
     assert_eq!(
         normalize_args(&T, &s(&["cargo-widget", "widget"])),
-        Vec::<String>::new()
+        Vec::<std::ffi::OsString>::new()
     );
 }
 
@@ -151,4 +155,50 @@ fn a_tool_with_no_locate_query_never_answers_one() {
     };
     assert!(is_the_locate_query(Some(&RENAMED), &s(&["where"])));
     assert!(!is_the_locate_query(Some(&RENAMED), &s(&["locate"])));
+}
+
+#[test]
+fn an_argument_that_is_not_utf8_survives_the_walk_intact() {
+    // On unix argv is bytes. `std::env::args()` panics on one of these rather
+    // than returning it, which is why the entry point uses `args_os`, and
+    // everything from there down has to carry the bytes rather than convert
+    // them: a latin-1 filename handed through by a script names a real file,
+    // and the engine is the thing meant to open it.
+    use std::os::unix::ffi::OsStringExt;
+
+    let odd = std::ffi::OsString::from_vec(vec![0xE9, 0x6F, 0x6B]);
+    let raw = vec![
+        std::ffi::OsString::from("/usr/bin/widget"),
+        std::ffi::OsString::from("lock"),
+        odd.clone(),
+    ];
+    let out = normalize_args(&T, &raw);
+    assert_eq!(out, vec![std::ffi::OsString::from("lock"), odd.clone()]);
+
+    // The control on the assertion above, since a lossy conversion would still
+    // produce a two-element vector and still pass a length check. These bytes
+    // are not valid UTF-8, so anything that went through a `String` on the way
+    // has replaced them with U+FFFD and the comparison sees it.
+    assert!(odd.to_str().is_none(), "the fixture is valid UTF-8");
+    assert_eq!(out[1].as_encoded_bytes(), &[0xE9, 0x6F, 0x6B]);
+}
+
+#[test]
+fn a_flag_value_that_is_not_utf8_is_taken_and_kept_whole() {
+    // The other half: the launcher's own flags take paths, and a path is bytes
+    // in exactly the same way. `--dir` is dropped rather than read, so the one
+    // to check is that dropping it takes the value with it and leaves the rest
+    // of the bytes alone.
+    use std::os::unix::ffi::OsStringExt;
+
+    let odd = std::ffi::OsString::from_vec(vec![0xFF, 0xFE, 0x2F, 0x78]);
+    let raw = vec![
+        std::ffi::OsString::from("/usr/bin/widget"),
+        std::ffi::OsString::from(T.dir_flag),
+        std::ffi::OsString::from("/somewhere"),
+        std::ffi::OsString::from("lock"),
+        odd.clone(),
+    ];
+    let out = normalize_args(&T, &raw);
+    assert_eq!(out, vec![std::ffi::OsString::from("lock"), odd]);
 }

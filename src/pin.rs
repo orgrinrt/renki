@@ -14,24 +14,29 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::hash::Fnv;
 pub(crate) use crate::manifest::{Pin, Reference};
-use crate::tool::Tool;
+use crate::tool::{Tool, VersionSource};
 
 /// A branch pin re-resolves to a concrete rev at most this often; a fresh
 /// resolution within the window is reused without a network round-trip. Kept
 /// short so a repo tracking a branch picks up new heads within the hour,
 /// matching the launcher's own self-update cadence.
-const BRANCH_TTL: Duration = Duration::from_secs(60 * 60);
+pub(crate) const BRANCH_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// A pin resolved to concrete build attempts.
+///
+/// Produced by parsing, never by a consumer, so it is closed for the same
+/// reason [`crate::Reference`] and [`crate::Header`] are: a field added later
+/// would otherwise be a breaking change.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
     /// The pin this came from, kept so a tool's hooks can derive whatever they
     /// need to hand the engine without re-reading the config. A dependency that
     /// must match the exact revision the engine was built from is the case.
-    pub pin: Pin,
+    pub pin:                Pin,
     /// The stable component of the cache key: `v:<version>` for a release, the
     /// concrete rev for a rev or branch pin, `tag:<t>` for a tag.
-    pub key_rev: String,
+    pub key_rev:            String,
     /// One or more `cargo install` argument lists, source selectors and package
     /// name included, tried in order until one succeeds. `--root` and `--force`
     /// are added by the cache. A version pin tries the registry first, then the
@@ -40,7 +45,7 @@ pub struct Resolved {
     /// Not public. It is the build plan rather than anything a hook needs, and
     /// leaving it reachable would mean a caller could rewrite the plan out from
     /// under the rest of the struct.
-    pub(crate) attempts: Vec<Vec<String>>,
+    pub(crate) attempts:    Vec<Vec<String>>,
     /// The tag a version pin resolved to, which is the bare version unless the
     /// tool said its repository spells tags differently. Empty for every other
     /// reference kind, which carries its own ref already.
@@ -55,6 +60,16 @@ impl Resolved {
     /// The git ref kind and value this resolved to, for a hook building a
     /// dependency pinned to the same source. Always a concrete immutable ref:
     /// a branch has already become the rev it pointed at.
+    ///
+    /// Exact for a rev, a tag and a branch. For a **version** it is the first
+    /// tag the pin would try, which is the one that built whenever the tool
+    /// names a single tag, and that is the ordinary case. It is not exact for a
+    /// tool whose `version_tags` hook names several and whose first one does not
+    /// exist, nor under [`VersionSource::RegistryThenGitTag`] when the registry
+    /// answered, because the build reports back only a path and not which
+    /// attempt won.
+    ///
+    /// [`VersionSource::RegistryThenGitTag`]: crate::VersionSource::RegistryThenGitTag
     pub fn git_ref(&self) -> (&'static str, &str) {
         match &self.pin.reference {
             Reference::Version(_) => ("tag", self.version_tag.as_str()),
@@ -62,12 +77,51 @@ impl Resolved {
             Reference::Rev(_) | Reference::Branch(_) => ("rev", self.key_rev.as_str()),
         }
     }
+
+    /// Resolve a pin without touching the network, so a tool can build one of
+    /// these and run its own hooks against it.
+    ///
+    /// A hook takes a `&Resolved`, and the two fields that decide what
+    /// [`git_ref`](Resolved::git_ref) answers are crate-only, because they have
+    /// to agree with each other. That is right for the invariant and it left
+    /// every hook untestable outside this crate, which is what this is for.
+    /// It goes through the same derivation a run does, so the pair cannot be
+    /// made to disagree here either.
+    ///
+    /// A branch pin is refused. Resolving one means asking the remote where the
+    /// branch points, and a test that reaches the network is not a test.
+    /// Everything else, a version, a tag and a rev, is already immutable and
+    /// resolves the same way here as it does in a run.
+    pub fn without_network(tool: &Tool, pin: &Pin) -> Result<Self, String> {
+        build(tool, pin, |b| {
+            Err(format!(
+                "the branch pin {b} cannot be resolved without the network: a branch \
+                 is whatever the remote says it is right now. Pin a version, a tag or \
+                 a rev instead.",
+            ))
+        })
+    }
 }
 
 /// Resolve a pin to concrete build attempts. A branch resolves to its current
 /// head via `git ls-remote`, cached with a TTL; a rev, tag or version is
 /// already immutable.
 pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resolved, String> {
+    build(tool, pin, |b| resolve_branch(pin, b, cache_root))
+}
+
+/// The derivation itself, with the one part that needs a remote handed in.
+///
+/// Everything but a branch is immutable and derives from the pin alone, so the
+/// only difference between a run and [`Resolved::without_network`] is what the
+/// branch arm does. Keeping that the only difference is the point: `key_rev`,
+/// `attempts` and `version_tag` have to agree, and one code path is what makes
+/// that hold for both callers rather than for the one somebody remembered.
+fn build(
+    tool: &Tool,
+    pin: &Pin,
+    branch_sha: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Resolved, String> {
     let git = |sel: &[&str]| -> Vec<String> {
         let mut a = vec!["--git".to_string(), pin.url.clone()];
         a.extend(sel.iter().map(|s| s.to_string()));
@@ -78,15 +132,19 @@ pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resol
     let (key_rev, attempts) = match &pin.reference {
         Reference::Version(v) => {
             let key = format!("v:{v}");
-            // the registry release first, which is the fast path once the
-            // engine publishes. Before that it fails on a cold build and falls
-            // through to the tags below, silently, since a failure is only
-            // reported when every attempt fails.
-            let mut attempts = vec![vec![
-                tool.engine_crate.to_string(),
-                "--version".into(),
-                v.clone(),
-            ]];
+            // The registry release first, when the tool has said its engine
+            // crate name is one it owns. `cargo install` resolves by name, and
+            // nothing here ties that name to `pin.url`, so for a tool that has
+            // not said so the registry is a different artifact wearing the same
+            // name and this list must not contain it. See `VersionSource`.
+            let mut attempts = Vec::new();
+            if matches!(tool.version_source, VersionSource::RegistryThenGitTag) {
+                attempts.push(vec![
+                    tool.engine_crate.to_string(),
+                    "--version".into(),
+                    v.clone(),
+                ]);
+            }
             // the matching git tags: work before the engine is published, and
             // for git-only consumers after. The bare version unless the tool
             // says its repository spells them differently.
@@ -94,20 +152,34 @@ pub(crate) fn resolve(tool: &Tool, pin: &Pin, cache_root: &Path) -> Result<Resol
                 Some(f) => f(v),
                 None => vec![v.clone()],
             };
+            // A hook naming no tag leaves nothing to try, and under the default
+            // source there is no registry attempt to carry the pin either. The
+            // loop that builds then runs zero times and reports a failure with
+            // an empty list of what it tried, which names nothing and blames
+            // the pin. Refuse here instead, where the hook can be named.
+            if tags.is_empty() {
+                return Err(format!(
+                    "the {} version pin {v} has no tag to build from: this tool's \
+                     `version_tags` hook returned an empty list. A version pin resolves \
+                     through the tags on {}, so the hook has to name at least one.",
+                    tool.short, pin.url,
+                ));
+            }
             attempts.extend(tags.iter().map(|t| git(&["--tag", t])));
-            // The first is what a hook building a dependency points at: the
-            // attempts are tried in order, so it is the one most likely to be
-            // the tag that exists.
-            version_tag = tags.first().cloned().unwrap_or_else(|| v.clone());
+            // The first tag, which is the one tried first. Not necessarily the
+            // one that built: `ensure_built` walks the list and does not report
+            // back which attempt won, so a tool naming several tags gets the
+            // first here whichever one existed. See `Resolved::git_ref`.
+            version_tag = tags[0].clone();
             (key, attempts)
-        }
+        },
         Reference::Rev(r) => (r.clone(), vec![git(&["--rev", r])]),
         Reference::Tag(t) => (format!("tag:{t}"), vec![git(&["--tag", t])]),
         Reference::Branch(b) => {
-            let sha = resolve_branch(pin, b, cache_root)?;
+            let sha = branch_sha(b)?;
             let attempts = vec![git(&["--rev", &sha])];
             (sha, attempts)
-        }
+        },
     };
     Ok(Resolved {
         pin: pin.clone(),
@@ -136,7 +208,7 @@ fn resolve_branch(pin: &Pin, branch: &str, cache_root: &Path) -> Result<String, 
             eprintln!("{e}");
             eprintln!("using the last known revision for {branch}: {sha}");
             return Ok(sha);
-        }
+        },
     };
     if let Some(parent) = cache.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -207,18 +279,29 @@ pub(crate) fn ls_remote_head(url: &str, branch: &str) -> Result<String, String> 
     Ok(sha)
 }
 
-/// Delete branch resolutions past their own freshness window.
+/// Delete branch resolutions no build could still want.
 ///
 /// One file per url and branch, seventy bytes each, and nothing removed them:
-/// a repo that once tracked a branch left one behind for good. A resolution
-/// older than [`BRANCH_TTL`] is never read again, since the next run
-/// re-resolves and overwrites it, so anything the window has passed is dead by
-/// definition and a live repo's own file is rewritten before it can be caught.
+/// a repo that once tracked a branch left one behind for good.
 ///
-/// Best-effort, like every other sweep here: a resolution is re-derived from
-/// the network, so failing to remove one costs nothing and must never fail a
-/// run.
-pub(crate) fn sweep_branch_resolutions(cache_root: &Path) {
+/// **The window is the build cache's, not [`BRANCH_TTL`].** Those are two
+/// different questions and this swept on the wrong one. `BRANCH_TTL` says when
+/// a resolution stops being taken as the branch's current tip, which is an
+/// hour. It does not say when the file stops being read, because
+/// [`resolve_branch`]'s offline arm reads it at any age on purpose: a revision
+/// that was the tip yesterday is very probably still built and sitting in the
+/// cache, and running from it beats refusing to run.
+///
+/// So sweeping on `BRANCH_TTL` deleted the fallback an hour after it was
+/// written, leaving it to work only in the gap before the next collection pass.
+/// `retention` is the honest bound: past it the collector has taken the build
+/// the resolution names, so falling back to it would name a revision that has
+/// to be fetched and rebuilt anyway, which is what asking the remote already
+/// does, and does better.
+///
+/// Best-effort, like every other sweep here: failing to remove one costs a
+/// seventy-byte file and must never fail a run.
+pub(crate) fn sweep_branch_resolutions(cache_root: &Path, retention: Duration) {
     let Ok(entries) = std::fs::read_dir(cache_root.join("branch-resolutions")) else {
         return;
     };
@@ -229,7 +312,7 @@ pub(crate) fn sweep_branch_resolutions(cache_root: &Path) {
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| now.duration_since(t).ok())
-            .is_some_and(|age| age > BRANCH_TTL);
+            .is_some_and(|age| age > retention);
         if stale {
             let _ = std::fs::remove_file(entry.path());
         }

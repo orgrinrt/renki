@@ -34,7 +34,17 @@ impl Fnv {
     /// distinct fields cannot collide by running together (`"ab" + "c"` and
     /// `"a" + "bc"` hash differently).
     pub(crate) fn write_field(&mut self, s: &str) {
-        self.write(s.as_bytes());
+        self.write_bytes(s.as_bytes());
+    }
+
+    /// The same, for a field that is bytes rather than text.
+    ///
+    /// A path on unix is arbitrary bytes, and rendering one lossily to key a
+    /// cache maps every invalid sequence onto `U+FFFD`. Two engine paths
+    /// differing only in bytes no `str` can hold then hash the same and share a
+    /// build directory.
+    pub(crate) fn write_bytes(&mut self, b: &[u8]) {
+        self.write(b);
         self.write(&[0]);
     }
 
@@ -55,9 +65,9 @@ mod tests {
         // `Fnv::new().hex()` to `format!("{OFFSET:016x}")`, which is the
         // definition against itself and holds for any offset whatsoever.
         for (input, want) in [
-            ("", 0xcbf2_9ce4_8422_2325u64),
-            ("a", 0xaf63_dc4c_8601_ec8cu64),
-            ("foobar", 0x8594_4171_f739_67e8u64),
+            ("", 0xCBF2_9CE4_8422_2325u64),
+            ("a", 0xAF63_DC4C_8601_EC8Cu64),
+            ("foobar", 0x8594_4171_F739_67E8u64),
         ] {
             let mut h = Fnv::new();
             h.write(input.as_bytes());

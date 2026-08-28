@@ -36,9 +36,9 @@ const SELF_UPDATE_TTL_SECS: u64 = 60 * 60;
 /// The git-branch source a `cargo install` recorded for the launcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InstalledSource {
-    url: String,
+    url:    String,
     branch: String,
-    rev: String,
+    rev:    String,
 }
 
 /// Check for and apply a launcher update. May reinstall and re-exec, in which
@@ -135,9 +135,9 @@ fn parse_git_branch_spec(spec: &str) -> Option<InstalledSource> {
         return None;
     }
     Some(InstalledSource {
-        url: url.to_string(),
+        url:    url.to_string(),
         branch: branch.to_string(),
-        rev: rev.to_string(),
+        rev:    rev.to_string(),
     })
 }
 
@@ -165,15 +165,7 @@ fn mark_checked(marker: &Path, now: u64) {
 
 fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
     let status = std::process::Command::new("cargo")
-        .args([
-            "install",
-            "--git",
-            url,
-            "--branch",
-            branch,
-            tool.launcher_crate,
-            "--force",
-        ])
+        .args(["install", "--git", url, "--branch", branch, tool.launcher_crate, "--force"])
         .status()
         .map_err(|e| format!("could not run cargo install: {e}"))?;
     if status.success() {

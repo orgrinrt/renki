@@ -5,27 +5,35 @@
 
 use super::*;
 
+/// Every field written out, deliberately.
+///
+/// This is the consumer shape `Tool::CONVENTIONS` does **not** protect, and it
+/// sits here so that a field added to `Tool` breaks the build right at the
+/// sentence saying so. Nothing else in the suite would notice: the descriptors
+/// in `pin_tests.rs` and `lib_tests.rs` all spread the base, which is exactly
+/// what buys them the compatibility this one does not have.
 const WITH: Tool = Tool {
-    anchor: Anchor::Marker(".git"),
-    short: "widget",
-    config_file: "t.toml",
-    pin_keys: crate::pin_keys!("t"),
-    engine_crate: "engine",
-    engine_bin: None,
+    anchor:          Anchor::Marker(".git"),
+    short:           "widget",
+    config_file:     "t.toml",
+    pin_keys:        crate::pin_keys!("t"),
+    engine_crate:    "engine",
+    engine_bin:      None,
     cache_namespace: "t",
     cache_retention: std::time::Duration::from_secs(30 * 24 * 60 * 60),
-    scan_skip: &[".git", "target", "node_modules"],
-    default_url: "u",
-    launcher_crate: "t-launcher",
-    workdir: Some(Workdir {
-        key: "work_dir",
+    scan_skip:       &[".git", "target", "node_modules"],
+    default_url:     "u",
+    version_source:  VersionSource::GitTag,
+    launcher_crate:  "t-launcher",
+    workdir:         Some(Workdir {
+        key:          "work_dir",
         root_default: "work",
     }),
-    dir_flag: Cli::DIR_FLAG,
-    engine_flag: Cli::ENGINE_FLAG,
-    locate: Some(Locate::DEFAULT),
-    self_update: SelfUpdate::ChaseTheBranch,
-    hooks: Hooks::NONE,
+    dir_flag:        Cli::DIR_FLAG,
+    engine_flag:     Cli::ENGINE_FLAG,
+    locate:          Some(Locate::DEFAULT),
+    self_update:     SelfUpdate::ChaseTheBranch,
+    hooks:           Hooks::NONE,
 };
 
 const WITHOUT: Tool = Tool {
@@ -39,15 +47,21 @@ fn a_short_name_a_shell_cannot_spell_is_refused() {
     // rather than the one hyphen case that prompted this.
     for ok in ["w", "widget", "cargo_mock", "w2", "W", "_w"] {
         assert!(
-            Tool { short: ok, ..WITH }.short_is_usable(),
+            Tool {
+                short: ok,
+                ..WITH
+            }
+            .short_is_usable(),
             "{ok} should be usable"
         );
     }
-    for bad in [
-        "", "my-tool", "my.tool", "my tool", "my/tool", "2tools", "tööli",
-    ] {
+    for bad in ["", "my-tool", "my.tool", "my tool", "my/tool", "2tools", "tööli"] {
         assert!(
-            !Tool { short: bad, ..WITH }.short_is_usable(),
+            !Tool {
+                short: bad,
+                ..WITH
+            }
+            .short_is_usable(),
             "{bad:?} should be refused"
         );
     }
@@ -71,7 +85,10 @@ fn a_refused_short_name_would_have_produced_an_unusable_variable() {
         spellable && name != "_ROOT"
     }
     for s in ["w", "widget", "my-tool", "2tools", "", "my.tool", "tööli"] {
-        let t = Tool { short: s, ..WITH };
+        let t = Tool {
+            short: s,
+            ..WITH
+        };
         assert_eq!(
             t.short_is_usable(),
             usable_variable(&t.root_env()),

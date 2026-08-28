@@ -24,8 +24,8 @@
 //! Not a way to pin an engine. A repo pins through its config; this is a flag
 //! passed by hand, and it is read from configuration nowhere.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::hash::Fnv;
 use crate::tool::Tool;
@@ -81,7 +81,7 @@ fn scratch_dir(cache_root: &Path) -> PathBuf {
 /// still removed, so nothing the launcher owns reaches the engine. Last wins is
 /// what a shell user expects from a repeated option, and it is the spelling
 /// that lets a wrapper script append an override after whatever it was handed.
-pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
+pub(crate) fn take_flag(args: Vec<OsString>, flag: &str) -> (Flag, Vec<OsString>) {
     let joined = format!("{flag}=");
     let mut found = Flag::Absent;
     let mut rest = Vec::with_capacity(args.len());
@@ -92,7 +92,11 @@ pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
             rest.push(arg);
             continue;
         }
-        if arg == "--" {
+        // An argument that is not valid UTF-8 cannot equal any of the ASCII
+        // flags below, so `None` here means "the user's", which is the right
+        // answer and the one that keeps the bytes intact all the way to `exec`.
+        let text = arg.to_str();
+        if text == Some("--") {
             users_from_here = true;
             // A pending value stays missing: `--engine --` is the flag with
             // nothing after it, not the flag taking a separator.
@@ -102,23 +106,23 @@ pub(crate) fn take_flag(args: Vec<String>, flag: &str) -> (Flag, Vec<String>) {
         }
         if want_value {
             want_value = false;
-            if !arg.starts_with('-') {
+            if !text.is_some_and(|t| t.starts_with('-')) {
                 found = Flag::Value(arg);
                 continue;
             }
             // The flag was passed and the next argument is another flag, so it
             // stays `Missing` and this argument is the user's.
         }
-        if arg == flag {
+        if text == Some(flag) {
             want_value = true;
             found = Flag::Missing;
             continue;
         }
-        if let Some(value) = arg.strip_prefix(&joined) {
+        if let Some(value) = text.and_then(|t| t.strip_prefix(&joined)) {
             found = if value.is_empty() {
                 Flag::Missing
             } else {
-                Flag::Value(value.to_string())
+                Flag::Value(OsString::from(value))
             };
             continue;
         }
@@ -138,7 +142,11 @@ pub(crate) enum Flag {
     /// Not passed.
     Absent,
     /// Passed, with the value.
-    Value(String),
+    ///
+    /// An `OsString` because a value is a path as often as not, and a path is
+    /// bytes. Lossy conversion here would hand the engine a filename that does
+    /// not exist.
+    Value(OsString),
     /// Passed, with no value after it. A usage error for a flag whose value is
     /// read, and harmless for one whose value is discarded.
     Missing,
@@ -147,7 +155,7 @@ pub(crate) enum Flag {
 impl Flag {
     /// The value, for a caller that treats a missing one the same as an absent
     /// flag. Only correct where the flag's value is discarded anyway.
-    pub(crate) fn value(self) -> Option<String> {
+    pub(crate) fn value(self) -> Option<OsString> {
         match self {
             Self::Value(v) => Some(v),
             Self::Absent | Self::Missing => None,
@@ -164,7 +172,7 @@ impl Flag {
 ///
 /// The tool's own `verify_engine_dir` hook runs after the manifest check, for
 /// whatever else that engine's checkout has to carry.
-pub(crate) fn locate(tool: &Tool, raw: &str) -> Result<PathBuf, String> {
+pub(crate) fn locate(tool: &Tool, raw: &OsStr) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw);
     let abs = if path.is_absolute() {
         path
@@ -190,6 +198,20 @@ pub(crate) fn locate(tool: &Tool, raw: &str) -> Result<PathBuf, String> {
     Ok(abs)
 }
 
+/// The scratch directory name for one `--engine` source path.
+///
+/// The path's bytes, not a rendering of them. On unix a path is arbitrary bytes
+/// and `to_string_lossy` maps every invalid sequence onto one replacement
+/// character, so two unrelated sources collided into one directory and built
+/// over each other. Named rather than written inline in [`build`], because the
+/// test that pins the collision has to hash the same way the build does and a
+/// second copy of two lines is a test that guards a copy.
+pub(crate) fn scratch_key(source: &Path) -> String {
+    let mut h = Fnv::new();
+    h.write_bytes(source.as_os_str().as_encoded_bytes());
+    h.hex()
+}
+
 /// Build the engine from `source`, always, and return the binary.
 ///
 /// Always, rather than when something looks stale: the reason to pass this flag
@@ -201,9 +223,7 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
     let scratch = scratch_dir(cache_root);
     sweep(cache_root);
 
-    let mut h = Fnv::new();
-    h.write_field(&source.to_string_lossy());
-    let root = scratch.join(h.hex());
+    let root = scratch.join(scratch_key(source));
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create {}: {e}", root.display()))?;
     touch(&root);
@@ -213,32 +233,25 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
         tool.short,
         source.display()
     );
-    let status = Command::new("cargo")
-        .arg("install")
-        .arg("--path")
-        .arg(source)
-        .arg("--root")
-        .arg(&root)
-        .arg("--target-dir")
-        .arg(root.join("target"))
-        .arg("--force")
-        .status()
-        .map_err(|e| format!("could not run cargo install: {e}"))?;
-    if !status.success() {
-        return Err(format!(
-            "the engine at {} did not build; nothing was installed",
-            source.display()
-        ));
-    }
+    // The same backend the pinned build uses, with a one-attempt plan. The
+    // target directory is named so it lands inside the scratch root and is kept
+    // between runs, which is what makes an unchanged rebuild cheap.
+    crate::extension::materialise_once::<crate::extension::Cargo>(
+        &crate::extension::CargoPlan {
+            attempts:   vec![vec![
+                "--path".into(),
+                source.display().to_string(),
+                "--target-dir".into(),
+                root.join("target").display().to_string(),
+            ]],
+            bin:        tool.engine_bin_name().into(),
+            crate_name: tool.engine_crate.into(),
+        },
+        &root,
+    )
+    .map_err(|e| format!("the engine at {} did not build.\n{e}", source.display()))?;
 
-    let bin = root.join("bin").join(tool.engine_bin_name());
-    if !bin.is_file() {
-        return Err(format!(
-            "cargo install reported success but produced no binary under {}",
-            root.display()
-        ));
-    }
-    Ok(bin)
+    Ok(root.join("bin").join(tool.engine_bin_name()))
 }
 
 /// Record that this scratch build is in use, for the sweep to read later.

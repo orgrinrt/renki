@@ -20,7 +20,10 @@ const T: Tool = Tool {
 
 #[test]
 fn the_build_failure_names_every_cause_including_the_toolchain() {
-    let msg = build_failure(&T, &["a failed".to_string(), "b failed".to_string()]);
+    let msg = build_failure(T.engine_crate, &[
+        "a failed".to_string(),
+        "b failed".to_string(),
+    ]);
     // the engine it could not build, and each attempt in order
     assert!(msg.contains("engine"), "{msg}");
     assert!(
@@ -32,11 +35,7 @@ fn the_build_failure_names_every_cause_including_the_toolchain() {
     // from the engine's committed lockfile, so a transitive crate floats to
     // a version whose minimum rustc is above the one in effect, and the
     // failure then names a crate nobody in the repo chose.
-    for cause in [
-        "pin may be wrong",
-        "release may not exist",
-        "build may have broken",
-    ] {
+    for cause in ["pin may be wrong", "release may not exist", "build may have broken"] {
         assert!(msg.contains(cause), "missing `{cause}`: {msg}");
     }
     assert!(msg.contains("toolchain in effect"), "{msg}");
@@ -82,10 +81,9 @@ fn the_engine_is_handed_the_tools_own_directory_flag() {
     );
 
     // and the conventional spelling still arrives for a tool that chose it
-    assert_eq!(
-        engine_command_line(&T, Path::new("/w"), &[], &[]),
-        ["t", "--dir", "/w"]
-    );
+    assert_eq!(engine_command_line(&T, Path::new("/w"), &[], &[]), [
+        "t", "--dir", "/w"
+    ]);
 }
 
 #[test]
@@ -120,20 +118,17 @@ fn the_directory_leads_and_the_hooks_arguments_precede_the_users() {
     // the same flag, and a `--` the user wrote has to stay last or every
     // argument after it changes meaning.
     let extra = vec!["--dep".to_string(), "{ path = \"x\" }".to_string()];
-    let args = vec!["lock".to_string(), "--".to_string(), "-v".to_string()];
-    assert_eq!(
-        engine_command_line(&T, Path::new("/w"), &extra, &args),
-        [
-            "t",
-            "--dir",
-            "/w",
-            "--dep",
-            "{ path = \"x\" }",
-            "lock",
-            "--",
-            "-v"
-        ]
-    );
+    let args: Vec<std::ffi::OsString> = ["lock", "--", "-v"].iter().map(Into::into).collect();
+    assert_eq!(engine_command_line(&T, Path::new("/w"), &extra, &args), [
+        "t",
+        "--dir",
+        "/w",
+        "--dep",
+        "{ path = \"x\" }",
+        "lock",
+        "--",
+        "-v"
+    ]);
 }
 
 #[test]
@@ -241,7 +236,7 @@ fn a_present_binary_short_circuits_without_invoking_cargo() {
     let resolved = crate::pin::resolve(
         &T,
         &Pin {
-            url: "u".into(),
+            url:       "u".into(),
             reference: Reference::Rev("r".into()),
         },
         dir.path(),
@@ -274,12 +269,12 @@ fn a_package_whose_binary_is_named_differently_is_still_found() {
     // No attempts, so a miss cannot fall through to a build: returning the
     // path is the only way this succeeds.
     let no_attempts = Resolved {
-        pin: Pin {
-            url: "u".into(),
+        pin:         Pin {
+            url:       "u".into(),
             reference: Reference::Rev("r".into()),
         },
-        key_rev: "r".into(),
-        attempts: vec![],
+        key_rev:     "r".into(),
+        attempts:    vec![],
         version_tag: String::new(),
     };
     let got = ensure_built(&RENAMED, dir.path(), key, &no_attempts).unwrap();
@@ -308,12 +303,12 @@ fn a_binary_under_another_tools_name_is_not_this_tools_build() {
     std::fs::write(binpath.join("somethingelse"), b"#!/bin/sh\n").unwrap();
 
     let no_attempts = Resolved {
-        pin: Pin {
-            url: "u".into(),
+        pin:         Pin {
+            url:       "u".into(),
             reference: Reference::Rev("r".into()),
         },
-        key_rev: "r".into(),
-        attempts: vec![],
+        key_rev:     "r".into(),
+        attempts:    vec![],
         version_tag: String::new(),
     };
     assert!(ensure_built(&T, dir.path(), key, &no_attempts).is_err());
