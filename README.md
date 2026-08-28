@@ -285,7 +285,7 @@ Five environment variables, all named after your `short`:
 |---|---|
 | `WIDGET_ROOT` | Use this repo root instead of walking up for the anchor. |
 | `WIDGET_CACHE` | Put the cache here. The whole path, not a parent to append the namespace to. |
-| `WIDGET_NO_SELF_UPDATE` | Do not check whether the launcher itself has moved on. |
+| `WIDGET_NO_SELF_UPDATE` | Don't check whether the launcher itself has moved on. |
 | `WIDGET_WORKSPACE` | Set on a tool command, naming the workspace it acts on. |
 | `WIDGET_TOOL_ROOT` | Set alongside it, naming that tool's materialised root. |
 

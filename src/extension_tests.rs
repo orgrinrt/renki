@@ -187,8 +187,8 @@ fn the_key_moves_with_the_url() {
     let r = registry();
     let b = r.get("git").unwrap();
     assert_ne!(
-        cache_key(&with_url("https://a.invalid/x.git"), b),
-        cache_key(&with_url("https://b.invalid/x.git"), b)
+        cache_key(&with_url("https://a.invalid/x.git"), b).unwrap(),
+        cache_key(&with_url("https://b.invalid/x.git"), b).unwrap()
     );
 }
 
@@ -203,7 +203,7 @@ fn the_key_moves_with_the_named_backend() {
     a.backend = "git".into();
     let mut b = desc();
     b.backend = "marker".into();
-    assert_ne!(cache_key(&a, git), cache_key(&b, git));
+    assert_ne!(cache_key(&a, git).unwrap(), cache_key(&b, git).unwrap());
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn the_key_moves_with_the_revision() {
         url: "https://example.invalid/rules.git".into(),
         rev: "def456abc123789".into(),
     };
-    assert_ne!(cache_key(&a, b), cache_key(&z, b));
+    assert_ne!(cache_key(&a, b).unwrap(), cache_key(&z, b).unwrap());
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn the_key_moves_with_the_backend_fingerprint() {
     let r = registry();
     let (marker, git) = (r.get("marker").unwrap(), r.get("git").unwrap());
     assert_ne!(marker.fingerprint(), git.fingerprint());
-    assert_ne!(cache_key(&d, marker), cache_key(&d, git));
+    assert_ne!(cache_key(&d, marker).unwrap(), cache_key(&d, git).unwrap());
 }
 
 // --- the registry --------------------------------------------------------
@@ -920,8 +920,6 @@ impl PipeOne for Vec<String> {
 
 // --- collecting -----------------------------------------------------------
 
-// --- collecting -----------------------------------------------------------
-
 /// A tool tree, marked used now.
 fn marked_tool(dir: &Path, name: &str) -> std::path::PathBuf {
     let root = dir.join(name);
@@ -1035,5 +1033,146 @@ fn locating_a_cached_tool_marks_it_used() {
     assert!(
         marker.metadata().unwrap().modified().unwrap() > fetched_at,
         "a cache hit left the mark where the fetch put it"
+    );
+}
+
+// --- what the review of the first round found ----------------------------
+
+#[test]
+fn the_key_refuses_a_path_source_the_way_locate_does() {
+    // `cache_key` is public, and its path arm used to hash a workspace-relative
+    // string with an empty rev, which is exactly the collision `locate` refuses:
+    // two workspaces each holding a `tools/x` land on one entry. A host reaching
+    // the key directly got the collision the refusal exists to prevent.
+    let r = registry();
+    let b = r.get("marker").unwrap();
+    let mut d = desc();
+    d.source = Source::Path {
+        path: "tools/x".into(),
+    };
+
+    let err = cache_key(&d, b).unwrap_err();
+    assert!(err.contains("shared by all of them"), "{err}");
+
+    // The control: a git source still keys.
+    assert!(cache_key(&desc(), b).is_ok());
+}
+
+#[test]
+fn a_scratch_this_process_owns_is_never_collected() {
+    // A launcher collects on the same run that fetches, so a fetch slow enough
+    // to cross the scratch bound would be collected by its own process. The pid
+    // is in the name, which is the one case liveness settles cheaply.
+    let cache = scratch("collect-own");
+    let tools = cache.join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+
+    let mine = tools.join(format!(".aaaa.{}.0", std::process::id()));
+    let theirs = tools.join(".aaaa.999999.0");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::create_dir_all(&theirs).unwrap();
+
+    // Far past the bound, so age is not what spares it.
+    let removed = collect(
+        &cache,
+        std::time::Duration::from_secs(365 * DAY),
+        later(365 * DAY),
+    );
+
+    assert_eq!(removed, vec![".aaaa.999999.0".to_string()]);
+    assert!(mine.exists(), "it collected its own in-flight scratch");
+    assert!(!theirs.exists(), "the control survived, so nothing was collected");
+}
+
+#[test]
+fn a_sha256_object_name_is_accepted() {
+    // A repository may use sha-256, whose object names are sixty-four hex. The
+    // length check was written for sha-1 alone and refused them.
+    let sha256 = "a".repeat(64);
+    let ok = with_source(&format!(
+        r#"git = {{ url = "https://e.invalid/x.git", rev = "{sha256}" }}"#
+    ));
+    assert!(ok.is_ok(), "{ok:?}");
+
+    // The controls, on either side: still not a short prefix, and still not an
+    // arbitrary length between the two.
+    for bad in [40 - 1, 41, 63, 65] {
+        let r = with_source(&format!(
+            r#"git = {{ url = "https://e.invalid/x.git", rev = "{}" }}"#,
+            "a".repeat(bad)
+        ));
+        assert!(r.is_err(), "{bad} hex was accepted: {r:?}");
+    }
+}
+
+#[test]
+fn locate_and_the_launcher_place_through_one_body() {
+    // They used to carry the same `places_itself` branch twice, and the doc on
+    // `materialise_once` claimed `locate` called it, which it never did. A
+    // precondition added to one would silently not reach the other.
+    //
+    // Checked by adding one here rather than by reading: `place` is the only
+    // thing that refuses a root with no parent, so if either route stopped going
+    // through it, that route would stop refusing.
+    let places_itself = |_: &Path| Ok(());
+    assert!(place(Path::new("/"), false, places_itself).is_err());
+
+    // And the two routes agree on what a backend that places itself gets.
+    let base = scratch("one-body");
+    let via_generic = base.join("generic");
+    materialise_once::<PlacesItself>(&desc(), &via_generic).unwrap();
+    let generic_saw = PLACED_IN_PLACE.lock().unwrap().clone();
+
+    let via_registry = base.join("tools").join("registry");
+    std::fs::create_dir_all(base.join("tools")).unwrap();
+    place(&via_registry, true, |into| {
+        PlacesItself::materialise(&desc(), into)
+    })
+    .unwrap();
+    let registry_saw = PLACED_IN_PLACE.lock().unwrap().clone();
+
+    assert_eq!(generic_saw.as_deref(), Some(via_generic.as_path()));
+    assert_eq!(registry_saw.as_deref(), Some(via_registry.as_path()));
+    assert!(via_generic.join("in-place").is_file());
+    assert!(via_registry.join("in-place").is_file());
+}
+
+#[test]
+fn nothing_but_place_decides_how_material_is_placed() {
+    // Finding 1 of the second review, and it is invisible to every runtime test
+    // here: `locate` open-coded the same `places_itself` branch that
+    // `materialise_once` had, so the two dispatches were separate bodies that
+    // happened to agree. The doc three lines above `materialise_once` said
+    // `locate` called it, which it never did, and the two had already drifted:
+    // one refused a root with no parent and the other derived its parent itself.
+    //
+    // A source read rather than a behaviour check, because the defect is that
+    // two bodies exist rather than that either is wrong. The repository already
+    // tests prose this way; this is the same instrument pointed at a branch.
+    let src = include_str!("extension.rs");
+    let deciders: Vec<&str> = src
+        .lines()
+        .filter(|l| l.contains("places_itself") && l.trim_start().starts_with("if "))
+        .collect();
+    assert_eq!(
+        deciders.len(),
+        1,
+        "the placement branch exists in more than one body, so a precondition \
+         added to one does not reach the other: {deciders:?}"
+    );
+
+    // And the one that exists is inside `place`. Without this the assertion
+    // above passes just as well when the single copy is the one in `locate`.
+    let place_body = src
+        .split_once("pub fn place(")
+        .expect("`place` is gone, so this test is measuring nothing")
+        .1;
+    assert!(
+        place_body.starts_with(
+            "\n    root: &Path,\n    places_itself: bool,\n    materialise: impl FnOnce(&Path) \
+             -> Result<(), String>,\n) -> Result<(), String> {\n    if places_itself {"
+        ),
+        "the branch is not the first thing `place` does: {}",
+        &place_body[.. place_body.len().min(220)]
     );
 }

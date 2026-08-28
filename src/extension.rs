@@ -168,11 +168,15 @@ impl Descriptor {
         };
         match &self.source {
             Source::Git { url, rev } => {
-                // Forty hex is a full object name and is what git can fetch by.
-                // A short prefix is not: `git fetch --depth 1 origin <7-hex>`
-                // fails with `couldn't find remote ref`, measured against git
-                // 2.55, so accepting one only defers the error to the fetch.
-                if !rev.chars().all(|c| c.is_ascii_hexdigit()) || rev.len() != 40 {
+                // A full object name, which is what git can fetch by: forty hex
+                // under sha-1 and sixty-four under sha-256, both of which a
+                // repository may use. A short prefix is neither: `git fetch
+                // --depth 1 origin <7-hex>` fails with `couldn't find remote
+                // ref`, measured against git 2.55, so accepting one only defers
+                // the error to the fetch.
+                if !rev.chars().all(|c| c.is_ascii_hexdigit())
+                    || !matches!(rev.len(), 40 | 64)
+                {
                     return bad("revision", rev);
                 }
                 let ok = ["https://", "ssh://", "git://", "git@"];
@@ -312,27 +316,41 @@ pub trait Backend {
 
 /// Put a backend's material at `root`, once, however that backend places it.
 ///
-/// The shared core of both halves of the crate. The launcher calls it with
-/// [`Cargo`](crate::Cargo) named at compile time; [`locate`] calls it with a
-/// backend the registry found by name. Which mechanism keeps two concurrent
-/// callers from tripping over each other is [`Backend::places_itself`], because
-/// that is a fact about the backend rather than about the caller.
-///
-/// Does nothing when `root` already holds something. Whether that is the right
-/// question is the caller's: the launcher asks whether its binary is there,
-/// which is stricter than whether the directory is.
+/// The launcher's route in, with [`Cargo`](crate::Cargo) named at compile time.
+/// [`locate`] reaches the same core through [`place`] instead, because it holds
+/// a [`Registered`] rather than a type. Both go through `place`, so a
+/// precondition added there reaches both.
 pub fn materialise_once<B: Backend>(plan: &B::Plan, root: &Path) -> Result<(), String> {
-    if B::places_itself() {
+    place(root, B::places_itself(), |into| B::materialise(plan, into))
+}
+
+/// Put material at `root`, once, by whichever of the two routes the backend
+/// takes.
+///
+/// Not generic, so both halves of the crate share one body rather than one
+/// shape. `materialise_once` is this with the backend named at compile time;
+/// [`locate`] is this with the backend found in a registry, and the duplicate
+/// dispatch the two used to carry is what this removes.
+///
+/// Which mechanism keeps two concurrent callers from tripping over each other is
+/// [`Backend::places_itself`], because that is a fact about the backend rather
+/// than about the caller.
+pub fn place(
+    root: &Path,
+    places_itself: bool,
+    materialise: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    if places_itself {
         std::fs::create_dir_all(root)
             .map_err(|e| format!("could not create {}: {e}", root.display()))?;
-        return B::materialise(plan, root);
+        return materialise(root);
     }
     let parent = root
         .parent()
         .ok_or_else(|| format!("{} has no parent", root.display()))?;
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
-    place_via_scratch(root, parent, |into| B::materialise(plan, into))
+    place_via_scratch(root, parent, materialise)
 }
 
 /// Build into a scratch beside `root` and rename the finished tree into place.
@@ -455,18 +473,30 @@ impl Registry {
 ///
 /// The workspace is deliberately absent. Two workspaces naming the same tool at
 /// the same revision get the same key and therefore one copy on disk, which is
-/// the entire reason a shared cache is worth having.
-pub fn cache_key(descriptor: &Descriptor, backend: &Registered) -> String {
-    let (url, rev) = match &descriptor.source {
-        Source::Git { url, rev } => (url.as_str(), rev.as_str()),
-        Source::Path { path } => (path.as_str(), ""),
+/// what a shared cache is for.
+///
+/// # Errors
+///
+/// A [`Source::Path`], because a path is relative to one workspace and the key
+/// is not, so keying on one would put two workspaces each holding a `tools/x`
+/// on a single entry. [`locate`] refuses the same shape and this refuses it too:
+/// this is `pub`, so a host reaching it directly would otherwise get the exact
+/// collision `locate` exists to prevent.
+pub fn cache_key(descriptor: &Descriptor, backend: &Registered) -> Result<String, String> {
+    let Source::Git { url, rev } = &descriptor.source else {
+        return Err(format!(
+            "the tool `{}` names a path, which is relative to one workspace, \
+             and a cache key is shared by all of them",
+            descriptor.name
+        ));
     };
+    let (url, rev) = (url.as_str(), rev.as_str());
     let mut h = Fnv::new();
     h.write_field(descriptor.backend.as_str());
     h.write_field(url);
     h.write_field(rev);
     h.write_field(&backend.fingerprint());
-    h.hex()
+    Ok(h.hex())
 }
 
 /// Materialise a tool, or find it already materialised.
@@ -524,19 +554,9 @@ pub fn locate(
         return Ok(Located { root });
     }
 
-    // A path is relative to a workspace and the cache is shared by all of them,
-    // so the two cannot be combined: the key would be a workspace-relative
-    // string, and two workspaces each holding a `tools/x` would collide on one
-    // entry holding whichever content got there first.
-    if let Source::Path { path } = &descriptor.source {
-        return Err(format!(
-            "the tool `{}` is at the path `{path}`, and the backend `{}` caches; \
-             a path is relative to one workspace and the cache is shared by all of them",
-            descriptor.name, descriptor.backend
-        ));
-    }
-
-    let key = cache_key(descriptor, backend);
+    // This is where a caching backend with a path source is refused, since a
+    // path is relative to one workspace and a key is shared by all of them.
+    let key = cache_key(descriptor, backend)?;
     let root = cache.join("tools").join(&key);
     if root.is_dir() {
         // On the hit rather than only on the fetch, which is the whole point:
@@ -547,16 +567,9 @@ pub fn locate(
         return Ok(Located { root });
     }
 
-    let parent = cache.join("tools");
-    if backend.places_itself() {
-        std::fs::create_dir_all(&root)
-            .map_err(|e| format!("could not create {}: {e}", root.display()))?;
-        (backend.materialise)(descriptor, &root)?;
-    } else {
-        std::fs::create_dir_all(&parent)
-            .map_err(|e| format!("could not create the tool cache: {e}"))?;
-        place_via_scratch(&root, &parent, |into| (backend.materialise)(descriptor, into))?;
-    }
+    place(&root, backend.places_itself(), |into| {
+        (backend.materialise)(descriptor, into)
+    })?;
     touch(&root);
     Ok(Located { root })
 }
@@ -831,10 +844,24 @@ fn touch(root: &Path) {
 /// which is the same mechanism the scratch engine builds already use and needs
 /// no bookkeeping to stay correct.
 ///
-/// A scratch is taken on a shorter rule: it is a partial tree by definition, it
-/// is never read, and one that outlived its fetch is one whose process is gone.
-/// An hour is far longer than any fetch and short enough that a crashed run does
-/// not leave a copy of a repository lying around until the retention window.
+/// A scratch is taken on a shorter rule, and the rule is a time bound rather
+/// than a liveness test. Nothing here asks whether the fetch that owns one is
+/// still running: an hour is far longer than a fetch is expected to take and
+/// short enough that a crashed run does not leave a copy of a repository until
+/// the retention window, and that is the whole of the argument.
+///
+/// The bound is measured on the scratch directory's own timestamp, which does
+/// not move when something nested inside it is written. A backend that creates
+/// the directory and then works inside a subtree of it, as `git init` followed
+/// by a fetch does, carries the timestamp of the creation for the whole
+/// download. So a fetch slow enough to cross the hour has its tree taken from
+/// under it. It fails rather than publishing a partial tool, and it is a real
+/// cost of the bound rather than something the bound avoids.
+///
+/// **A scratch belonging to this process is never taken.** That is the one case
+/// liveness can be settled cheaply, since the pid is in the name, and it is also
+/// the case that would otherwise bite: a launcher collects on the same run that
+/// fetches, so a slow fetch could be collected by its own process.
 pub fn collect(cache: &Path, retention: std::time::Duration, now: SystemTime) -> Vec<String> {
     const SCRATCH_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
@@ -850,6 +877,11 @@ pub fn collect(cache: &Path, retention: std::time::Duration, now: SystemTime) ->
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         let scratch = name.starts_with('.');
+        // Ours, and therefore live. A launcher collects on the same run that
+        // fetches, so without this a slow fetch is collected by its own process.
+        if scratch && name.contains(&format!(".{}.", std::process::id())) {
+            continue;
+        }
         let ttl = if scratch { SCRATCH_TTL } else { retention };
 
         // A tool's age is its marker's; a scratch has none and is judged on the

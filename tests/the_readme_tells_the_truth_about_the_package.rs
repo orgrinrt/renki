@@ -248,7 +248,14 @@ fn the_variables_the_readme_names_are_the_ones_a_launcher_reads() {
 fn variables_a_tool_command_inherits(short: &str) -> Vec<String> {
     use renki::extension::{command, Descriptor, Located};
 
-    let dir = std::env::temp_dir().join(format!("renki-readme-{}", std::process::id()));
+    static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // Per call, not per process: the pattern this branch spent a blocker
+    // removing from `place_via_scratch`, and no more correct in a test.
+    let dir = std::env::temp_dir().join(format!(
+        "renki-readme-{}-{}",
+        std::process::id(),
+        NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("commands")).unwrap();
     std::fs::write(dir.join("commands/go"), "#!/bin/sh\n").unwrap();
