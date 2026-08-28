@@ -124,9 +124,45 @@ impl Descriptor {
         struct Outer {
             tool: Descriptor,
         }
-        toml::from_str::<Outer>(text)
+        let d = toml::from_str::<Outer>(text)
             .map(|o| o.tool)
-            .map_err(|e| format!("could not read the tool descriptor: {e}"))
+            .map_err(|e| format!("could not read the tool descriptor: {e}"))?;
+        d.check_source()?;
+        Ok(d)
+    }
+
+    /// Refuse a source that a fetcher would read as its own flags.
+    ///
+    /// A descriptor can arrive from a git ref, so its values are not the
+    /// workspace author's word. A `rev` of `--upload-pack=...` is a command to
+    /// git rather than a revision, and a leading dash anywhere is the shape of
+    /// that whole class. The callers also put a `--` sentinel in the argv; this
+    /// is the other half, because a sentinel does not help for a value that is
+    /// legal in the position it lands in.
+    fn check_source(&self) -> Result<(), String> {
+        let bad = |what: &str, v: &str| {
+            Err(format!(
+                "the tool `{}` has a {what} of `{v}`, which is not one",
+                self.name
+            ))
+        };
+        match &self.source {
+            Source::Git { url, rev } => {
+                if !rev.chars().all(|c| c.is_ascii_hexdigit()) || !(7 ..= 64).contains(&rev.len()) {
+                    return bad("revision", rev);
+                }
+                let ok = ["https://", "ssh://", "git://", "git@"];
+                if !ok.iter().any(|p| url.starts_with(p)) {
+                    return bad("url", url);
+                }
+            },
+            Source::Path { path } => {
+                if path.starts_with('-') || path.starts_with('/') || path.contains("..") {
+                    return bad("path", path);
+                }
+            },
+        }
+        Ok(())
     }
 
     /// Read a descriptor from a `tool.toml`.
@@ -457,8 +493,8 @@ impl Backend for Git {
         // pinned to a commit, so everything else in that repository is bytes
         // nobody here will ever read.
         run(&["init", "--quiet", &at])?;
-        run(&["-C", &at, "remote", "add", "origin", url])?;
-        run(&["-C", &at, "fetch", "--quiet", "--depth", "1", "origin", rev])?;
+        run(&["-C", &at, "remote", "add", "origin", "--", url])?;
+        run(&["-C", &at, "fetch", "--quiet", "--depth", "1", "origin", "--", rev])?;
         run(&["-C", &at, "checkout", "--quiet", "FETCH_HEAD"])?;
         Ok(())
     }

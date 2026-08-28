@@ -13,7 +13,7 @@ backend = "git"
 promote = true
 
 [tool.source]
-git = { url = "https://example.invalid/rules.git", rev = "abc123" }
+git = { url = "https://example.invalid/rules.git", rev = "abc123def456789" }
 
 [[tool.commands]]
 name    = "list"
@@ -105,7 +105,7 @@ fn a_descriptor_parses_every_field() {
         d.source,
         Source::Git {
             url: "https://example.invalid/rules.git".into(),
-            rev: "abc123".into(),
+            rev: "abc123def456789".into(),
         }
     );
 }
@@ -177,7 +177,7 @@ fn the_key_moves_with_the_revision() {
     let mut z = desc();
     z.source = Source::Git {
         url: "https://example.invalid/rules.git".into(),
-        rev: "def456".into(),
+        rev: "def456abc123789".into(),
     };
     assert_ne!(cache_key(&a, b), cache_key(&z, b));
 }
@@ -377,4 +377,63 @@ fn a_tool_with_no_commands_says_that_rather_than_listing_nothing() {
     d.commands.clear();
     let err = command(&d, &at, "anything", &root, &[]).unwrap_err();
     assert!(err.contains("no commands"), "{err}");
+}
+
+// --- refusing a source a fetcher would misread ---------------------------
+
+fn with_source(src: &str) -> Result<Descriptor, String> {
+    Descriptor::parse(&format!(
+        "[tool]\nname=\"x\"\nsummary=\"y\"\nbackend=\"git\"\n[tool.source]\n{src}\n"
+    ))
+}
+
+#[test]
+fn a_revision_that_git_would_read_as_a_flag_is_refused() {
+    // The descriptor can arrive from a git ref, so this is not the workspace
+    // author's own word. `--upload-pack` runs an arbitrary command.
+    let bad = with_source(
+        r#"git = { url = "https://e.invalid/x.git", rev = "--upload-pack=touch /tmp/pwned" }"#,
+    );
+    assert!(bad.is_err(), "accepted a flag as a revision: {bad:?}");
+}
+
+#[test]
+fn a_revision_that_is_not_a_commit_is_refused() {
+    assert!(with_source(r#"git = { url = "https://e.invalid/x.git", rev = "main" }"#).is_err());
+    assert!(with_source(r#"git = { url = "https://e.invalid/x.git", rev = "abc" }"#).is_err());
+}
+
+#[test]
+fn a_real_commit_is_accepted() {
+    // The control. Without it a check that refused everything would pass every
+    // assertion above.
+    let ok = with_source(
+        r#"git = { url = "https://e.invalid/x.git", rev = "0123456789abcdef0123456789abcdef01234567" }"#,
+    );
+    assert!(ok.is_ok(), "{ok:?}");
+}
+
+#[test]
+fn a_url_on_no_known_scheme_is_refused() {
+    assert!(
+        with_source(r#"git = { url = "--config=core.sshCommand=id", rev = "0123456abcdef" }"#)
+            .is_err()
+    );
+    assert!(with_source(r#"git = { url = "file:///etc", rev = "0123456abcdef" }"#).is_err());
+}
+
+#[test]
+fn every_accepted_scheme_is_accepted() {
+    for u in ["https://e.invalid/x.git", "ssh://e.invalid/x.git", "git@e.invalid:x.git"] {
+        let r = with_source(&format!(r#"git = {{ url = "{u}", rev = "0123456abcdef" }}"#));
+        assert!(r.is_ok(), "{u} was refused: {r:?}");
+    }
+}
+
+#[test]
+fn a_path_escaping_the_workspace_is_refused() {
+    assert!(with_source(r#"path = { path = "../../etc" }"#).is_err());
+    assert!(with_source(r#"path = { path = "/etc" }"#).is_err());
+    assert!(with_source(r#"path = { path = "-rf" }"#).is_err());
+    assert!(with_source(r#"path = { path = "tools/x" }"#).is_ok());
 }
