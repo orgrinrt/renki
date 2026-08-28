@@ -182,8 +182,11 @@ pub(crate) fn near_miss(tool: &Tool, text: &str) -> Option<String> {
     let known = [k.version, k.rev, k.tag, k.branch, k.git];
     let prefix = shared_prefix(&known);
     // Two characters, so a tool whose keys happen to start with the same letter
-    // does not read every key in the file as a near miss.
-    if prefix.len() < 2 {
+    // does not read every key in the file as a near miss. Counted as characters
+    // and not as bytes, which is what the sentence above says and what a byte
+    // length stops being the moment a key is not ASCII: one `ö` is two bytes
+    // and would pass a byte test while sharing a single character.
+    if prefix.chars().count() < 2 {
         return None;
     }
     table
@@ -194,18 +197,29 @@ pub(crate) fn near_miss(tool: &Tool, text: &str) -> Option<String> {
 
 /// The longest prefix every one of `names` begins with.
 ///
-/// Byte-wise, and the keys are ASCII by construction: `Tool::defect` refuses a
-/// pin key that is not, so there is no character boundary to land inside.
+/// Walked by character rather than by byte. Nothing makes a pin key ASCII:
+/// `PinKeys::defect` checks only that each of the five is non-empty, the fields
+/// are public so `pin_keys!` is a convenience rather than a gate, and a quoted
+/// toml key may hold anything. Two keys agreeing on a first byte and then
+/// diverging inside a multibyte character give a byte-wise common length that
+/// lands mid-character, and slicing there panics, on the friendliest error this
+/// crate produces.
 fn shared_prefix<'a>(names: &[&'a str]) -> &'a str {
     let Some(first) = names.first() else {
         return "";
     };
     let mut len = first.len();
     for n in &names[1 ..] {
-        len = len.min(n.len());
-        while !first.as_bytes()[.. len].eq(&n.as_bytes()[.. len]) {
-            len -= 1;
-        }
+        // The byte offset just past the last character the two share, which is
+        // a boundary by construction because it is one of `first`'s own.
+        let common = first
+            .char_indices()
+            .zip(n.char_indices())
+            .take_while(|((_, a), (_, b))| a == b)
+            .map(|((i, c), _)| i + c.len_utf8())
+            .last()
+            .unwrap_or(0);
+        len = len.min(common);
     }
     &first[.. len]
 }

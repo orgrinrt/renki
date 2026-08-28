@@ -259,3 +259,88 @@ fn the_shared_prefix_is_the_longest_every_name_begins_with() {
     // An empty name drives the answer to nothing whatever sits beside it.
     assert_eq!(shared_prefix(&["eng_version", ""]), "");
 }
+
+#[test]
+fn a_prefix_that_ends_inside_a_character_does_not_panic() {
+    // The class the seven cases above all missed, because every one of them was
+    // ASCII and the doc here used to say that was guaranteed. It is not:
+    // `PinKeys::defect` checks emptiness and nothing else, the fields are
+    // public, and a quoted toml key holds whatever it likes.
+    //
+    // `wö_version` and `w_version` agree on one byte and then diverge inside
+    // `ö`, so a byte-wise common length of two lands between that character's
+    // two bytes. Slicing there is a panic, on the no-pin path, which is the
+    // friendliest error this crate has.
+    assert_eq!(shared_prefix(&["wö_version", "w_version"]), "w");
+    assert_eq!(shared_prefix(&["wö_version", "wö_rev"]), "wö_");
+    // The whole name is multibyte, and one is a prefix of the other.
+    assert_eq!(shared_prefix(&["ööö", "öö"]), "öö");
+    // Two characters sharing no byte at all.
+    assert_eq!(shared_prefix(&["ä", "ö"]), "");
+    // And through the caller, which is where it would actually have fired. The
+    // keys diverge inside `ö`, so they share one character and the guard
+    // declines. What matters is that it declines rather than panicking.
+    let diverging = Tool {
+        pin_keys: crate::PinKeys {
+            version: "wö_version",
+            rev:     "w_rev",
+            tag:     "w_tag",
+            branch:  "w_branch",
+            git:     "w_git",
+        },
+        ..T
+    };
+    assert_eq!(near_miss(&diverging, "w_ref = \"1\"\n"), None);
+
+    // Multibyte keys that do agree still name a near miss, so the arm above is
+    // the guard declining rather than the whole function going quiet on
+    // anything non-ASCII.
+    let agreeing = Tool {
+        pin_keys: crate::PinKeys {
+            version: "wö_version",
+            rev:     "wö_rev",
+            tag:     "wö_tag",
+            branch:  "wö_branch",
+            git:     "wö_git",
+        },
+        ..T
+    };
+    assert_eq!(
+        near_miss(&agreeing, "\"wö_ref\" = \"1\"\n").as_deref(),
+        Some("wö_ref")
+    );
+}
+
+#[test]
+fn the_two_character_guard_counts_characters_and_not_bytes() {
+    // `ö` is two bytes and one character, so a byte-length test passes it while
+    // the keys share a single character, which is exactly what the guard exists
+    // to refuse: every key in the file then reads as a near miss.
+    let one_char = Tool {
+        pin_keys: crate::PinKeys {
+            version: "översion",
+            rev:     "örev",
+            tag:     "ötag",
+            branch:  "öbranch",
+            git:     "ögit",
+        },
+        ..T
+    };
+    assert_eq!(shared_prefix(&["översion", "örev"]), "ö");
+    assert_eq!(near_miss(&one_char, "\"öref\" = \"1\"\n"), None);
+    // The control: two characters is enough, and is the boundary.
+    let two_chars = Tool {
+        pin_keys: crate::PinKeys {
+            version: "ö_version",
+            rev:     "ö_rev",
+            tag:     "ö_tag",
+            branch:  "ö_branch",
+            git:     "ö_git",
+        },
+        ..T
+    };
+    assert_eq!(
+        near_miss(&two_chars, "\"ö_ref\" = \"1\"\n").as_deref(),
+        Some("ö_ref")
+    );
+}
