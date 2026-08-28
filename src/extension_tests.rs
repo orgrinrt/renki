@@ -1163,16 +1163,25 @@ fn nothing_but_place_decides_how_material_is_placed() {
 
     // And the one that exists is inside `place`. Without this the assertion
     // above passes just as well when the single copy is the one in `locate`.
-    let place_body = src
-        .split_once("pub fn place(")
-        .expect("`place` is gone, so this test is measuring nothing")
-        .1;
+    //
+    // Located rather than matched: an exact match on the signature's text would
+    // go red on a rustfmt bump or a renamed parameter, for a reason that is not
+    // this defect, and the natural repair then is to paste the new text in, at
+    // which point it asserts the file matches itself.
+    let opens = src
+        .find("fn place(")
+        .expect("`place` is gone, so this test is measuring nothing");
+    let closes = src[opens ..]
+        .find("\n}\n")
+        .map(|n| opens + n)
+        .expect("`place` does not close");
+    let at = src
+        .find(deciders[0])
+        .expect("the decider line is not in the file it came from");
     assert!(
-        place_body.starts_with(
-            "\n    root: &Path,\n    places_itself: bool,\n    materialise: impl FnOnce(&Path) \
-             -> Result<(), String>,\n) -> Result<(), String> {\n    if places_itself {"
-        ),
-        "the branch is not the first thing `place` does: {}",
-        &place_body[.. place_body.len().min(220)]
+        (opens .. closes).contains(&at),
+        "the placement branch sits outside `place`, at byte {at} against \
+         {opens}..{closes}: {}",
+        deciders[0].trim()
     );
 }

@@ -334,8 +334,10 @@ pub fn materialise_once<B: Backend>(plan: &B::Plan, root: &Path) -> Result<(), S
 ///
 /// Which mechanism keeps two concurrent callers from tripping over each other is
 /// [`Backend::places_itself`], because that is a fact about the backend rather
-/// than about the caller.
-pub fn place(
+/// than about the caller. So this takes the answer as a plain argument and is
+/// crate-only: public, a host could hand it one the backend contradicts, which
+/// is the sentence above stopped being true.
+pub(crate) fn place(
     root: &Path,
     places_itself: bool,
     materialise: impl FnOnce(&Path) -> Result<(), String>,
