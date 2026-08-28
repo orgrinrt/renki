@@ -19,7 +19,7 @@ const T: Tool = Tool {
 
 fn pin(r: Reference) -> Pin {
     Pin {
-        url: "u".into(),
+        url:       "u".into(),
         reference: r,
     }
 }
@@ -34,10 +34,13 @@ fn a_version_resolves_to_the_pinned_repository_and_nowhere_else() {
     let d = tempfile::tempdir().unwrap();
     let r = resolve(&T, &pin(Reference::Version("0.0.0-d05".into())), d.path()).unwrap();
     assert_eq!(r.key_rev, "v:0.0.0-d05");
-    assert_eq!(
-        r.attempts,
-        vec![vec!["--git", "u", "--tag", "0.0.0-d05", "engine"]]
-    );
+    assert_eq!(r.attempts, vec![vec![
+        "--git",
+        "u",
+        "--tag",
+        "0.0.0-d05",
+        "engine"
+    ]]);
     // and the dep a hook would build points at the tag, not the version
     assert_eq!(r.git_ref(), ("tag", "0.0.0-d05"));
 
@@ -66,13 +69,10 @@ fn a_tool_that_owns_its_crate_name_can_take_the_registry_first() {
         d.path(),
     )
     .unwrap();
-    assert_eq!(
-        r.attempts,
-        vec![
-            vec!["engine", "--version", "0.0.0-d05"],
-            vec!["--git", "u", "--tag", "0.0.0-d05", "engine"],
-        ]
-    );
+    assert_eq!(r.attempts, vec![
+        vec!["engine", "--version", "0.0.0-d05"],
+        vec!["--git", "u", "--tag", "0.0.0-d05", "engine"],
+    ]);
     // the fallback is the point of the ordering: a version the registry has
     // not got is still buildable from the tag.
     assert_eq!(r.git_ref(), ("tag", "0.0.0-d05"));
@@ -135,7 +135,7 @@ fn a_hook_that_names_no_tag_is_refused_rather_than_left_with_nothing_to_try() {
     // asserting on it was asserting on the alphabet.
     const URL: &str = "https://forge.example/aardvark-quorum.git";
     let where_it_would_look = Pin {
-        url: URL.into(),
+        url:       URL.into(),
         reference: Reference::Version("0.1.0".into()),
     };
     let d = tempfile::tempdir().unwrap();
@@ -188,10 +188,9 @@ fn a_repository_that_prefixes_its_tags_can_say_so() {
         d.path(),
     )
     .unwrap();
-    assert_eq!(
-        r.attempts,
-        vec![vec!["--git", "u", "--tag", "v0.1.0", "engine"]]
-    );
+    assert_eq!(r.attempts, vec![vec![
+        "--git", "u", "--tag", "v0.1.0", "engine"
+    ]]);
     assert_eq!(r.git_ref(), ("tag", "v0.1.0"));
 }
 
@@ -210,14 +209,12 @@ fn every_tag_a_tool_names_is_tried_in_order() {
     let d = tempfile::tempdir().unwrap();
     let r = resolve(&BOTH, &pin(Reference::Version("0.1.0".into())), d.path()).unwrap();
     assert_eq!(r.attempts.len(), 2);
-    assert_eq!(
-        r.attempts[0],
-        vec!["--git", "u", "--tag", "v0.1.0", "engine"]
-    );
-    assert_eq!(
-        r.attempts[1],
-        vec!["--git", "u", "--tag", "0.1.0", "engine"]
-    );
+    assert_eq!(r.attempts[0], vec![
+        "--git", "u", "--tag", "v0.1.0", "engine"
+    ]);
+    assert_eq!(r.attempts[1], vec![
+        "--git", "u", "--tag", "0.1.0", "engine"
+    ]);
 }
 
 #[test]
@@ -231,10 +228,13 @@ fn the_engine_crate_named_in_the_attempts_is_the_tools_own() {
         ..T
     };
     let r = resolve(&OTHER, &pin(Reference::Tag("v1".into())), d.path()).unwrap();
-    assert_eq!(
-        r.attempts,
-        vec![vec!["--git", "u", "--tag", "v1", "somethingelse"]]
-    );
+    assert_eq!(r.attempts, vec![vec![
+        "--git",
+        "u",
+        "--tag",
+        "v1",
+        "somethingelse"
+    ]]);
 }
 
 #[test]
@@ -242,10 +242,9 @@ fn a_rev_resolves_to_one_git_attempt() {
     let d = tempfile::tempdir().unwrap();
     let r = resolve(&T, &pin(Reference::Rev("sha1".into())), d.path()).unwrap();
     assert_eq!(r.key_rev, "sha1");
-    assert_eq!(
-        r.attempts,
-        vec![vec!["--git", "u", "--rev", "sha1", "engine"]]
-    );
+    assert_eq!(r.attempts, vec![vec![
+        "--git", "u", "--rev", "sha1", "engine"
+    ]]);
     assert_eq!(r.git_ref(), ("rev", "sha1"));
 }
 
@@ -254,10 +253,9 @@ fn a_tag_resolves_to_the_tag_only() {
     let d = tempfile::tempdir().unwrap();
     let r = resolve(&T, &pin(Reference::Tag("nightly".into())), d.path()).unwrap();
     assert_eq!(r.key_rev, "tag:nightly");
-    assert_eq!(
-        r.attempts,
-        vec![vec!["--git", "u", "--tag", "nightly", "engine"]]
-    );
+    assert_eq!(r.attempts, vec![vec![
+        "--git", "u", "--tag", "nightly", "engine"
+    ]]);
     assert_eq!(r.git_ref(), ("tag", "nightly"));
 }
 
@@ -279,10 +277,13 @@ fn a_branch_resolves_to_its_rev_and_the_git_ref_carries_the_rev_not_the_name() {
         "the cached resolution was ignored"
     );
     assert_eq!(r.git_ref(), ("rev", "feedface99c0ffee"));
-    assert_eq!(
-        r.attempts,
-        vec![vec!["--git", "u", "--rev", "feedface99c0ffee", "engine"]]
-    );
+    assert_eq!(r.attempts, vec![vec![
+        "--git",
+        "u",
+        "--rev",
+        "feedface99c0ffee",
+        "engine"
+    ]]);
     // and the branch name is nowhere in what a hook would build from
     assert!(!r.git_ref().1.contains("dev"));
 }
@@ -354,12 +355,7 @@ fn a_malformed_or_empty_resolution_is_not_reused() {
     // branch instead of the pin.
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("m");
-    for bad in [
-        "",
-        "notanumber\nabc\n",
-        &format!("{}\n\n", unix_now()),
-        "123\n",
-    ] {
+    for bad in ["", "notanumber\nabc\n", &format!("{}\n\n", unix_now()), "123\n"] {
         std::fs::write(&path, bad).unwrap();
         assert_eq!(fresh_resolution(&path), None, "{bad:?}");
     }

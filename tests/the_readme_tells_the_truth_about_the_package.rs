@@ -32,7 +32,7 @@ fn versions_the_readme_names(readme: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut rest = readme;
     while let Some(at) = rest.find("renki = \"") {
-        let tail = &rest[at + "renki = \"".len()..];
+        let tail = &rest[at + "renki = \"".len() ..];
         let (v, after) = tail.split_once('"').expect("an unclosed version");
         out.push(v);
         rest = after;
@@ -175,8 +175,9 @@ fn the_checks_above_can_fail() {
 // many more claims and had nothing reading any of them. Each names something a
 // reader would act on, so each is worth the readme going red over.
 
-use renki::Tool;
 use std::time::Duration;
+
+use renki::Tool;
 
 /// A descriptor whose only interesting field is the short name every derived
 /// environment variable comes from.
@@ -229,11 +230,7 @@ fn the_variables_the_readme_names_are_the_ones_a_launcher_reads() {
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let readme = std::fs::read_to_string(root.join("README.md")).expect("no readme");
-    let mut want = vec![
-        WIDGET.root_env(),
-        WIDGET.cache_env(),
-        WIDGET.no_self_update_env(),
-    ];
+    let mut want = vec![WIDGET.root_env(), WIDGET.cache_env(), WIDGET.no_self_update_env()];
     want.extend(spawned);
     assert_eq!(
         widget_variables_the_readme_names(&readme),
@@ -246,7 +243,7 @@ fn the_variables_the_readme_names_are_the_ones_a_launcher_reads() {
 /// The variables `extension::command` puts in a child's environment, read off
 /// the `Command` it builds rather than written down a second time.
 fn variables_a_tool_command_inherits(short: &str) -> Vec<String> {
-    use renki::extension::{command, Descriptor, Located};
+    use renki::extension::{Descriptor, Located, command};
 
     static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     // Per call, not per process: the pattern this branch spent a blocker
@@ -267,7 +264,9 @@ fn variables_a_tool_command_inherits(short: &str) -> Vec<String> {
     )
     .expect("the fixture descriptor should parse");
 
-    let at = Located { root: dir.clone() };
+    let at = Located {
+        root: dir.clone(),
+    };
     let cmd = command(&d, &at, "go", short, &dir, &[]).expect("the fixture command should build");
     let mut names: Vec<String> = cmd
         .get_envs()
@@ -409,7 +408,8 @@ fn every_name_here_is_a_name_this_crate_has() {
     let _: fn() -> bool = <renki::extension::Local as renki::extension::Backend>::places_itself;
     let _: fn(&renki::extension::Descriptor) -> Result<(), String> =
         renki::extension::Descriptor::check;
-    let _: renki::extension::Registered = renki::extension::Registered::of::<renki::extension::Local>();
+    let _: renki::extension::Registered =
+        renki::extension::Registered::of::<renki::extension::Local>();
     let _: fn(&renki::extension::Located) -> &std::path::PathBuf = |l| &l.root;
     let _ = renki::extension::locate;
     let _ = renki::extension::command;

@@ -166,7 +166,7 @@ fn an_argument_that_is_not_utf8_survives_the_walk_intact() {
     // and the engine is the thing meant to open it.
     use std::os::unix::ffi::OsStringExt;
 
-    let odd = std::ffi::OsString::from_vec(vec![0xe9, 0x6f, 0x6b]);
+    let odd = std::ffi::OsString::from_vec(vec![0xE9, 0x6F, 0x6B]);
     let raw = vec![
         std::ffi::OsString::from("/usr/bin/widget"),
         std::ffi::OsString::from("lock"),
@@ -180,7 +180,7 @@ fn an_argument_that_is_not_utf8_survives_the_walk_intact() {
     // are not valid UTF-8, so anything that went through a `String` on the way
     // has replaced them with U+FFFD and the comparison sees it.
     assert!(odd.to_str().is_none(), "the fixture is valid UTF-8");
-    assert_eq!(out[1].as_encoded_bytes(), &[0xe9, 0x6f, 0x6b]);
+    assert_eq!(out[1].as_encoded_bytes(), &[0xE9, 0x6F, 0x6B]);
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn a_flag_value_that_is_not_utf8_is_taken_and_kept_whole() {
     // of the bytes alone.
     use std::os::unix::ffi::OsStringExt;
 
-    let odd = std::ffi::OsString::from_vec(vec![0xff, 0xfe, 0x2f, 0x78]);
+    let odd = std::ffi::OsString::from_vec(vec![0xFF, 0xFE, 0x2F, 0x78]);
     let raw = vec![
         std::ffi::OsString::from("/usr/bin/widget"),
         std::ffi::OsString::from(T.dir_flag),

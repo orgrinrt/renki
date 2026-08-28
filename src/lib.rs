@@ -21,16 +21,16 @@
 //! Declare a [`Tool`] as a `const`, and hand it over:
 //!
 //! ```no_run
-//! use renki::{pin_keys, Tool};
+//! use renki::{Tool, pin_keys};
 //!
 //! const TOOL: Tool = Tool {
-//!     short:           "widget",
-//!     config_file:     "widget.toml",
-//!     pin_keys:        pin_keys!("widget"),
-//!     engine_crate:    "widget-engine",
+//!     short: "widget",
+//!     config_file: "widget.toml",
+//!     pin_keys: pin_keys!("widget"),
+//!     engine_crate: "widget-engine",
 //!     cache_namespace: "widget",
-//!     default_url:     "https://github.com/o/widget.git",
-//!     launcher_crate:  "widget",
+//!     default_url: "https://github.com/o/widget.git",
+//!     launcher_crate: "widget",
 //!     ..Tool::CONVENTIONS
 //! };
 //!
@@ -104,8 +104,8 @@ mod args;
 mod cache;
 mod discover;
 mod engine;
-pub mod extension;
 mod env;
+pub mod extension;
 mod hash;
 mod manifest;
 mod pin;
@@ -120,12 +120,20 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::args::{is_the_locate_query, normalize_args};
-
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
 pub use crate::manifest::{Header, Pin, Reference, package_name};
 pub use crate::pin::Resolved;
 pub use crate::tool::{
-    Anchor, Check, Cli, Hooks, Locate, PinKeys, SelfUpdate, Tool, VersionSource, Workdir,
+    Anchor,
+    Check,
+    Cli,
+    Hooks,
+    Locate,
+    PinKeys,
+    SelfUpdate,
+    Tool,
+    VersionSource,
+    Workdir,
 };
 
 /// Where a resolved pin came from, so the registry can tell a repo that has
@@ -201,7 +209,7 @@ pub fn run_without_sanitizing(tool: &Tool) -> ExitCode {
         Err(e) => {
             eprintln!("{}: {e}", tool.short);
             ExitCode::FAILURE
-        }
+        },
     }
 }
 
@@ -472,7 +480,7 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
     // repeatedly, which is not something to keep trying forever either, since
     // a build that keeps vanishing is a fault rather than a race.
     let mut bin = bin;
-    for _ in 0..EVICTION_RETRIES {
+    for _ in 0 .. EVICTION_RETRIES {
         if bin.is_file() {
             break;
         }

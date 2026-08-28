@@ -83,7 +83,7 @@ fn collect_into(dir: &Path, out: &mut Vec<PathBuf>) {
 /// One offending literal: the line it sits on and the text around the run.
 #[derive(Debug, PartialEq, Eq)]
 struct Run {
-    line: usize,
+    line:    usize,
     excerpt: String,
 }
 
@@ -137,12 +137,12 @@ fn mid_sentence_runs(src: &str) -> Vec<Run> {
                 .collect();
             let start = i;
             while i < b.len() {
-                if b[i] == '"' && b[i..].iter().take(close.len()).copied().eq(close.chars()) {
+                if b[i] == '"' && b[i ..].iter().take(close.len()).copied().eq(close.chars()) {
                     break;
                 }
                 i += 1;
             }
-            let body: String = b[start..i.min(b.len())].iter().collect();
+            let body: String = b[start .. i.min(b.len())].iter().collect();
             found.extend(runs_in_body(&body, line));
             line += body.matches('\n').count();
             i = (i + close.len()).min(b.len());
@@ -174,7 +174,7 @@ fn mid_sentence_runs(src: &str) -> Vec<Run> {
                                 i += 1;
                             }
                             continue;
-                        }
+                        },
                         Some('n') => body.push('\n'),
                         _ => body.push('\u{0}'),
                     }
@@ -231,7 +231,7 @@ fn runs_in_body(body: &str, line: usize) -> Vec<Run> {
                     let from = at.saturating_sub(40);
                     out.push(Run {
                         line,
-                        excerpt: segment[from..(at + 20).min(segment.len())].to_string(),
+                        excerpt: segment[from .. (at + 20).min(segment.len())].to_string(),
                     });
                     break;
                 }

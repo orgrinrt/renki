@@ -235,7 +235,7 @@ pub(crate) fn exec_engine(
 ) -> Result<std::convert::Infallible, String> {
     use std::os::unix::process::CommandExt;
     let argv = engine_command_line(tool, workdir, extra, args);
-    let err = Command::new(bin).arg0(&argv[0]).args(&argv[1..]).exec();
+    let err = Command::new(bin).arg0(&argv[0]).args(&argv[1 ..]).exec();
     Err(format!("failed to exec {}: {err}", bin.display()))
 }
 
