@@ -32,19 +32,21 @@ static SEEN: Mutex<Option<Seen>> = Mutex::new(None);
 
 fn record(inv: &Invocation<'_>) -> Result<(), String> {
     *SEEN.lock().unwrap() = Some(Seen {
-        cwd:      inv.cwd.to_path_buf(),
-        root:     inv.root.map(Path::to_path_buf),
+        cwd:      inv.cwd().to_path_buf(),
+        root:     inv.root().map(Path::to_path_buf),
         settings: inv
-            .settings
+            .settings()
             .iter()
             .map(|s| (s.key(), s.text().to_string(), s.source()))
             .collect(),
-        args:     inv.args.to_vec(),
+        args:     inv.args().to_vec(),
     });
+    // the tool handed in is the one the command was declared on
+    assert_eq!(inv.tool().short, WITH_COMMANDS.short);
     // and the accessor agrees with the table it reads
     assert_eq!(
         inv.setting("strict"),
-        inv.settings
+        inv.settings()
             .iter()
             .find(|s| s.key() == "strict")
             .map(|s| s.text())
@@ -54,7 +56,7 @@ fn record(inv: &Invocation<'_>) -> Result<(), String> {
 }
 
 fn refuse(inv: &Invocation<'_>) -> Result<(), String> {
-    Err(format!("refused with {} arguments", inv.args.len()))
+    Err(format!("refused with {} arguments", inv.args().len()))
 }
 
 const WITH_COMMANDS: Tool = Tool {
@@ -155,6 +157,15 @@ fn a_command_is_tried_after_the_crates_own_queries() {
     assert!(
         SEEN.lock().unwrap().is_none(),
         "the command ran for the crate's own query"
+    );
+    // `locate` answers from inside this checkout, which is where the test
+    // runs, and it answers on stdout, so what is checked is that it did not
+    // refuse and that no command ran
+    outcome(&WITH_COMMANDS, &s(&["widget", "locate"]))
+        .expect("locate refused with a command table present");
+    assert!(
+        SEEN.lock().unwrap().is_none(),
+        "the command ran for the crate's locate query"
     );
 }
 

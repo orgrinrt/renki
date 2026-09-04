@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::command::Command;
 use crate::pin::{Pin, Resolved};
 
 /// How the repo root is found, walking up from the working directory.
@@ -152,67 +153,6 @@ pub struct Tool {
     pub hooks:           Hooks,
 }
 
-/// A subcommand the launcher answers without the engine, declared by the
-/// tool.
-///
-/// `locate` and `config` are the crate's, fixed in name and in output. This
-/// is the tool's: a name, a sentence and a function, tried right where
-/// `config` is, after the launcher's own flags are off the arguments and
-/// before it goes looking for a root. The case it exists for is a command
-/// that makes a repository where there is none yet, which is exactly where
-/// the engine cannot run.
-///
-/// A command is not a hook. It runs only when named, sees no pin, and cannot
-/// reach the engine, since the engine may not be buildable where it runs. A
-/// subcommand that needs the engine belongs in the engine.
-#[derive(Debug, Clone, Copy)]
-pub struct Command {
-    /// The subcommand, as typed after the launcher's name.
-    pub name: &'static str,
-    /// One sentence, for whoever prints a listing.
-    pub doc:  &'static str,
-    /// What answers it. A refusal is printed under the tool's name and exits
-    /// nonzero, the way `config`'s is.
-    pub run:  fn(&Invocation<'_>) -> Result<(), String>,
-}
-
-/// What a [`Command`] is handed: everything the launcher knows at the point
-/// it stops looking for a root.
-pub struct Invocation<'a> {
-    /// The descriptor the command was declared on.
-    pub tool:     &'a Tool,
-    /// Where the launcher was run from.
-    pub cwd:      &'a Path,
-    /// The repository root, where the walk up from `cwd` found one. `None` is
-    /// a real answer here rather than a refusal: a command may be the thing
-    /// that makes the repository.
-    pub root:     Option<&'a Path>,
-    /// Every setting the tool declares, resolved from the flag, the variable,
-    /// the repository's file where one was found, the person's file and the
-    /// default, in that order. The text is the kind's canonical form, the
-    /// same bytes the engine reads out of its environment.
-    pub settings: &'a [crate::config::ResolvedSetting],
-    /// What followed the command's name on the command line.
-    pub args:     &'a [std::ffi::OsString],
-}
-
-impl Invocation<'_> {
-    /// The resolved text of one setting, by its dotted key.
-    ///
-    /// `None` only for a key the tool never declared, since every declared
-    /// key resolves to something, the default at least. A command asking for
-    /// its own tool's key gets `Some` every time, so the `None` arm is the
-    /// typo's, and a command that would rather not write that arm reads
-    /// through [`Invocation::setting`] once and keeps the text.
-    #[must_use]
-    pub fn setting(&self, key: &str) -> Option<&str> {
-        self.settings
-            .iter()
-            .find(|s| s.key() == key)
-            .map(|s| s.text())
-    }
-}
-
 /// Where a `version` pin is allowed to resolve the engine from.
 ///
 /// A version is the one pin form with two possible sources. A rev, a tag and a
@@ -253,6 +193,10 @@ pub enum VersionSource {
 pub struct Cli;
 
 impl Cli {
+    /// The settings flag, `--cfg key=value`, which is not a tool's to rename:
+    /// it is the launcher's on every tool with settings and the engine's on
+    /// every tool without.
+    pub const CFG_FLAG: &'static str = "--cfg";
     /// The conventional [`Tool::dir_flag`].
     pub const DIR_FLAG: &'static str = "--dir";
     /// The conventional [`Tool::engine_flag`].
@@ -651,6 +595,29 @@ impl Tool {
                 return Some(
                     "a command is named `config`, which a tool with settings answers first, \
                      so the command never runs",
+                );
+            }
+            // The flags come off the arguments before the table is looked
+            // at, wherever they sit, so a command named after one is taken
+            // as the flag: the directory flag vanishes with no message, the
+            // engine flag is refused as a flag with nothing after it, and
+            // `--cfg` swallows what follows as a value.
+            if const_str_eq(name, self.dir_flag) {
+                return Some(
+                    "a command is named the same as dir_flag, which is stripped before the \
+                     table is read, so the command vanishes",
+                );
+            }
+            if const_str_eq(name, self.engine_flag) {
+                return Some(
+                    "a command is named the same as engine_flag, which is taken off before the \
+                     table is read, so the command is refused as a flag with no path after it",
+                );
+            }
+            if !self.settings.is_empty() && const_str_eq(name, Cli::CFG_FLAG) {
+                return Some(
+                    "a command is named `--cfg`, which a tool with settings takes off before \
+                     the table is read, so the command is swallowed as a flag",
                 );
             }
             let mut j = 0;

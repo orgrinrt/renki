@@ -127,9 +127,12 @@ impl Cli {
                     users_from_here = true;
                     rest.push(arg);
                 },
-                Some("--cfg") => want_value = true,
-                Some(t) if t.starts_with("--cfg=") => {
-                    flags.push(split_flag(&t["--cfg=".len() ..])?)
+                Some(t) if t == crate::tool::Cli::CFG_FLAG => want_value = true,
+                Some(t)
+                    if t.starts_with(crate::tool::Cli::CFG_FLAG)
+                        && t.as_bytes().get(crate::tool::Cli::CFG_FLAG.len()) == Some(&b'=') =>
+                {
+                    flags.push(split_flag(&t[crate::tool::Cli::CFG_FLAG.len() + 1 ..])?)
                 },
                 _ => rest.push(arg),
             }

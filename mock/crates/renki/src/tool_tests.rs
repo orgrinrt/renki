@@ -4,6 +4,7 @@
 //--------------------------------------------------------------------------------------------------
 
 use super::*;
+use crate::command::Invocation;
 
 /// Every field written out, deliberately.
 ///
@@ -216,6 +217,113 @@ fn a_command_table_is_refused_for_the_three_things_that_make_one_unreachable() {
             .expect("a broken command table was not refused");
         assert!(why.contains(expect), "wrong refusal for {expect:?}: {why}");
     }
+    // The design says these settle at build time, so each is also asserted
+    // as a const, which is what a consumer's `const _: () = assert!(...)`
+    // line does and what a refusal branch that stopped being const would
+    // break.
+    const _: () = assert!(CASES[0].0.defect().is_some());
+    const _: () = assert!(CASES[1].0.defect().is_some());
+    const _: () = assert!(CASES[2].0.defect().is_some());
+    const _: () = assert!(CASES[3].0.defect().is_some());
+}
+
+#[test]
+fn a_command_named_after_a_launcher_flag_is_refused_since_the_flag_comes_off_first() {
+    // The flags are taken off the arguments wherever they sit, before the
+    // table is looked at, so a command named after one never reaches the
+    // table: the directory flag vanishes, the engine flag is refused as a
+    // flag with no path, and `--cfg` swallows the next argument.
+    const SETTINGS: &[renki_config::Declared<crate::config::Toml>] =
+        &[renki_config::Setting::<renki_config::Bool, renki_config::User>::new(
+            "strict", "false", "A flag.",
+        )
+        .row()];
+    const CASES: [(Tool, &str); 4] = [
+        (
+            Tool {
+                commands: &[Command {
+                    name: Cli::DIR_FLAG,
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "dir_flag",
+        ),
+        (
+            Tool {
+                commands: &[Command {
+                    name: Cli::ENGINE_FLAG,
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "engine_flag",
+        ),
+        // renamed flags are compared by the descriptor's own value, not by
+        // the conventional spelling
+        (
+            Tool {
+                dir_flag: "--where",
+                commands: &[Command {
+                    name: "--where",
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "dir_flag",
+        ),
+        (
+            Tool {
+                settings: SETTINGS,
+                commands: &[Command {
+                    name: Cli::CFG_FLAG,
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "named `--cfg`",
+        ),
+    ];
+    for (bad, expect) in &CASES {
+        let why = bad
+            .defect()
+            .expect("a command named after a flag was not refused");
+        assert!(why.contains(expect), "wrong refusal for {expect:?}: {why}");
+    }
+    const _: () = assert!(CASES[0].0.defect().is_some());
+    const _: () = assert!(CASES[1].0.defect().is_some());
+    const _: () = assert!(CASES[2].0.defect().is_some());
+    const _: () = assert!(CASES[3].0.defect().is_some());
+
+    // The controls: `--cfg` is a command's where the tool has no settings,
+    // since the flag then goes through to the engine untouched; and the
+    // conventional `--dir` is not refused on a tool that renamed its
+    // directory flag, since nothing strips it there.
+    const CFG_WITHOUT_SETTINGS: Tool = Tool {
+        commands: &[Command {
+            name: Cli::CFG_FLAG,
+            doc:  "d",
+            run:  nothing,
+        }],
+        ..WITH
+    };
+    const _: () = assert!(CFG_WITHOUT_SETTINGS.defect().is_none());
+    const RENAMED: Tool = Tool {
+        dir_flag: "--where",
+        commands: &[Command {
+            name: Cli::DIR_FLAG,
+            doc:  "d",
+            run:  nothing,
+        }],
+        ..WITH
+    };
+    const _: () = assert!(RENAMED.defect().is_none());
+    assert!(CFG_WITHOUT_SETTINGS.defect().is_none());
+    assert!(RENAMED.defect().is_none());
 }
 
 #[test]

@@ -102,6 +102,7 @@ compile_error!(
 
 mod args;
 mod cache;
+mod command;
 pub mod config;
 mod discover;
 mod engine;
@@ -122,6 +123,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::args::{is_the_locate_query, normalize_args};
+pub use crate::command::{Command, Invocation};
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
 pub use crate::manifest::{Header, Pin, Reference, package_name};
 pub use crate::pin::Resolved;
@@ -129,9 +131,7 @@ pub use crate::tool::{
     Anchor,
     Check,
     Cli,
-    Command,
     Hooks,
-    Invocation,
     Locate,
     PinKeys,
     SelfUpdate,
@@ -575,13 +575,7 @@ fn run_command(
     let repo_file = root.map(|r| r.join(tool.config_file));
     let texts = config::read_texts(&user_file, repo_file.as_deref())?;
     let settings = config::resolve_all(tool, cli, &texts)?;
-    (command.run)(&Invocation {
-        tool,
-        cwd: &cwd,
-        root,
-        settings: &settings,
-        args,
-    })
+    (command.run)(&Invocation::new(tool, &cwd, root, &settings, args))
 }
 
 /// The pin: the config's own key, then whatever legacy fallback the tool
