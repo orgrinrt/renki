@@ -59,12 +59,21 @@ fn a_non_unix_build_explains_itself() {
         !out.status.success(),
         "a non-unix target must not build, and it did:\n{stderr}"
     );
+    // `renki-dirs` refuses first, since a dependency is built before its
+    // consumer and the build stops there, so what a porter reads today is its
+    // message. The launcher's own guard stands behind it for the day the
+    // table gains a column and the exec is what is left; each crate's suite
+    // pins its own sentence, and this one pins that the reader gets one of
+    // them rather than a missing import.
+    let dirs_refused = stderr.contains("A port adds a `Platform` for it");
+    let launcher_refused = stderr.contains("which is a unix operation")
+        && stderr.contains("a port needs a different handover");
     assert!(
-        stderr.contains("which is a unix operation"),
+        dirs_refused || launcher_refused,
         "the build failed without saying why it cannot work here:\n{stderr}"
     );
     assert!(
-        stderr.contains("a port needs a different handover"),
-        "the message stopped short of the part a porter needs:\n{stderr}"
+        !stderr.contains("could not find `unix` in `os`"),
+        "the missing import reached the reader ahead of the explanation:\n{stderr}"
     );
 }

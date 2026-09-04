@@ -1,9 +1,15 @@
+# Two crates, one repository. `renki-dirs` is the table of where a tool's files
+# go, which every tool here wants whether or not renki launches it, so it is
+# its own crate and this one depends on it like anybody else does.
+[workspace]
+members = [".", "renki-dirs"]
+
 [package]
 name = "renki"
 version = "0.0.2"
 edition = "2024"
 publish = true
-description = "A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, two dependencies."
+description = "A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, four dependencies, two of them ours."
 license = "MPL-2.0"
 homepage = "https://github.com/orgrinrt/renki"
 repository = "https://github.com/orgrinrt/renki"
@@ -46,6 +52,12 @@ keywords = ["launcher", "pinning", "reproducible", "bootstrap", "cli"]
 [dependencies]
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
+# Where the cache and the state go, per platform. Ours, from this repository,
+# and pulled from the registry like anything else so an install of a published
+# renki never reaches for a path. It answers in notko's fallibility types, so
+# notko comes with it, with the default features off for the stable floor.
+renki-dirs = { version = "0.0.0", path = "renki-dirs" }
+notko = { version = "0.0.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

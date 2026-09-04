@@ -43,7 +43,7 @@ struct InstalledSource {
 
 /// Check for and apply a launcher update. May reinstall and re-exec, in which
 /// case it never returns; otherwise returns having done nothing user-visible.
-pub(crate) fn maybe_self_update(tool: &Tool, cache_root: &Path) {
+pub(crate) fn maybe_self_update(tool: &Tool, state_root: &Path) {
     // The tool's own call comes first. A user turning it off for themselves is
     // the second door and the narrower one: it cannot be the only door, or the
     // default for a tool whose author wants none of this is the behaviour they
@@ -59,7 +59,10 @@ pub(crate) fn maybe_self_update(tool: &Tool, cache_root: &Path) {
         return;
     };
     let now = crate::now_secs();
-    let marker = cache_root.join("launcher-selfupdate");
+    // Under the state root rather than the cache: a cleanup that emptied the
+    // cache would otherwise also reset the throttle, and the next run of every
+    // launcher on the machine would go to the network at once.
+    let marker = state_root.join("launcher-selfupdate");
     if recently_checked(&marker, now) {
         return;
     }

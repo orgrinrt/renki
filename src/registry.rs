@@ -162,9 +162,17 @@ pub(crate) struct Build {
     pub last_used:  u64,
 }
 
-/// The registry file path under the cache root.
-pub(crate) fn registry_path(cache_root: &Path) -> PathBuf {
-    cache_root.join("registry.toml")
+/// The registry file path under the state root.
+///
+/// State rather than cache, because the registry is the one file here that
+/// records something about the machine rather than about a build: which
+/// repositories run the tool and what each pinned. A cleanup that empties the
+/// cache costs a rebuild; one that took this would leave the collector with no
+/// rows to walk, so every build already on disk would sit there uncollected
+/// for good, since [`Registry::gc`] evicts by row and never by listing the
+/// directory.
+pub(crate) fn registry_path(state_root: &Path) -> PathBuf {
+    state_root.join("registry.toml")
 }
 
 impl Registry {
@@ -389,6 +397,7 @@ pub(crate) fn pin_form_and_value(pin: &Pin, source: PinSource) -> (PinForm, Stri
 pub(crate) fn record_and_collect(
     tool: &Tool,
     cache_root: &Path,
+    state_root: &Path,
     root: &Path,
     workdir: &Path,
     pin: &Pin,
@@ -397,7 +406,7 @@ pub(crate) fn record_and_collect(
     toolchain: &str,
     key: &str,
 ) {
-    let path = registry_path(cache_root);
+    let path = registry_path(state_root);
     let mut reg = Registry::load(&path);
     let now = crate::now_secs();
     let name = root

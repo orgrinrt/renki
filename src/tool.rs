@@ -744,18 +744,24 @@ impl Tool {
     /// do nothing.
     #[must_use]
     pub const fn short_is_usable(&self) -> bool {
-        let b = self.short.as_bytes();
-        if b.is_empty() || b[0].is_ascii_digit() {
-            return false;
+        renki_dirs::Short::new(self.short).is_ok()
+    }
+
+    /// The short name as `renki-dirs` types it. A tool that fails
+    /// [`short_is_usable`](Self::short_is_usable) is refused by [`run`](crate::run)
+    /// before anything here is reached, so the refusal below names that check
+    /// rather than repeating it.
+    pub(crate) fn short_typed(&self) -> renki_dirs::Short<'_> {
+        match renki_dirs::Short::new(self.short) {
+            notko::Outcome::Ok(s) => s,
+            notko::Outcome::Err(e) => {
+                panic!(
+                    "the tool's short name {:?} is not a variable name ({e:?}); \
+                 `Tool::short_is_usable` is the check `run` refuses on",
+                    self.short
+                )
+            },
         }
-        let mut i = 0;
-        while i < b.len() {
-            if !(b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-                return false;
-            }
-            i += 1;
-        }
-        true
     }
 
     /// The environment variable naming the repo root, overriding the `.git`
@@ -766,9 +772,18 @@ impl Tool {
 
     /// The environment variable naming this launcher's cache directory,
     /// overriding `$XDG_CACHE_HOME` and the namespace both: the short name
-    /// uppercased, plus `_CACHE`.
+    /// uppercased, plus `_CACHE`. Named by `renki-dirs`, so the launcher and
+    /// a tool that reads the table without the launcher agree.
     pub fn cache_env(&self) -> String {
-        format!("{}_CACHE", self.short.to_uppercase())
+        renki_dirs::EnvName::<renki_dirs::Cache>::of(self.short_typed()).to_string()
+    }
+
+    /// The environment variable naming this launcher's state directory, where
+    /// the registry and the self-update marker live: the short name
+    /// uppercased, plus `_STATE`. Overrides `$XDG_STATE_HOME` and the
+    /// namespace both, the way `cache_env` does for the cache.
+    pub fn state_env(&self) -> String {
+        renki_dirs::EnvName::<renki_dirs::State>::of(self.short_typed()).to_string()
     }
 
     /// The environment variable that opts out of launcher self-update.

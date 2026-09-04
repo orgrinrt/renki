@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:21:17
+   |
+21 |     wants_cache(Root::<State, Xdg>::resolve(ns, s).unwrap());
+   |     ----------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Root<'_, Cache, Xdg>`, found `Root<'_, State, Xdg>`
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected struct `Root<'_, Cache, renki_dirs::Xdg>`
+              found struct `Root<'_, State, renki_dirs::Xdg>`
+note: function defined here
+  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:11:4
+   |
+11 | fn wants_cache(_: Root<'_, Cache, Xdg>) {}
+   |    ^^^^^^^^^^^ -----------------------
+
+error[E0308]: mismatched types
+  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:22:15
+   |
+22 |     wants_xdg(Root::<Cache, MacOs>::resolve(ns, s).unwrap());
+   |     --------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Root<'_, Cache, Xdg>`, found `Root<'_, Cache, MacOs>`
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected struct `Root<'_, Cache, renki_dirs::Xdg>`
+              found struct `Root<'_, Cache, MacOs>`
+note: function defined here
+  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:12:4
+   |
+12 | fn wants_xdg(_: Root<'_, Cache, Xdg>) {}
+   |    ^^^^^^^^^ -----------------------

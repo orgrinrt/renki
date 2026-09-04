@@ -385,10 +385,13 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
     // Skipped under `--engine`, which says which engine to run: replacing the
     // launcher underneath a deliberate override is the one moment an automatic
     // update is unwelcome.
+    // Ahead of the self-update, because the marker that throttles it may still
+    // be where an earlier launcher left it.
+    cache::adopt_old_layout(tool);
     if engine_override.is_none()
-        && let Ok(cache_root) = cache::cache_root(tool)
+        && let Ok(state_root) = cache::state_root(tool)
     {
-        selfupdate::maybe_self_update(tool, &cache_root);
+        selfupdate::maybe_self_update(tool, &state_root);
     }
 
     // `locate` hard-errors, blocking the run, when a marker-anchored repo has
@@ -426,6 +429,7 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
     }
 
     let cache_root = cache::cache_root(tool)?;
+    let state_root = cache::state_root(tool)?;
 
     // The scratch path: build the engine from a checkout on disk and run this
     // repo against it. No pin is resolved, nothing is recorded in the registry
@@ -459,6 +463,7 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
     registry::record_and_collect(
         tool,
         &cache_root,
+        &state_root,
         &root,
         &workdir,
         &pin,
