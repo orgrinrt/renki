@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::command::Command;
 use crate::pin::{Pin, Resolved};
 
 /// How the repo root is found, walking up from the working directory.
@@ -143,6 +144,11 @@ pub struct Tool {
     /// Empty for a tool with nothing to configure, which also leaves the
     /// `config` subcommand to the engine.
     pub settings:        &'static [renki_config::Declared<crate::config::Toml>],
+    /// The subcommands this launcher answers itself, beside `locate` and
+    /// `config`, for the questions the engine cannot be asked. Tried where
+    /// `config` is, before a root is required, so one runs where there is no
+    /// repository at all. Empty for a tool with none. See [`Command`].
+    pub commands:        &'static [Command],
     /// The tool-specific parts, all optional.
     pub hooks:           Hooks,
 }
@@ -187,6 +193,10 @@ pub enum VersionSource {
 pub struct Cli;
 
 impl Cli {
+    /// The settings flag, `--cfg key=value`, which is not a tool's to rename:
+    /// it is the launcher's on every tool with settings and the engine's on
+    /// every tool without.
+    pub const CFG_FLAG: &'static str = "--cfg";
     /// The conventional [`Tool::dir_flag`].
     pub const DIR_FLAG: &'static str = "--dir";
     /// The conventional [`Tool::engine_flag`].
@@ -543,8 +553,87 @@ impl Tool {
         locate:          Some(Locate::DEFAULT),
         self_update:     SelfUpdate::ChaseTheBranch,
         settings:        &[],
+        commands:        &[],
         hooks:           Hooks::NONE,
     };
+
+    /// The command `args` names, where the first argument is one of the
+    /// tool's own.
+    #[must_use]
+    pub fn command_named(&self, args: &[std::ffi::OsString]) -> Option<&'static Command> {
+        let first = args.first()?.to_str()?;
+        self.commands.iter().find(|c| c.name == first)
+    }
+
+    /// The first thing wrong with the command table, or `None`.
+    ///
+    /// An empty name is matched by every bare argument, so the launcher
+    /// answers the command instead of passing the argument to the engine. A
+    /// name the crate's own queries take is unreachable, since those are
+    /// tried first: `locate`'s subcommand, and `config` where the tool has
+    /// settings. Two commands of one name is the same defect between
+    /// themselves, decided by table order rather than by anything declared.
+    const fn commands_defect(&self) -> Option<&'static str> {
+        let mut i = 0;
+        while i < self.commands.len() {
+            let name = self.commands[i].name;
+            if name.is_empty() {
+                return Some(
+                    "a command's name is empty, so the launcher answers an empty argument \
+                     and the engine never sees it",
+                );
+            }
+            if let Some(l) = self.locate
+                && const_str_eq(name, l.subcommand)
+            {
+                return Some(
+                    "a command is named the same as locate's subcommand, which is tried first, \
+                     so the command never runs",
+                );
+            }
+            if !self.settings.is_empty() && const_str_eq(name, crate::config::query::SUBCOMMAND) {
+                return Some(
+                    "a command is named `config`, which a tool with settings answers first, \
+                     so the command never runs",
+                );
+            }
+            // The flags come off the arguments before the table is looked
+            // at, wherever they sit, so a command named after one is taken
+            // as the flag: the directory flag vanishes with no message, the
+            // engine flag is refused as a flag with nothing after it, and
+            // `--cfg` swallows what follows as a value.
+            if const_str_eq(name, self.dir_flag) {
+                return Some(
+                    "a command is named the same as dir_flag, which is stripped before the \
+                     table is read, so the command vanishes",
+                );
+            }
+            if const_str_eq(name, self.engine_flag) {
+                return Some(
+                    "a command is named the same as engine_flag, which is taken off before the \
+                     table is read, so the command is refused as a flag with no path after it",
+                );
+            }
+            if !self.settings.is_empty() && const_str_eq(name, Cli::CFG_FLAG) {
+                return Some(
+                    "a command is named `--cfg`, which a tool with settings takes off before \
+                     the table is read, so the command is swallowed as a flag",
+                );
+            }
+            let mut j = 0;
+            while j < i {
+                if const_str_eq(name, self.commands[j].name) {
+                    return Some(
+                        "two commands share a name, so the second is unreachable and which \
+                         one runs is decided by table order",
+                    );
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+        None
+    }
 
     /// The file name of the binary the engine's build produces.
     #[must_use]
@@ -670,6 +759,9 @@ impl Tool {
             return Some(bad);
         }
         if let Some(bad) = self.config_keys_collide() {
+            return Some(bad);
+        }
+        if let Some(bad) = self.commands_defect() {
             return Some(bad);
         }
         None

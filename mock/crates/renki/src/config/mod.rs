@@ -127,9 +127,12 @@ impl Cli {
                     users_from_here = true;
                     rest.push(arg);
                 },
-                Some("--cfg") => want_value = true,
-                Some(t) if t.starts_with("--cfg=") => {
-                    flags.push(split_flag(&t["--cfg=".len() ..])?)
+                Some(t) if t == crate::tool::Cli::CFG_FLAG => want_value = true,
+                Some(t)
+                    if t.starts_with(crate::tool::Cli::CFG_FLAG)
+                        && t.as_bytes().get(crate::tool::Cli::CFG_FLAG.len()) == Some(&b'=') =>
+                {
+                    flags.push(split_flag(&t[crate::tool::Cli::CFG_FLAG.len() + 1 ..])?)
                 },
                 _ => rest.push(arg),
             }
@@ -173,17 +176,51 @@ impl Lookup for Cli {
 
 /// One resolved setting as the launcher carries it: the key, the canonical
 /// text, and where it came from.
+///
+/// Public because a tool's own [`Command`](crate::Command) reads the table
+/// the engine environment is built from. The text is the kind's canonical
+/// form, the same bytes `<SHORT>_CFG_<KEY>` would hold, so a command parses
+/// it through the kind the way an engine does: a list is `["a", "b"]` and
+/// `renki_config::TextItems` walks it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Setting {
-    pub key:    &'static str,
-    pub text:   String,
-    pub source: Source,
+pub struct ResolvedSetting {
+    // lint:allow(no-bare-static-str) reason: the row's static key. FIXME: port to Str.
+    key:    &'static str,
+    // lint:allow(no-bare-string) reason: the canonical text, owned once per run at the launcher's std boundary. FIXME: port to Str.
+    text:   String,
+    source: Source,
+}
+
+impl ResolvedSetting {
+    /// The dotted key.
+    // lint:allow(no-bare-static-str) reason: the row's static key. FIXME: port to Str.
+    #[must_use]
+    pub const fn key(&self) -> &'static str {
+        self.key
+    }
+
+    /// The value in the kind's canonical text form.
+    // lint:allow(no-bare-string) reason: the canonical text, borrowed from the row. FIXME: port to Str.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Which of the five places it came from.
+    #[must_use]
+    pub const fn source(&self) -> Source {
+        self.source
+    }
 }
 
 /// Every setting the tool declares, resolved from the two texts and the
 /// command line, or the first refusal, by name and place.
 // lint:allow(trait-first-signatures) reason: the resolved table, owned once per run at the launcher's std boundary. FIXME: an iterator once the callers take one.
-pub(crate) fn resolve_all(tool: &Tool, cli: &Cli, texts: &Texts) -> Result<Vec<Setting>, String> {
+pub(crate) fn resolve_all(
+    tool: &Tool,
+    cli: &Cli,
+    texts: &Texts,
+) -> Result<Vec<ResolvedSetting>, String> {
     fn parse<'t>(which: &str, text: &'t str) -> Result<<Toml as Store>::Document<'t>, String> {
         match Toml::parse(text) {
             Outcome::Ok(doc) => Ok(doc),
@@ -220,7 +257,7 @@ pub(crate) fn resolve_all(tool: &Tool, cli: &Cli, texts: &Texts) -> Result<Vec<S
     for r in renki_config::resolve(tool.settings, tool.short, cli, repo.as_ref(), user.as_ref()) {
         match r {
             Outcome::Ok(r) => {
-                out.push(Setting {
+                out.push(ResolvedSetting {
                     key:    r.row().key(),
                     text:   r.to_string(),
                     source: r.source(),
@@ -237,7 +274,7 @@ pub(crate) fn resolve_all(tool: &Tool, cli: &Cli, texts: &Texts) -> Result<Vec<S
 pub(crate) fn engine_env(
     tool: &Tool,
     user_file: &Path,
-    settings: &[Setting],
+    settings: &[ResolvedSetting],
 ) -> Vec<(String, OsString)> {
     let mut out: Vec<(String, OsString)> = settings
         .iter()

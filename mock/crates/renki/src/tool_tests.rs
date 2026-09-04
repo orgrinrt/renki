@@ -4,6 +4,7 @@
 //--------------------------------------------------------------------------------------------------
 
 use super::*;
+use crate::command::Invocation;
 
 /// Every field written out, deliberately.
 ///
@@ -22,6 +23,7 @@ const WITH: Tool = Tool {
     cache_namespace: "t",
     cache_retention: std::time::Duration::from_secs(30 * 24 * 60 * 60),
     settings:        &[],
+    commands:        &[],
     scan_skip:       &[".git", "target", "node_modules"],
     default_url:     "u",
     version_source:  VersionSource::GitTag,
@@ -134,4 +136,289 @@ fn a_tool_without_a_workdir_runs_against_the_root() {
     assert_eq!(WITHOUT.workdir_for(root, root, Some("design".into())), root);
     assert_eq!(WITHOUT.workdir_default(root), root);
     assert_eq!(WITH.workdir_default(root), Path::new("/r/work"));
+}
+
+fn nothing(_: &Invocation<'_>) -> Result<(), String> {
+    Ok(())
+}
+
+#[test]
+fn a_command_table_is_refused_for_the_three_things_that_make_one_unreachable() {
+    // Every arm is a descriptor that would run and answer the wrong thing
+    // quietly: an empty name matches every bare argument, a name the crate's
+    // own queries take never runs, and two of one name run by table order.
+    const SETTINGS: &[renki_config::Declared<crate::config::Toml>] =
+        &[renki_config::Setting::<renki_config::Bool, renki_config::User>::new(
+            "strict", "false", "A flag.",
+        )
+        .row()];
+    const CASES: [(Tool, &str); 4] = [
+        (
+            Tool {
+                commands: &[Command {
+                    name: "",
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "name is empty",
+        ),
+        (
+            Tool {
+                commands: &[Command {
+                    name: "locate",
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "locate's subcommand",
+        ),
+        (
+            Tool {
+                settings: SETTINGS,
+                commands: &[Command {
+                    name: "config",
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "named `config`",
+        ),
+        (
+            Tool {
+                commands: &[
+                    Command {
+                        name: "workspace",
+                        doc:  "d",
+                        run:  nothing,
+                    },
+                    Command {
+                        name: "other",
+                        doc:  "d",
+                        run:  nothing,
+                    },
+                    Command {
+                        name: "workspace",
+                        doc:  "d",
+                        run:  nothing,
+                    },
+                ],
+                ..WITH
+            },
+            "share a name",
+        ),
+    ];
+    for (bad, expect) in &CASES {
+        let why = bad
+            .defect()
+            .expect("a broken command table was not refused");
+        assert!(why.contains(expect), "wrong refusal for {expect:?}: {why}");
+    }
+    // The design says these settle at build time, so each is also asserted
+    // as a const, which is what a consumer's `const _: () = assert!(...)`
+    // line does and what a refusal branch that stopped being const would
+    // break.
+    const _: () = assert!(CASES[0].0.defect().is_some());
+    const _: () = assert!(CASES[1].0.defect().is_some());
+    const _: () = assert!(CASES[2].0.defect().is_some());
+    const _: () = assert!(CASES[3].0.defect().is_some());
+}
+
+#[test]
+fn a_command_named_after_a_launcher_flag_is_refused_since_the_flag_comes_off_first() {
+    // The flags are taken off the arguments wherever they sit, before the
+    // table is looked at, so a command named after one never reaches the
+    // table: the directory flag vanishes, the engine flag is refused as a
+    // flag with no path, and `--cfg` swallows the next argument.
+    const SETTINGS: &[renki_config::Declared<crate::config::Toml>] =
+        &[renki_config::Setting::<renki_config::Bool, renki_config::User>::new(
+            "strict", "false", "A flag.",
+        )
+        .row()];
+    const CASES: [(Tool, &str); 4] = [
+        (
+            Tool {
+                commands: &[Command {
+                    name: Cli::DIR_FLAG,
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "dir_flag",
+        ),
+        (
+            Tool {
+                commands: &[Command {
+                    name: Cli::ENGINE_FLAG,
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "engine_flag",
+        ),
+        // renamed flags are compared by the descriptor's own value, not by
+        // the conventional spelling
+        (
+            Tool {
+                dir_flag: "--where",
+                commands: &[Command {
+                    name: "--where",
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "dir_flag",
+        ),
+        (
+            Tool {
+                settings: SETTINGS,
+                commands: &[Command {
+                    name: Cli::CFG_FLAG,
+                    doc:  "d",
+                    run:  nothing,
+                }],
+                ..WITH
+            },
+            "named `--cfg`",
+        ),
+    ];
+    for (bad, expect) in &CASES {
+        let why = bad
+            .defect()
+            .expect("a command named after a flag was not refused");
+        assert!(why.contains(expect), "wrong refusal for {expect:?}: {why}");
+    }
+    const _: () = assert!(CASES[0].0.defect().is_some());
+    const _: () = assert!(CASES[1].0.defect().is_some());
+    const _: () = assert!(CASES[2].0.defect().is_some());
+    const _: () = assert!(CASES[3].0.defect().is_some());
+
+    // The controls: `--cfg` is a command's where the tool has no settings,
+    // since the flag then goes through to the engine untouched; and the
+    // conventional `--dir` is not refused on a tool that renamed its
+    // directory flag, since nothing strips it there.
+    const CFG_WITHOUT_SETTINGS: Tool = Tool {
+        commands: &[Command {
+            name: Cli::CFG_FLAG,
+            doc:  "d",
+            run:  nothing,
+        }],
+        ..WITH
+    };
+    const _: () = assert!(CFG_WITHOUT_SETTINGS.defect().is_none());
+    const RENAMED: Tool = Tool {
+        dir_flag: "--where",
+        commands: &[Command {
+            name: Cli::DIR_FLAG,
+            doc:  "d",
+            run:  nothing,
+        }],
+        ..WITH
+    };
+    const _: () = assert!(RENAMED.defect().is_none());
+    assert!(CFG_WITHOUT_SETTINGS.defect().is_none());
+    assert!(RENAMED.defect().is_none());
+}
+
+#[test]
+fn a_command_table_the_crates_queries_do_not_shadow_is_not_refused() {
+    // The controls, one per refusal above. `config` is a command's to take
+    // where the tool has no settings, since the crate's query is then the
+    // engine's if it is anybody's; `locate` is a command's where the tool
+    // declares no locate query at all.
+    const NAMED_CONFIG: Tool = Tool {
+        commands: &[Command {
+            name: "config",
+            doc:  "d",
+            run:  nothing,
+        }],
+        ..WITH
+    };
+    assert!(
+        NAMED_CONFIG.defect().is_none(),
+        "{:?}",
+        NAMED_CONFIG.defect()
+    );
+    const NAMED_LOCATE: Tool = Tool {
+        locate: None,
+        commands: &[Command {
+            name: "locate",
+            doc:  "d",
+            run:  nothing,
+        }],
+        ..WITH
+    };
+    assert!(
+        NAMED_LOCATE.defect().is_none(),
+        "{:?}",
+        NAMED_LOCATE.defect()
+    );
+    const TWO: Tool = Tool {
+        commands: &[
+            Command {
+                name: "workspace",
+                doc:  "d",
+                run:  nothing,
+            },
+            Command {
+                name: "spawn",
+                doc:  "d",
+                run:  nothing,
+            },
+        ],
+        ..WITH
+    };
+    // and the const form, which is what a consumer writes
+    const _: () = assert!(TWO.defect().is_none());
+    assert!(TWO.defect().is_none());
+}
+
+#[test]
+fn the_command_named_is_the_first_argument_and_only_a_declared_one() {
+    const TWO: Tool = Tool {
+        commands: &[
+            Command {
+                name: "workspace",
+                doc:  "d",
+                run:  nothing,
+            },
+            Command {
+                name: "spawn",
+                doc:  "d",
+                run:  nothing,
+            },
+        ],
+        ..WITH
+    };
+    let s = |v: &[&str]| -> Vec<std::ffi::OsString> {
+        v.iter().map(std::ffi::OsString::from).collect()
+    };
+    assert_eq!(
+        TWO.command_named(&s(&["spawn", "x"])).map(|c| c.name),
+        Some("spawn")
+    );
+    assert_eq!(
+        TWO.command_named(&s(&["workspace"])).map(|c| c.name),
+        Some("workspace")
+    );
+    // not in second position, not a prefix, not a name the table lacks, not
+    // no arguments at all, and not an argument that is not text
+    assert!(TWO.command_named(&s(&["x", "spawn"])).is_none());
+    assert!(TWO.command_named(&s(&["spaw"])).is_none());
+    assert!(TWO.command_named(&s(&["status"])).is_none());
+    assert!(TWO.command_named(&[]).is_none());
+    use std::os::unix::ffi::OsStringExt as _;
+    assert!(
+        TWO.command_named(&[std::ffi::OsString::from_vec(vec![0xFF])])
+            .is_none()
+    );
+    // and a tool with none matches nothing, which is what sends `spawn` to
+    // the engine there
+    assert!(WITH.command_named(&s(&["spawn"])).is_none());
 }

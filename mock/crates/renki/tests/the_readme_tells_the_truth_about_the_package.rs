@@ -424,6 +424,7 @@ const NAMEABLE: &[&str] = &[
     "Tool",
     "Tool::CONVENTIONS",
     "Tool::cache_retention",
+    "Tool::commands",
     "VersionSource",
     "VersionSource::GitTag",
     "Workdir",
@@ -452,6 +453,7 @@ fn every_name_here_is_a_name_this_crate_has() {
     let _: renki::SelfUpdate = renki::SelfUpdate::Never;
     let _: renki::Tool = Tool::CONVENTIONS;
     let _: Duration = Tool::CONVENTIONS.cache_retention;
+    let _: &[renki::Command] = Tool::CONVENTIONS.commands;
     let _: renki::VersionSource = renki::VersionSource::GitTag;
     let _: Option<renki::Workdir> = Tool::CONVENTIONS.workdir;
 
@@ -470,7 +472,7 @@ fn every_name_here_is_a_name_this_crate_has() {
 
     assert_eq!(
         NAMEABLE.len(),
-        34,
+        35,
         "a row was added without a reference above"
     );
 }
