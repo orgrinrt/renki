@@ -1,0 +1,59 @@
+# renki. Design
+
+The launcher library. The root readme is the shipping description of what it
+does and how a tool is written against it, and it is compiled as a doctest
+through a private `Readme` item so the usage block cannot go stale. This
+document says what the readme leaves to the code and what this round adds.
+
+## What was already here
+
+A `Tool` descriptor, a pin resolved to build attempts, a keyed build cache
+under the cache root and a registry with a self-update marker under the state
+root, both roots from `renki-dirs`. `PinSource` records in the registry which
+form a repository's pin arrived in, so the collector can tell a build a
+repository re-pinned away from one it still wants. The `Backend` contract and
+the `Cargo` backend materialise an engine; `materialise_once` is what a
+launcher calls for its own build.
+
+## Configuration, this round
+
+The launcher implements `renki-config`'s contracts for the one store that
+ships, TOML, and does the reading nothing `no_std` can do. `Toml` is the
+`Store`: it parses a document, answers a dotted key as a borrowed literal,
+lists the keys a document holds, and writes one key back into the text it was
+given, keeping everything else where it was, comments included, by editing
+the line rather than reserialising a value tree.
+
+The reader resolves every declared setting once, in the design's order: a
+`--cfg key=value` flag, the tool's `<SHORT>_CFG_<KEY>` variable, the
+repository's `<config_file>` where the setting's scope allows it, the
+person's `<config root>/<config_file>`, then the default. A key the schema
+does not know is refused by name from any of those places, and a value the
+kind refuses is refused with its source named. The engine receives the result
+as `<SHORT>_CFG_<KEY>` per setting plus `<SHORT>_CONFIG_FILE` naming the
+person's file, the way it receives `--dir`, and never has two answers to choose
+from. `<SHORT>_CONFIG` is the config directory's override, `renki-dirs`'s, and
+is a different variable. A tool with no settings gets none of this and keeps
+its arguments as they were, `--cfg` included, since that flag is then the
+engine's to read.
+
+`widget config` joins `widget locate` as a query the launcher answers without
+the engine, since the engine is what is being configured and may not build:
+`path`, `schema`, `get <key>`, `set <key> <value>` and `edit`. `get` prints
+the source beside the value. The output is `key=value` lines like `locate`.
+`set` and `edit` both create the person's config directory when it is not
+there yet, and `set` puts a key where a reader would look for it: a top-level
+key at the end of the top level, which is above the first table header when
+the file opens with one, and a dotted key at the end of its table, or in a new
+table at the end where the file has none.
+
+## The retried install
+
+A failed `cargo install` is tried once more after a short pause, since the
+failure that prompted it was a registry deleted under the build and the second
+attempt succeeded alone. Before the first attempt the launcher checks that
+`cargo` is on `PATH` and refuses naming that rather than failing inside
+cargo's output. Two attempts, then the existing failure message with the retry
+recorded in it. The engine's build in `materialise` and the launcher's own
+reinstall in `selfupdate` go through the same `install_with_retry`, after the
+same check.

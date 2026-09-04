@@ -134,10 +134,19 @@ name = "renki"
 version = "0.0.2"
 dependencies = [
  "notko",
+ "renki-config",
  "renki-dirs",
  "serde",
  "tempfile",
  "toml 0.8.23",
+ "toml_edit",
+]
+
+[[package]]
+name = "renki-config"
+version = "0.0.0"
+dependencies = [
+ "notko",
 ]
 
 [[package]]

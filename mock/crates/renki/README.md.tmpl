@@ -1,0 +1,8 @@
+# renki
+
+The launcher half of a two-part command line tool, as a library. A tool is a
+`Tool` descriptor and a `main` that hands it over; the crate finds the
+repository, reads the pin, builds the engine once into a keyed cache, resolves
+the tool's configuration and execs the engine with the result. Unix only, on
+`renki-dirs` for where its files go and `renki-config` for what its settings
+are.

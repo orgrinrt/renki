@@ -1,0 +1,9 @@
+# renki-dirs
+
+Where a tool's files go, typed. Four kinds of file, `Cache`, `State`, `Config`
+and `Data`, told apart by what losing each one costs, and two platform layouts,
+`Xdg` and `MacOs`, with `Host` naming the one this binary was built for. A root
+is a `Root<K, P>`, so a function wanting the cache root says so in its type.
+Reads nothing: the caller hands in the three environment values as `Sources`
+and gets back the path's parts and which source won. `#![no_std]`, no alloc,
+notko for fallibility.

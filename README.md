@@ -8,7 +8,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/issues)
 ![License](https://img.shields.io/github/license/orgrinrt/renki?color=%23009689)
 
-> A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, four dependencies, two of them ours.
+> A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, six dependencies, three of them ours.
 
 </div>
 
@@ -246,6 +246,20 @@ that gets old fast.
 engine sees anything at all, so the engine never has two answers to pick
 between.
 
+`widget config` is the other query, for a tool that declares settings on its
+descriptor. `path` says which files are read, `schema` lists every setting with
+its kind, its scope, its default and a sentence, `get <key>` prints the value
+and beside it where it came from, `set <key> <value>` writes the person's file
+with the comments left where they were, and `edit` opens it in `$EDITOR` and
+checks it afterwards. A setting comes from five places in a fixed order: a
+`--cfg key=value` flag, the tool's own variable for the setting, the repository's
+own config file where the setting's scope allows it, the person's file under the
+config directory, and the default. The launcher resolves all of that once and the
+engine reads the result out of its environment, one variable per setting, so it
+never has to choose between two answers either. The contracts behind it are `renki-config`,
+which is `no_std` and the same crate an engine in rust reads its environment
+through.
+
 ## What it keeps on disk
 
 Two directories, and which one a file goes in is decided by what losing it
@@ -298,7 +312,7 @@ who wants a tool, and the same `cache_retention` applies. One with no mark yet
 gets stamped instead of taken. A scratch left by a fetch that died goes after an
 hour.
 
-Six environment variables, all named after your `short`:
+Nine environment variables, all named after your `short`:
 
 | Variable | What |
 |---|---|
@@ -308,6 +322,9 @@ Six environment variables, all named after your `short`:
 | `WIDGET_NO_SELF_UPDATE` | Don't check whether the launcher itself has moved on. |
 | `WIDGET_WORKSPACE` | Set on a tool command, naming the workspace it acts on. |
 | `WIDGET_TOOL_ROOT` | Set alongside it, naming that tool's materialised root. |
+| `WIDGET_CONFIG` | Put the person's config directory here. The whole path, same as the cache. |
+| `WIDGET_CFG_MODEL_BASE` | One per setting, here `model.base`: override it, and read it on the engine's side. Dots in the key become underscores. |
+| `WIDGET_CONFIG_FILE` | Set on the engine, naming the person's settings file. |
 
 The last two are what a tool command inherits. A tool's code sits in a cache
 shared by every workspace on the machine and its data does not, so it can't

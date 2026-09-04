@@ -1,0 +1,8 @@
+# renki-config
+
+A tool's configuration, as contracts. A setting has a kind, a scope and a
+default, all in its type; a store is a file format that parses a document,
+answers a key and writes one back; the resolver reads every declared setting
+from five places in a fixed order and says which one won. Nothing here reads a
+file or the environment, allocates, or names `std`: the launcher does that
+and implements the store. `#![no_std]`, no alloc, notko for fallibility.
