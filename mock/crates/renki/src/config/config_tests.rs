@@ -208,6 +208,31 @@ fn a_tool_with_no_settings_leaves_config_to_the_engine() {
     assert!(!query::is_the_config_query(&BARE, &s(&["config", "path"])));
     assert!(query::is_the_config_query(&T, &s(&["config", "path"])));
     assert!(!query::is_the_config_query(&T, &s(&["run", "config"])));
+    // and `--cfg` stays in the arguments for such a tool, since its engine may
+    // have a flag by that name; for a tool with settings it is taken off
+    let args = s(&["run", "--cfg", "x=y", "--cfg=a=b"]);
+    let (_, rest) = Cli::take(&BARE, args.clone()).unwrap();
+    assert_eq!(rest, args);
+    let (_, rest) = Cli::take(&T, args).unwrap();
+    assert_eq!(rest, s(&["run"]));
+}
+
+#[test]
+fn the_users_file_is_written_into_a_directory_that_does_not_exist_yet() {
+    let dir = tempfile::tempdir().unwrap();
+    let user = dir.path().join("fresh").join("ns").join("t.toml");
+    assert!(!user.parent().unwrap().exists());
+    query::write_user(&user, "theme = \"dark\"\n").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&user).unwrap(),
+        "theme = \"dark\"\n"
+    );
+    // and a parent that is a file rather than a directory is a refusal
+    // naming it, not a panic
+    let blocked = dir.path().join("file");
+    std::fs::write(&blocked, "").unwrap();
+    let err = query::write_user(&blocked.join("t.toml"), "").unwrap_err();
+    assert!(err.contains("could not create"), "{err}");
 }
 
 #[test]

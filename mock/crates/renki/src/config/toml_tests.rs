@@ -144,6 +144,45 @@ fn a_key_not_yet_in_the_file_is_added_where_a_reader_would_look() {
         set("[model]\n", "model.base", Rendered::Text("m")),
         "[model]\nbase = \"m\"\n"
     );
+    // a top-level key in a file that opens with a header: above the header,
+    // never inside the last table, where it would read back as `model.theme`
+    assert_eq!(
+        set("[model]\nbase = \"m\"\n", "theme", Rendered::Text("dark")),
+        "theme = \"dark\"\n\n[model]\nbase = \"m\"\n"
+    );
+    assert_eq!(
+        set(
+            "[server]\nport = 1\n\n[model]\nbase = \"m\"\n",
+            "strict",
+            Rendered::Raw("true")
+        ),
+        "strict = true\n\n[server]\nport = 1\n\n[model]\nbase = \"m\"\n"
+    );
+    // the same with a comment above the header: after the comment, since a
+    // comment is not a line of the top level's own
+    assert_eq!(
+        set(
+            "# mine\n[model]\nbase = \"m\"\n",
+            "theme",
+            Rendered::Text("dark")
+        ),
+        "# mine\ntheme = \"dark\"\n\n[model]\nbase = \"m\"\n"
+    );
+    // a file of comments only, and no table at all
+    assert_eq!(
+        set("# mine\n", "theme", Rendered::Text("dark")),
+        "# mine\ntheme = \"dark\"\n"
+    );
+    // and the control the fix must not disturb: a top-level line exists, so
+    // the key follows it and the header is untouched
+    assert_eq!(
+        set(
+            "a = 1\n[model]\nbase = \"m\"\n",
+            "theme",
+            Rendered::Text("dark")
+        ),
+        "a = 1\ntheme = \"dark\"\n[model]\nbase = \"m\"\n"
+    );
 }
 
 #[test]

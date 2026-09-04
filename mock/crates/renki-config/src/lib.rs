@@ -32,6 +32,11 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+// The readme's `rust` block is compiled as a doctest, the way the launcher's
+// is, so the usage a stranger copies is one the crate still accepts. On the
+// crate root rather than on a carrier type, since a type would be one more
+// name the design has to account for.
+#![cfg_attr(doctest, doc = include_str!("../README.md"))]
 
 mod kind;
 mod literal;

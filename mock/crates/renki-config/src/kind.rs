@@ -305,10 +305,19 @@ impl<K: Kind> Kind for List<K> {
 
     // lint:allow(no-bare-string) reason: the caller's text. FIXME: port to Str.
     fn from_text<'a, S: Store>(text: &'a str) -> Outcome<Self::Value<'a, S>, BadValue<'a>> {
-        match TextItems::over(text) {
-            Outcome::Ok(items) => Outcome::Ok(ListValue::FromText(items, PhantomData)),
-            Outcome::Err(_) => Outcome::Err(bad::<Self>(Got::Text(text))),
+        let items = match TextItems::over(text) {
+            Outcome::Ok(items) => items,
+            Outcome::Err(_) => return Outcome::Err(bad::<Self>(Got::Text(text))),
+        };
+        // A quoted item holding a quote could not be written back, since the
+        // canonical form `["a"]` has no escape for one, so it is refused here
+        // where the text arrives rather than at the write, which has no way
+        // to say so.
+        let mut probe = items;
+        if K::QUOTED && probe.any(|i| i.contains('"')) {
+            return Outcome::Err(bad::<Self>(Got::Text(text)));
         }
+        Outcome::Ok(ListValue::FromText(items, PhantomData))
     }
 
     fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<Self::Value<'a, S>, BadValue<'a>> {

@@ -186,16 +186,26 @@ pub(crate) fn reinstall_args(url: &str, branch: &str, launcher_crate: &str) -> V
     .collect()
 }
 
+use crate::retry::{Attempt, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
+
+/// The launcher's own reinstall goes through the same retry as the engine's
+/// build, after the same check: a registry deleted under it is as likely here
+/// as there, and the second attempt is what mends it. There is no install root
+/// to look in afterwards, since cargo places the launcher where it always did,
+/// so cargo's own exit status is the whole answer.
 fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
-    let status = std::process::Command::new("cargo")
-        .args(reinstall_args(url, branch, tool.launcher_crate))
-        .status()
-        .map_err(|e| format!("could not run cargo install: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("cargo install of the updated launcher failed".to_string())
-    }
+    cargo_is_on_path()?;
+    let attempts = [reinstall_args(url, branch, tool.launcher_crate)];
+    let run = |attempt: &[String]| -> Result<Attempt, String> {
+        let status = std::process::Command::new("cargo")
+            .args(attempt)
+            .status()
+            .map_err(|e| format!("could not run cargo install: {e}"))?;
+        Ok(if status.success() { Attempt::Built } else { Attempt::Failed })
+    };
+    install_with_retry(&attempts, tool.launcher_crate, run, || {
+        std::thread::sleep(RETRY_PAUSE);
+    })
 }
 
 /// Replace this process with `exe`, forwarding the original argv (minus the

@@ -10,9 +10,10 @@
 //! nothing `no_std` can do: the two files off the disk, the flag off the
 //! command line, the variable off the environment, and the `String`
 //! diagnostics the operator reads. The engine receives the result as
-//! `<SHORT>_CFG_<KEY>` per setting plus `<SHORT>_CONFIG` naming the person's
-//! file, the way it receives `--dir`, and never has two answers to choose
-//! from.
+//! `<SHORT>_CFG_<KEY>` per setting plus `<SHORT>_CONFIG_FILE` naming the
+//! person's file, the way it receives `--dir`, and never has two answers to
+//! choose from. `<SHORT>_CONFIG` is a different variable, the config
+//! directory's override, which is why the file's carries the suffix.
 
 pub mod query;
 pub mod toml;
@@ -77,6 +78,17 @@ impl Cli {
     /// the tool's own variables for every setting it declares.
     // lint:allow(trait-first-signatures) reason: the arguments with the flag taken off, an argument list at the launcher's std boundary. FIXME: an iterator once the callers take one.
     pub(crate) fn take(tool: &Tool, args: Vec<OsString>) -> Result<(Cli, Vec<OsString>), String> {
+        if tool.settings.is_empty() {
+            // Nothing to resolve, so `--cfg` is the engine's flag if it is
+            // anybody's, and the arguments go through untouched.
+            return Ok((
+                Cli {
+                    flags: Vec::new(),
+                    env:   Vec::new(),
+                },
+                args,
+            ));
+        }
         let env = tool
             .settings
             .iter()

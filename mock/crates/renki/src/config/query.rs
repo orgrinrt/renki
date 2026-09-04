@@ -95,8 +95,7 @@ pub(crate) fn answer(
                 .and_then(|a| a.to_str())
                 .ok_or("config set takes a key and a value")?;
             let text = set(tool, &user, key, value)?;
-            std::fs::write(&user, text)
-                .map_err(|e| format!("could not write {}: {e}", user.display()))?;
+            write_user(&user, &text)?;
             writeln!(out, "{key}={value}").map_err(|e| e.to_string())?;
             writeln!(out, "file={}", user.display()).map_err(|e| e.to_string())?;
             Ok(())
@@ -128,6 +127,17 @@ pub(crate) fn answer(
             ))
         },
     }
+}
+
+/// Write the person's file, creating its directory first: the first `config
+/// set` on a machine is what makes `~/.config/<ns>/` exist, the same way
+/// `edit` creates it before opening the editor.
+pub(crate) fn write_user(user: &Path, text: &str) -> Result<(), String> {
+    if let Some(parent) = user.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(user, text).map_err(|e| format!("could not write {}: {e}", user.display()))
 }
 
 /// The person's file with `key` set to `value`, as text: the value checked by

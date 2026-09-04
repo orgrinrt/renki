@@ -305,6 +305,17 @@ fn a_list_parses_item_by_item_from_text_and_from_a_store() {
             .kind(),
         "list"
     );
+    // and so is a text item holding a quote, even where the count is even and
+    // the split would go through: the canonical form `["a"]` has no escape,
+    // so such an item could never be written back and read again
+    assert_eq!(
+        List::<Text>::from_text::<Toy>("[a\"b, c\"d]")
+            .unwrap_err()
+            .kind(),
+        "list"
+    );
+    // an unquoted kind's items are not read for quotes at all
+    assert!(List::<Int>::from_text::<Toy>("[1, 2]").is_ok());
     // a bad item is refused where it sits
     let mut ints = List::<Int>::from_text::<Toy>("[1, x, 3]").unwrap();
     assert_eq!(ints.next().unwrap().unwrap(), 1);

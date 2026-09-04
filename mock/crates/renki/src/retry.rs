@@ -18,6 +18,7 @@ pub(crate) const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_se
 
 /// The one prerequisite checked ahead of the first attempt, so the refusal
 /// names it rather than failing inside cargo's own output.
+// FIXME: the design names two more prerequisites before the first attempt, the toolchain a `rust-toolchain.toml` in the checkout pins and the network where the pin is a git source, each refused naming the missing one. Neither is checked; the two ignored tests below are the catalogue, and this check gains the checkout and the source as arguments when they land.
 pub(crate) fn cargo_is_on_path() -> Result<(), String> {
     match Command::new("cargo").arg("--version").output() {
         Ok(o) if o.status.success() => Ok(()),
@@ -150,5 +151,33 @@ mod tests {
         // The control on the check itself: this suite runs under cargo, so the
         // answer here is yes, and a refusal would be the check lying.
         assert!(cargo_is_on_path().is_ok());
+    }
+
+    // The two prerequisites the design names and this module does not check.
+    // Each asserts the intended answer against the check that exists, and
+    // fails, since the check cannot yet be asked about a checkout or a source:
+    // that is the gap, and the FIXME on `cargo_is_on_path` names it.
+
+    #[test]
+    #[ignore = "catalogue: the toolchain a checkout pins is not checked before cargo runs; the FIXME on cargo_is_on_path"]
+    fn a_pinned_toolchain_rustup_lacks_is_refused_by_name_before_cargo_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"nightly-1999-01-01\"\n",
+        )
+        .unwrap();
+        let err =
+            cargo_is_on_path().expect_err("a toolchain rustup lacks is refused before cargo runs");
+        assert!(err.contains("nightly-1999-01-01"), "{err}");
+    }
+
+    #[test]
+    #[ignore = "catalogue: the network is not checked where the pin is a git source; the FIXME on cargo_is_on_path"]
+    fn an_unreachable_git_source_is_refused_by_name_before_cargo_runs() {
+        let source = "ssh://git@nowhere.invalid/nobody/nothing.git";
+        let err =
+            cargo_is_on_path().expect_err("an unreachable git source is refused before cargo runs");
+        assert!(err.contains(source), "{err}");
     }
 }

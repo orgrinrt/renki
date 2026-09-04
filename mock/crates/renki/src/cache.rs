@@ -52,7 +52,7 @@ pub(crate) fn state_root(tool: &Tool) -> Result<PathBuf, String> {
     root_of::<renki_dirs::State>(tool)
 }
 
-/// The config root on this machine, by the same precedence over `<SHORT>_CONFIG_DIR`
+/// The config root on this machine, by the same precedence over `<SHORT>_CONFIG`
 /// and `XDG_CONFIG_HOME`; the person's settings file sits under it.
 pub(crate) fn config_root(tool: &Tool) -> Result<PathBuf, String> {
     root_of::<renki_dirs::Config>(tool)

@@ -538,3 +538,30 @@ fn the_prose_checks_above_can_fail() {
         "the guard list would accept a name this crate has never had"
     );
 }
+
+#[test]
+fn the_package_ships_its_licence_beside_the_manifest() {
+    // `include` is an allowlist naming `LICENSE`, and cargo copies only what is
+    // there: when the crate root moved under `mock/crates/` the file did not
+    // follow and the package shipped without one, with nothing saying so.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let licence = std::fs::read_to_string(root.join("LICENSE"))
+        .expect("a LICENSE beside the manifest, since include names it");
+    assert!(
+        licence.contains("Mozilla Public License"),
+        "the licence beside the manifest is not the MPL the manifest declares"
+    );
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let include = manifest
+        .split_once("\ninclude = [")
+        .expect("the manifest has an include list")
+        .1;
+    let include = include
+        .split_once(']')
+        .expect("the include list is closed")
+        .0;
+    assert!(
+        include.contains("\"LICENSE\""),
+        "include no longer names LICENSE"
+    );
+}

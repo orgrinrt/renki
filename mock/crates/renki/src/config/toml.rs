@@ -128,12 +128,20 @@ impl Store for Toml {
         let mut hit: Option<usize> = None;
         let mut last_in_section: Option<usize> = None;
         let mut section_seen = section.is_none();
+        // The top level is its own region and it ends at the first header. A
+        // top-level key with no line of its own to follow goes above that
+        // header, never after the last table's lines, which is where a walk
+        // that only knows the current section would put it.
+        let mut first_header: Option<usize> = None;
         for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim_start();
             if let Some(header) = trimmed.strip_prefix('[')
                 && !trimmed.starts_with("[[")
                 && let Some(name) = header.split(']').next()
             {
+                if first_header.is_none() {
+                    first_header = Some(i);
+                }
                 current = Some(name.trim());
                 if current == section {
                     section_seen = true;
@@ -167,6 +175,17 @@ impl Store for Toml {
                 writeln!(into)?;
                 continue;
             }
+            if hit.is_none()
+                && section.is_none()
+                && last_in_section.is_none()
+                && first_header == Some(i)
+            {
+                // a top-level key in a file whose top level has no line of its
+                // own: above the first header, with the blank line a reader
+                // expects between the top level and the first table
+                writeln!(into, "{leaf} = {rendered}")?;
+                writeln!(into)?;
+            }
             writeln!(into, "{line}")?;
             if hit.is_none() && section_seen && last_in_section == Some(i) {
                 writeln!(into, "{leaf} = {rendered}")?;
@@ -181,9 +200,9 @@ impl Store for Toml {
                 writeln!(into, "[{s}]")?;
             }
             writeln!(into, "{leaf} = {rendered}")?;
-        } else if hit.is_none() && last_in_section.is_none() {
-            // the top level of an empty file, or a section header with nothing
-            // under it at the very end
+        } else if hit.is_none() && last_in_section.is_none() && first_header.is_none() {
+            // the top level of a file with no table and no line of its own:
+            // empty, or comments only
             writeln!(into, "{leaf} = {rendered}")?;
         }
         Ok(())
