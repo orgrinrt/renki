@@ -58,7 +58,7 @@ formats it into a `PathBuf`.
 
 Everything here borrows `&'a str` from the caller's environment text, and the
 constants are `&'static str`. The stack's answer is `hilavitkutin_str::Str`
-and arvo's types, and that is the long-term shape; this round keeps the
+and arvo's types, and that is the long-term shape; for now the table keeps the
 borrowed form, marks every site with a `lint:allow` carrying the reason and a
 `FIXME:` naming the port, and leaves the port to a later unit. `Sealed` is the
 private trait that closes `Kind` and `Platform`.
