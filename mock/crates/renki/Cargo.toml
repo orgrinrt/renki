@@ -3,7 +3,7 @@
 # it, so it is its own crate and this one depends on it like anybody else does.
 [package]
 name = "renki"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 publish = true
 description = "A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, six dependencies, three of them ours."
@@ -57,12 +57,12 @@ toml = { version = "0.8", default-features = false, features = ["parse", "displa
 # and pulled from the registry like anything else so an install of a published
 # renki never reaches for a path. It answers in notko's fallibility types, so
 # notko comes with it, with the default features off for the stable floor.
-renki-dirs = { version = "0.0.0", path = "../renki-dirs" }
+renki-dirs = { version = "0.0.1", path = "../renki-dirs" }
 # The configuration contracts, the same way: the schema, the store contract
 # and the resolver are theirs, the TOML store and the reading are this
 # crate's. `toml_edit` is what `toml` is built on and is already in the
 # graph; it is named here for the source spans a list literal borrows.
-renki-config = { version = "0.0.0", path = "../renki-config" }
+renki-config = { version = "0.0.1", path = "../renki-config" }
 toml_edit = { version = "0.22", default-features = false, features = ["parse"] }
 notko = { version = "0.0.1", default-features = false }
 
