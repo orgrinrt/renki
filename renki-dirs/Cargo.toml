@@ -1,6 +1,8 @@
 [package]
 name = "renki-dirs"
-version = "0.0.1"
+# Unreleased. The first release bumps it, along with the requirement `renki`
+# names for it.
+version = "0.0.0"
 edition = "2024"
 publish = true
 description = "Where a tool's files go, typed. Cache, state, config and data roots per platform, as marker types. no_std, no alloc, one dependency."

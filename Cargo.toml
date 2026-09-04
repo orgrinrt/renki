@@ -57,7 +57,7 @@ toml = { version = "0.8", default-features = false, features = ["parse", "displa
 # and pulled from the registry like anything else so an install of a published
 # renki never reaches for a path. It answers in notko's fallibility types, so
 # notko comes with it, with the default features off for the stable floor.
-renki-dirs = { version = "0.0.1", path = "renki-dirs" }
+renki-dirs = { version = "0.0.0", path = "renki-dirs" }
 notko = { version = "0.0.1", default-features = false }
 
 [dev-dependencies]
