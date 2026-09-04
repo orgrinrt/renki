@@ -47,6 +47,34 @@ key at the end of the top level, which is above the first table header when
 the file opens with one, and a dotted key at the end of its table, or in a new
 table at the end where the file has none.
 
+## A tool's own commands
+
+`locate` and `config` are the crate's, fixed in name and in output. A tool
+that has a question of its own the engine cannot be asked declares it on the
+descriptor: `Tool::commands` is a table of `Command`, each a name, a sentence
+and a function, and the launcher tries the table where it tries `config`,
+after its own flags are off the arguments and before a root is required. The
+case this exists for is `homma workspace`, which spawns a workspace where the
+cwd is not in one, so there is no config above the cwd, no root, no pin and
+no engine to build.
+
+The function gets an `Invocation`: the tool, the cwd, the root where one was
+found, the settings resolved from the two files, and the arguments after the
+name. It answers `Result<(), String>` the way a hook does, and a refusal is
+printed and exits nonzero the way `config`'s is. The settings arrive as the
+resolved rows the engine environment is built from, one per declared key with
+the canonical text and the source, so a command reads a value through the
+same kind an engine would and a list walks through `TextItems`. Nothing about
+the row changes for this beyond its visibility.
+
+A command is not a hook. It runs only when named, sees no pin and cannot reach
+the engine, since the engine may not be buildable where it runs. What the
+descriptor check refuses: an empty name, since the loop would match every
+bare argument; a name that is `locate`'s subcommand, or `config` on a tool
+with settings, since the crate's query is tried first and the tool's would
+never run; and two commands of one name. All of it is const and settles at
+build time with the rest of `Tool::defect`.
+
 ## The retried install
 
 A failed `cargo install` is tried once more after a short pause, since the
