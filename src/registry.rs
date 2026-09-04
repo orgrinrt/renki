@@ -167,8 +167,10 @@ pub(crate) struct Build {
 /// State rather than cache, because the registry is the one file here that
 /// records something about the machine rather than about a build: which
 /// repositories run the tool and what each pinned. A cleanup that empties the
-/// cache costs a rebuild; one that took this would make the next collection
-/// pass evict every build as an orphan.
+/// cache costs a rebuild; one that took this would leave the collector with no
+/// rows to walk, so every build already on disk would sit there uncollected
+/// for good, since [`Registry::gc`] evicts by row and never by listing the
+/// directory.
 pub(crate) fn registry_path(state_root: &Path) -> PathBuf {
     state_root.join("registry.toml")
 }

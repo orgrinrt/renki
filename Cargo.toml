@@ -3,7 +3,6 @@
 # its own crate and this one depends on it like anybody else does.
 [workspace]
 members = [".", "renki-dirs"]
-resolver = "2"
 
 [package]
 name = "renki"

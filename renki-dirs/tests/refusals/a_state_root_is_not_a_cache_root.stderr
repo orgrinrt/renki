@@ -1,23 +1,23 @@
 error[E0308]: mismatched types
-  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:17:17
+  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:21:17
    |
-17 |     wants_cache(Root::<State, Host>::resolve(ns, s).unwrap());
-   |     ----------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Root<'_, Cache, MacOs>`, found `Root<'_, State, MacOs>`
+21 |     wants_cache(Root::<State, Xdg>::resolve(ns, s).unwrap());
+   |     ----------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Root<'_, Cache, Xdg>`, found `Root<'_, State, Xdg>`
    |     |
    |     arguments to this function are incorrect
    |
-   = note: expected struct `Root<'_, Cache, MacOs>`
-              found struct `Root<'_, State, MacOs>`
+   = note: expected struct `Root<'_, Cache, renki_dirs::Xdg>`
+              found struct `Root<'_, State, renki_dirs::Xdg>`
 note: function defined here
-  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:7:4
+  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:11:4
    |
- 7 | fn wants_cache(_: Root<'_, Cache, Host>) {}
-   |    ^^^^^^^^^^^ ------------------------
+11 | fn wants_cache(_: Root<'_, Cache, Xdg>) {}
+   |    ^^^^^^^^^^^ -----------------------
 
 error[E0308]: mismatched types
-  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:18:15
+  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:22:15
    |
-18 |     wants_xdg(Root::<Cache, MacOs>::resolve(ns, s).unwrap());
+22 |     wants_xdg(Root::<Cache, MacOs>::resolve(ns, s).unwrap());
    |     --------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Root<'_, Cache, Xdg>`, found `Root<'_, Cache, MacOs>`
    |     |
    |     arguments to this function are incorrect
@@ -25,7 +25,7 @@ error[E0308]: mismatched types
    = note: expected struct `Root<'_, Cache, renki_dirs::Xdg>`
               found struct `Root<'_, Cache, MacOs>`
 note: function defined here
-  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:8:4
+  --> tests/refusals/a_state_root_is_not_a_cache_root.rs:12:4
    |
- 8 | fn wants_xdg(_: Root<'_, Cache, Xdg>) {}
+12 | fn wants_xdg(_: Root<'_, Cache, Xdg>) {}
    |    ^^^^^^^^^ -----------------------

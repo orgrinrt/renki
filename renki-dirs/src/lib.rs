@@ -95,7 +95,9 @@ kind!(
 );
 kind!(
     /// Written by the person, or by a surface the tool gave them. Never
-    /// rebuilt, never written unasked.
+    /// rebuilt, never written unasked. On macOS this is the directory the
+    /// state and the data roots sit under, so clearing it takes both, which
+    /// is the platform's layout and worth knowing before a `remove_dir_all`.
     Config, "CONFIG", "XDG_CONFIG_HOME", ".config", "Library/Application Support", Maybe::Isnt
 );
 kind!(
@@ -141,6 +143,15 @@ impl Platform for MacOs {
 /// are unix and XDG.
 #[cfg(target_os = "macos")]
 pub type Host = MacOs;
+// A refusal rather than a wrong answer: without this a Windows build would
+// take the XDG column and print `%HOME%/.cache/<ns>`, a path that is nobody's
+// cache there. The table has no column for it, and a port adds one.
+#[cfg(not(unix))]
+compile_error!(
+    "renki-dirs has a column for XDG platforms and one for macOS, and this \
+     target is neither. A port adds a `Platform` for it rather than borrowing \
+     the XDG layout."
+);
 /// The platform this binary was built for.
 #[cfg(not(target_os = "macos"))]
 pub type Host = Xdg;
@@ -190,8 +201,50 @@ impl<'a> Namespace<'a> {
 }
 
 /// The short name a tool answers to, which prefixes its environment variables.
+///
+/// Checked, because it becomes a variable name: ASCII letters, digits and
+/// underscore, not empty, not starting with a digit. A `Short` of `a-b` would
+/// name `A-B_CACHE`, which no shell exports and every caller would read as
+/// unset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Short<'a>(pub &'a str);
+pub struct Short<'a>(&'a str);
+
+/// Why a string is not a [`Short`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BadShort {
+    /// Nothing to prefix a variable with.
+    Empty,
+    /// A variable name cannot start with a digit.
+    LeadsWithDigit,
+    /// A byte outside `[A-Za-z0-9_]`, so the variable could not be exported.
+    NotAVariableName,
+}
+
+impl<'a> Short<'a> {
+    /// Check a short name.
+    pub const fn new(s: &'a str) -> Outcome<Self, BadShort> {
+        let b = s.as_bytes();
+        if b.is_empty() {
+            return Outcome::Err(BadShort::Empty);
+        }
+        if b[0].is_ascii_digit() {
+            return Outcome::Err(BadShort::LeadsWithDigit);
+        }
+        let mut i = 0;
+        while i < b.len() {
+            if !(b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                return Outcome::Err(BadShort::NotAVariableName);
+            }
+            i += 1;
+        }
+        Outcome::Ok(Short(s))
+    }
+
+    /// The name as given, lowercase or not.
+    pub const fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
 
 /// The tool's own override variable for a kind: `<SHORT>_CACHE`, `<SHORT>_STATE`,
 /// uppercased through [`fmt::Display`] so nothing is allocated to name it.
@@ -214,10 +267,9 @@ impl<'a, K: Kind> EnvName<'a, K> {
 impl<K: Kind> fmt::Display for EnvName<'_, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use fmt::Write;
+        // ASCII by construction, so the uppercase of a char is one char.
         for c in self.short.0.chars() {
-            for u in c.to_uppercase() {
-                f.write_char(u)?;
-            }
+            f.write_char(c.to_ascii_uppercase())?;
         }
         f.write_char('_')?;
         f.write_str(K::NAME)

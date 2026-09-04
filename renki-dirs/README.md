@@ -50,7 +50,11 @@ let ns = match Namespace::new("widget") {
     Outcome::Ok(ns) => ns,
     Outcome::Err(e) => panic!("{e:?}"),
 };
-let own = std::env::var(EnvName::<Cache>::of(Short("widget")).to_string()).ok();
+let short = match Short::new("widget") {
+    Outcome::Ok(s) => s,
+    Outcome::Err(e) => panic!("{e:?}"),
+};
+let own = std::env::var(EnvName::<Cache>::of(short).to_string()).ok();
 let xdg = std::env::var("XDG_CACHE_HOME").ok();
 let home = std::env::var("HOME").ok();
 let root = Root::<Cache, Host>::resolve(ns, Sources {

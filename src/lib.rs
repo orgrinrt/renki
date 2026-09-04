@@ -385,6 +385,9 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
     // Skipped under `--engine`, which says which engine to run: replacing the
     // launcher underneath a deliberate override is the one moment an automatic
     // update is unwelcome.
+    // Ahead of the self-update, because the marker that throttles it may still
+    // be where an earlier launcher left it.
+    cache::adopt_old_layout(tool);
     if engine_override.is_none()
         && let Ok(state_root) = cache::state_root(tool)
     {

@@ -265,6 +265,12 @@ since that's where the platform's own cleanup looks and `~/.cache` there is
 nobody's cache; an exported XDG variable still wins on a mac, on the reasoning
 that somebody who set one has said where they want their files.
 
+An earlier launcher kept the lot under `~/.cache/<namespace>` on every
+platform, registry included. The first run of this one carries that over: the
+registry and the self-update marker move into the state directory, and on a
+mac the builds move under `~/Library/Caches` with them, so nothing is rebuilt
+and nothing is left behind where the collector can no longer see it.
+
 The registry is the one worth knowing about, since it's the only thing here that
 records something about you rather than about a build. One row per repo that has
 run the tool on this machine, and the row holds the lot of it: the repo root,

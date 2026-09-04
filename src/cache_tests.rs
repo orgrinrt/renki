@@ -325,3 +325,143 @@ fn a_binary_under_another_tools_name_is_not_this_tools_build() {
         binpath.join("engine")
     );
 }
+
+/// An old-layout tree: registry, marker, one build and one tool under the one
+/// directory an earlier launcher used for everything.
+fn old_layout(old: &std::path::Path) {
+    std::fs::create_dir_all(old.join("builds/k1/bin")).unwrap();
+    std::fs::write(old.join("builds/k1/bin/engine"), b"e").unwrap();
+    std::fs::create_dir_all(old.join("tools/t1")).unwrap();
+    std::fs::write(old.join("registry.toml"), b"[[build]]\nkey = \"k1\"\n").unwrap();
+    std::fs::write(old.join("launcher-selfupdate"), b"1").unwrap();
+}
+
+#[test]
+fn the_old_layout_moves_whole_into_the_two_new_roots_when_the_cache_root_moved() {
+    // the mac case: the cache root itself moved, so everything goes
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("old");
+    let cache = dir.path().join("Caches/tns");
+    let state = dir.path().join("Support/tns/state");
+    old_layout(&old);
+
+    move_old_layout(&old, &cache, &state);
+
+    assert_eq!(
+        std::fs::read(state.join("registry.toml")).unwrap(),
+        b"[[build]]\nkey = \"k1\"\n"
+    );
+    assert_eq!(
+        std::fs::read(state.join("launcher-selfupdate")).unwrap(),
+        b"1"
+    );
+    assert!(
+        cache.join("builds/k1/bin/engine").is_file(),
+        "the build moved"
+    );
+    assert!(cache.join("tools/t1").is_dir(), "the tool moved");
+    assert!(
+        !old.exists(),
+        "the old directory is gone, since nothing was left in it"
+    );
+}
+
+#[test]
+fn the_old_layout_moves_only_the_state_when_the_cache_root_stayed() {
+    // linux: the cache root is the same directory, so the builds stay put and
+    // only the two state files leave
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("cache/tns");
+    let state = dir.path().join("state/tns");
+    old_layout(&old);
+
+    move_old_layout(&old, &old, &state);
+
+    assert!(state.join("registry.toml").is_file());
+    assert!(state.join("launcher-selfupdate").is_file());
+    assert!(!old.join("registry.toml").exists());
+    assert!(!old.join("launcher-selfupdate").exists());
+    assert!(
+        old.join("builds/k1/bin/engine").is_file(),
+        "the builds did not move"
+    );
+    assert!(old.join("tools/t1").is_dir());
+}
+
+#[test]
+fn a_new_root_that_already_has_the_thing_wins_and_the_old_copy_is_deleted() {
+    // the run after the first: whatever is left under the old layout is a
+    // leftover, and a leftover build is deleted rather than kept beside the
+    // registered one, since the collector never lists the directory
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("old");
+    let cache = dir.path().join("Caches/tns");
+    let state = dir.path().join("Support/tns/state");
+    old_layout(&old);
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("registry.toml"), b"new").unwrap();
+    std::fs::create_dir_all(cache.join("builds/k2")).unwrap();
+
+    move_old_layout(&old, &cache, &state);
+
+    assert_eq!(
+        std::fs::read(state.join("registry.toml")).unwrap(),
+        b"new",
+        "the new registry stayed"
+    );
+    assert!(
+        state.join("launcher-selfupdate").is_file(),
+        "the marker had no rival and moved"
+    );
+    assert!(cache.join("builds/k2").is_dir());
+    assert!(
+        !cache.join("builds/k1").exists(),
+        "the old build was not merged in"
+    );
+    assert!(
+        cache.join("tools/t1").is_dir(),
+        "tools had no rival and moved"
+    );
+    assert!(!old.exists());
+}
+
+#[test]
+fn nothing_under_the_old_layout_is_a_no_op_that_creates_nothing() {
+    // the ordinary run, every time after the first: no old tree, no writes
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("old");
+    let cache = dir.path().join("cache");
+    let state = dir.path().join("state");
+
+    move_old_layout(&old, &cache, &state);
+
+    assert!(!cache.exists());
+    assert!(!state.exists());
+}
+
+#[test]
+fn the_old_root_is_the_xdg_column_whatever_the_host_and_the_own_variable_wins_there_too() {
+    // the old launcher read `<SHORT>_CACHE`, then `XDG_CACHE_HOME/<ns>`, then
+    // `~/.cache/<ns>`, on a mac as much as anywhere; so the old root is the
+    // XDG table over the same sources, and the two agree with the current root
+    // exactly where the host is an XDG platform
+    use renki_dirs::{Cache, Namespace, Root, Sources, Xdg};
+    let ns = Namespace::new("tns").unwrap();
+    let s = Sources {
+        own:  Maybe::Isnt,
+        xdg:  Maybe::Isnt,
+        home: Maybe::Is("/home/u"),
+    };
+    assert_eq!(
+        Root::<Cache, Xdg>::resolve(ns, s).unwrap().to_string(),
+        "/home/u/.cache/tns"
+    );
+    let own = Sources {
+        own: Maybe::Is("/mnt/big"),
+        ..s
+    };
+    assert_eq!(
+        Root::<Cache, Xdg>::resolve(ns, own).unwrap().to_string(),
+        "/mnt/big"
+    );
+}

@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use notko::{Maybe, Outcome};
-use renki_dirs::{EnvName, Host, Kind, Namespace, Root, Short, Sources};
+use renki_dirs::{EnvName, Host, Kind, Namespace, Root, Sources};
 
 use crate::hash::Fnv;
 use crate::pin::Resolved;
@@ -56,7 +56,7 @@ pub(crate) fn state_root(tool: &Tool) -> Result<PathBuf, String> {
 /// `renki-dirs`'s; what is this crate's is the reading and the one refusal the
 /// table cannot make, a value that is not text.
 fn root_of<K: Kind>(tool: &Tool) -> Result<PathBuf, String> {
-    let own = std::env::var_os(EnvName::<K>::of(Short(tool.short)).to_string());
+    let own = std::env::var_os(EnvName::<K>::of(tool.short_typed()).to_string());
     let xdg = std::env::var_os(K::XDG_VAR);
     let home = std::env::var_os("HOME");
     root_from::<K>(tool, own.as_deref(), xdg.as_deref(), home.as_deref())
@@ -87,7 +87,7 @@ fn root_from<K: Kind>(
         }
     }
     let sources = Sources {
-        own:  text(&EnvName::<K>::of(Short(tool.short)).to_string(), own)?,
+        own:  text(&EnvName::<K>::of(tool.short_typed()).to_string(), own)?,
         xdg:  text(K::XDG_VAR, xdg)?,
         home: text("HOME", home)?,
     };
@@ -103,6 +103,90 @@ fn root_from<K: Kind>(
     match Root::<K, Host>::resolve(ns, sources) {
         Outcome::Ok(root) => Ok(PathBuf::from(root.to_string())),
         Outcome::Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Where an earlier launcher kept everything: one directory under the XDG
+/// cache column on every platform, with the registry and the self-update
+/// marker in it beside the builds.
+///
+/// The same sources, the XDG table rather than the host's, which is exactly
+/// the old answer on a mac and the current one everywhere else.
+fn old_cache_root(tool: &Tool) -> Option<PathBuf> {
+    let k = EnvName::<renki_dirs::Cache>::of(tool.short_typed()).to_string();
+    let own = std::env::var_os(&k);
+    let xdg = std::env::var_os(renki_dirs::Cache::XDG_VAR);
+    let home = std::env::var_os("HOME");
+    let text = |v: Option<OsString>| v.and_then(|s| s.into_string().ok());
+    let (own, xdg, home) = (text(own), text(xdg), text(home));
+    let sources = Sources {
+        own:  own.as_deref().map_or(Maybe::Isnt, Maybe::Is),
+        xdg:  xdg.as_deref().map_or(Maybe::Isnt, Maybe::Is),
+        home: home.as_deref().map_or(Maybe::Isnt, Maybe::Is),
+    };
+    let Outcome::Ok(ns) = Namespace::new(tool.cache_namespace) else {
+        return None;
+    };
+    match Root::<renki_dirs::Cache, renki_dirs::Xdg>::resolve(ns, sources) {
+        Outcome::Ok(r) => Some(PathBuf::from(r.to_string())),
+        Outcome::Err(_) => None,
+    }
+}
+
+/// Carry what an earlier launcher left under the old layout into the current
+/// one, once. Best-effort and silent: a run is never blocked on housekeeping.
+pub(crate) fn adopt_old_layout(tool: &Tool) {
+    if let (Some(old), Ok(cache), Ok(state)) =
+        (old_cache_root(tool), cache_root(tool), state_root(tool))
+    {
+        move_old_layout(&old, &cache, &state);
+    }
+}
+
+/// The pure half of [`adopt_old_layout`], on paths so it runs on a tempdir.
+///
+/// The registry and the marker move from the old cache root into the state
+/// root, unless the state root already has a registry, in which case the old
+/// pair is a leftover and is deleted. Where the cache root itself moved, which
+/// it did on a mac, the builds and the tools move with it when the new root
+/// has none yet, and are deleted otherwise, since a build is rebuildable and a
+/// second copy nobody registered would sit on disk for good: the collector
+/// evicts by registry row and never by listing the directory.
+pub(crate) fn move_old_layout(old: &Path, cache_root: &Path, state_root: &Path) {
+    use std::fs;
+    for file in ["registry.toml", "launcher-selfupdate"] {
+        let from = old.join(file);
+        if !from.is_file() {
+            continue;
+        }
+        let to = state_root.join(file);
+        if to.exists() {
+            let _ = fs::remove_file(&from);
+        } else if fs::create_dir_all(state_root).is_ok() && fs::rename(&from, &to).is_err() {
+            // Across volumes a rename refuses; copy then remove is the same
+            // move in two steps.
+            if fs::copy(&from, &to).is_ok() {
+                let _ = fs::remove_file(&from);
+            }
+        }
+    }
+    if old != cache_root {
+        for dir in ["builds", "tools"] {
+            let from = old.join(dir);
+            if !from.is_dir() {
+                continue;
+            }
+            let to = cache_root.join(dir);
+            if to.exists()
+                || fs::create_dir_all(cache_root).is_err()
+                || fs::rename(&from, &to).is_err()
+            {
+                let _ = fs::remove_dir_all(&from);
+            }
+        }
+        // Only ever an empty directory by now, and `remove_dir` refuses
+        // anything else, which is the right refusal.
+        let _ = fs::remove_dir(old);
     }
 }
 

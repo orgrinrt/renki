@@ -10,6 +10,7 @@
 use notko::{Maybe, Outcome};
 use renki_dirs::{
     BadNamespace,
+    BadShort,
     Cache,
     Config,
     Data,
@@ -97,13 +98,19 @@ fn an_exported_xdg_variable_wins_over_the_platform_default_on_macos_too() {
         xdg:  Maybe::Is("/x"),
         home: home(),
     };
-    assert_eq!(path::<Cache, MacOs>(s), "/x/tns");
-    assert_eq!(path::<State, MacOs>(s), "/x/tns");
+    // the whole matrix, since the law is about every shape
+    assert_eq!(path::<Cache, Xdg>(s), "/x/tns");
+    assert_eq!(path::<State, Xdg>(s), "/x/tns");
     assert_eq!(path::<Config, Xdg>(s), "/x/tns");
     assert_eq!(path::<Data, Xdg>(s), "/x/tns");
+    assert_eq!(path::<Cache, MacOs>(s), "/x/tns");
+    assert_eq!(path::<State, MacOs>(s), "/x/tns");
+    assert_eq!(path::<Config, MacOs>(s), "/x/tns");
+    assert_eq!(path::<Data, MacOs>(s), "/x/tns");
     // and the kind's macOS tail does not follow it: the variable names the
     // directory for that kind already
     assert!(!path::<State, MacOs>(s).ends_with("/state"));
+    assert!(!path::<Data, MacOs>(s).ends_with("/data"));
 }
 
 #[test]
@@ -114,10 +121,13 @@ fn the_tools_own_variable_is_the_whole_path_and_wins_over_everything() {
         home: home(),
     };
     assert_eq!(path::<Cache, Xdg>(s), "/mnt/big");
-    assert_eq!(path::<Cache, MacOs>(s), "/mnt/big");
     assert_eq!(path::<State, Xdg>(s), "/mnt/big");
-    assert_eq!(path::<Config, MacOs>(s), "/mnt/big");
+    assert_eq!(path::<Config, Xdg>(s), "/mnt/big");
     assert_eq!(path::<Data, Xdg>(s), "/mnt/big");
+    assert_eq!(path::<Cache, MacOs>(s), "/mnt/big");
+    assert_eq!(path::<State, MacOs>(s), "/mnt/big");
+    assert_eq!(path::<Config, MacOs>(s), "/mnt/big");
+    assert_eq!(path::<Data, MacOs>(s), "/mnt/big");
 }
 
 #[test]
@@ -210,16 +220,43 @@ fn two_tools_never_share_a_root() {
 
 #[test]
 fn the_override_variables_are_named_after_the_tool_and_the_kind() {
-    let t = Short("t");
+    let t = short("t");
     assert_eq!(EnvName::<Cache>::of(t).to_string(), "T_CACHE");
     assert_eq!(EnvName::<State>::of(t).to_string(), "T_STATE");
     assert_eq!(EnvName::<Config>::of(t).to_string(), "T_CONFIG");
     assert_eq!(EnvName::<Data>::of(t).to_string(), "T_DATA");
-    let w = Short("widget");
+    let w = short("widget");
     assert_eq!(EnvName::<Cache>::of(w).to_string(), "WIDGET_CACHE");
-    // a name that is not ascii still uppercases by the character rather than
-    // by the byte
-    assert_eq!(EnvName::<Cache>::of(Short("äö")).to_string(), "ÄÖ_CACHE");
+    // digits and underscores pass through, letters uppercase
+    assert_eq!(
+        EnvName::<Cache>::of(short("w2_x")).to_string(),
+        "W2_X_CACHE"
+    );
+}
+
+fn short(s: &'static str) -> Short<'static> {
+    match Short::new(s) {
+        Outcome::Ok(s) => s,
+        Outcome::Err(e) => panic!("{e:?}"),
+    }
+}
+
+#[test]
+fn a_short_name_is_one_a_shell_can_export_a_variable_under() {
+    assert_eq!(short("widget").as_str(), "widget");
+    assert!(Short::new("_w").is_ok());
+    assert!(Short::new("W1").is_ok());
+    assert_eq!(Short::new("").unwrap_err(), BadShort::Empty);
+    assert_eq!(Short::new("1w").unwrap_err(), BadShort::LeadsWithDigit);
+    // a hyphen would name `A-B_CACHE`, which no shell exports
+    assert_eq!(Short::new("a-b").unwrap_err(), BadShort::NotAVariableName);
+    assert_eq!(Short::new("a b").unwrap_err(), BadShort::NotAVariableName);
+    assert_eq!(Short::new("a.b").unwrap_err(), BadShort::NotAVariableName);
+    // and not ascii: `ÄÖ_CACHE` is not a portable variable name either
+    assert_eq!(Short::new("äö").unwrap_err(), BadShort::NotAVariableName);
+    // checked at compile time, like a namespace
+    const S: Outcome<Short<'static>, BadShort> = Short::new("homma");
+    assert!(S.is_ok());
 }
 
 #[test]
