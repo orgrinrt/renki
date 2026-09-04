@@ -1,0 +1,146 @@
+# renki. The mockspace config.
+#
+# At the repo root, since a repo has exactly one of these. `mock_dir` names the
+# directory the design rounds, the lints and the document templates live in;
+# the crates stay where they are, at the root workspace, which is what a
+# `cargo install renki` and a stranger's clone both expect.
+
+# The engine pin. mockspace has cut no release yet, so this tracks the working
+# trunk. The launcher re-resolves the branch head periodically.
+mockspace_branch = "dev"
+
+project_name = "renki"
+crate_prefix = "renki"
+abi_version = 1
+mock_dir = "mock"
+
+proc_macro_crates = []
+module_crates = []
+
+# Layer labels by depth index.
+layers = [
+    "L0 tables",      # renki-dirs, renki-config: no_std, no alloc, contracts and markers
+    "L1 launcher",    # renki: std, reads the environment, execs the engine
+]
+
+[domain_kinds]
+
+[known_macros]
+
+[crate_colors]
+renki-dirs = "#E8EEF7 | #3A6EA5"
+renki-config = "#E8EEF7 | #3A6EA5"
+renki = "#EDE6F3 | #5C2D82"
+
+# ---------------------------------------------------------------------------
+# Lints. Every severity here is a decision; none is lowered to get a commit
+# through. Fix the code or advance the phase.
+# ---------------------------------------------------------------------------
+
+[lint-crates]
+mockspace-extra-lints = { git = "ssh://git@github.com/orgrinrt/mockspace-hilavitkutin-stack-lints.git", branch = "dev" }
+
+# --- Universal quality lints (mockspace built-ins) -------------------------
+
+[lints.no-empty-crate]
+commit = "error"
+build = "error"
+push = "error"
+
+[lints.no-todo]
+commit = "error"
+build = "error"
+push = "error"
+
+[lints.file-size]
+commit = "error"
+build = "error"
+push = "error"
+max_lines = "500"
+
+# --- The no_std crates: nothing from std or alloc, and notko's ladder ------
+#
+# The tables and the contracts are no_std and no alloc, and they speak notko's
+# `Outcome` and `Maybe` rather than `Result` and `Option`. A `String`, a `Vec`,
+# a `Box`, a `Result` or an `Option` in one of them does not commit. The
+# launcher crate is std by nature and is exempt from these five; it is bound
+# by the two below them.
+
+[lints.no-std]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+[lints.no-alloc]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+[lints.no-bare-result]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+[lints.no-bare-option]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+[lints.no-bare-string]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+[lints.no-bare-numeric]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+[lints.no-bare-static-str]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+[lints.arvo-types-only]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+[lints.no-public-raw-field]
+commit = "error"
+build = "error"
+push = "error"
+crates = ["renki-dirs", "renki-config"]
+
+# --- Every crate: contracts before concrete types, no vtables --------------
+
+[lints.trait-first-signatures]
+commit = "error"
+build = "error"
+push = "error"
+
+[lints.no-dyn-dispatch]
+commit = "error"
+build = "error"
+push = "error"
+
+# --- Belt for the suspenders: module-path boundaries -----------------------
+
+[lints.forbidden-imports]
+commit = "error"
+build = "error"
+push = "error"
+rules = [
+    { scope = "renki-dirs", forbidden = "std::*, alloc::*", reason = "renki-dirs is no_std and no alloc; the caller reads the environment and hands the text in" },
+    { scope = "renki-config", forbidden = "std::*, alloc::*", reason = "renki-config is the contracts; a store and a file live in the launcher" },
+    { scope = "renki-dirs", forbidden = "renki::*, renki_config::*", reason = "the table is the bottom; nothing above it is reachable from it" },
+    { scope = "renki-config", forbidden = "renki::*", reason = "the contracts do not know the launcher; the launcher implements them" },
+]

@@ -1,0 +1,64 @@
+# renki-dirs. Design
+
+The table of where a tool's files go, with the kinds and the platforms as
+types. It exists so every tool here lands its files beside everybody else's,
+whether or not renki launches it, and so a function that wants one root cannot
+be handed another.
+
+## The kinds
+
+`Kind` is a sealed trait over four marker types. `Cache` is rebuilt on loss and
+a cleanup may take it at any moment. `State` is what the tool wrote for itself
+and would behave differently without. `Config` is what the person wrote.
+`Data` is what the tool made for the person and cannot make again. Each kind
+carries the XDG variable that names its directory, the default under the home
+directory when that variable is unset, the macOS directory, and the tail a
+kind takes under a macOS directory it shares with another. On macOS the
+config, state and data roots all sit under `Application Support/<ns>`, state
+and data one level down, and clearing the config root takes the other two
+with it, which is the platform's layout and is documented on the kind.
+
+## The platforms
+
+`Platform` is a sealed trait over `Xdg`, for linux, the BSDs and illumos, and
+`MacOs`. `Host` is a type alias picked by `cfg(target_os)`, and a target the
+table has no column for refuses to build rather than borrowing the XDG one.
+An exported XDG variable still wins on a mac, on the reasoning that whoever
+set it said where their files go.
+
+## The names
+
+`Namespace` is the one path segment a tool owns under every root, checked by
+a `const fn` so a tool's namespace is refused at compile time when it is
+empty, holds a separator, or walks; `BadNamespace` says which. `Short` is the
+short name a tool answers to and the prefix of its environment variables,
+checked the same way to be something a shell can export a variable under;
+`BadShort` says which. `EnvName<K>` is `<SHORT>_<KIND>` rendered through
+`Display` with `Lower` and `LowerDisplay` doing the case work without
+allocating, so the launcher and a tool that reads the table without it agree
+on the variable's name.
+
+## Resolution
+
+`Sources` holds the three environment values a root depends on, read by the
+caller: the tool's own variable, the kind's XDG variable, and `HOME`, each a
+`Maybe` since an unset or non-text value is `Isnt`. `Root<K, P>::resolve`
+takes a namespace and the sources and answers `Outcome<Root, NoHome<K>>`,
+where `NoHome` is the one refusal: nothing named the directory and there is
+no home to default under. The precedence is fixed and the same for every kind
+and platform: the tool's own variable is the whole path, then the XDG
+variable with the namespace under it, then the platform default. `Source`
+says which of the three won and `Root::source` reports it, since the question
+behind most configuration bugs is which of several places a value came from.
+`Root::base` is the directory the namespace sits under, and `Display` prints
+the whole path; that is the entire no-alloc surface, and a `std` caller
+formats it into a `PathBuf`.
+
+## Strings
+
+Everything here borrows `&'a str` from the caller's environment text, and the
+constants are `&'static str`. The stack's answer is `hilavitkutin_str::Str`
+and arvo's types, and that is the long-term shape; for now the table keeps the
+borrowed form, marks every site with a `lint:allow` carrying the reason and a
+`FIXME:` naming the port, and leaves the port to a later unit. `Sealed` is the
+private trait that closes `Kind` and `Platform`.

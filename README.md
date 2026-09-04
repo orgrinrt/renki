@@ -8,7 +8,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/issues)
 ![License](https://img.shields.io/github/license/orgrinrt/renki?color=%23009689)
 
-> A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, two dependencies.
+> A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, six dependencies, three of them ours.
 
 </div>
 
@@ -61,7 +61,7 @@ Or in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-renki = "0.0.2"
+renki = "0.0.3"
 ```
 
 Do pin the exact version rather than a range. `0.0.x` releases are incompatible
@@ -246,11 +246,55 @@ that gets old fast.
 engine sees anything at all, so the engine never has two answers to pick
 between.
 
+`widget config` is the other query, for a tool that declares settings on its
+descriptor. `path` says which files are read, `schema` lists every setting with
+its kind, its scope, its default and a sentence, `get <key>` prints the value
+and beside it where it came from, `set <key> <value>` writes the person's file
+with the comments left where they were, and `edit` opens it in `$EDITOR` and
+checks it afterwards. A setting comes from five places in a fixed order: a
+`--cfg key=value` flag, the tool's own variable for the setting, the repository's
+own config file where the setting's scope allows it, the person's file under the
+config directory, and the default. The launcher resolves all of that once and the
+engine reads the result out of its environment, one variable per setting, so it
+never has to choose between two answers either. The contracts behind it are `renki-config`,
+which is `no_std` and the same crate an engine in rust reads its environment
+through.
+
+A tool can have questions of its own that the engine can't be asked, and
+`Tool::commands` is where they go: a name, a sentence and a function, tried
+right where `config` is, before the launcher goes looking for a root. The
+function gets the cwd, the root if there was one, the settings as resolved, and
+whatever followed the name, the launcher's own flags taken out wherever they sat,
+and it refuses the same way a hook does. The case
+this was written for is a tool that makes a repository where there isn't one
+yet, which is exactly the place the engine can't run. It's not a hook, it runs
+only when named, and it can't reach the engine at all; a subcommand that needs
+the engine belongs in the engine.
+
 ## What it keeps on disk
 
-Everything lives under `$XDG_CACHE_HOME/<namespace>`, or `~/.cache/<namespace>`
-when that isn't set: built engines, the resolved head of any branch pin, and a
-small TOML registry.
+Two directories, and which one a file goes in is decided by what losing it
+costs. The cache holds what gets rebuilt without anybody asking: built engines,
+materialised tools, the resolved head of any branch pin. The state holds the one
+thing the launcher writes for itself and would behave differently without, a
+small TOML registry, plus the self-update marker. A cleanup that empties the
+cache costs you a rebuild and nothing else, which is the whole point of keeping
+the two apart.
+
+Where they are is the platform's call, through `renki-dirs`, which is the same
+table every tool of ours reads. On linux and the BSDs that's
+`$XDG_CACHE_HOME/<namespace>` and `$XDG_STATE_HOME/<namespace>`, or `~/.cache`
+and `~/.local/state` under them when the variables aren't set. On macOS it's
+`~/Library/Caches/<namespace>` and `~/Library/Application Support/<namespace>/state`,
+since that's where the platform's own cleanup looks and `~/.cache` there is
+nobody's cache; an exported XDG variable still wins on a mac, on the reasoning
+that somebody who set one has said where they want their files.
+
+An earlier launcher kept the lot under `~/.cache/<namespace>` on every
+platform, registry included. The first run of this one carries that over: the
+registry and the self-update marker move into the state directory, and on a
+mac the builds move under `~/Library/Caches` with them, so nothing is rebuilt
+and nothing is left behind where the collector can no longer see it.
 
 The registry is the one worth knowing about, since it's the only thing here that
 records something about you rather than about a build. One row per repo that has
@@ -261,7 +305,7 @@ pointed at, the engine's source url, what was pinned and in which form, the
 build key that resolved to, and when it last ran. That's what lets the collector
 tell a build nothing points at any more from one that's still wanted. Nothing
 but the launcher writes it and nothing sends it anywhere. It's plain TOML in
-your own cache directory, so go and read it if you like, and deleting the whole
+your own state directory, so go and read it if you like, and deleting the whole
 cache directory is always safe.
 
 Builds get collected two ways. One that nothing points at any more goes on the
@@ -279,15 +323,19 @@ who wants a tool, and the same `cache_retention` applies. One with no mark yet
 gets stamped instead of taken. A scratch left by a fetch that died goes after an
 hour.
 
-Five environment variables, all named after your `short`:
+Nine environment variables, all named after your `short`:
 
 | Variable | What |
 |---|---|
 | `WIDGET_ROOT` | Use this repo root instead of walking up for the anchor. |
 | `WIDGET_CACHE` | Put the cache here. The whole path, not a parent to append the namespace to. |
+| `WIDGET_STATE` | Put the registry and the marker here. The whole path, same as the cache. |
 | `WIDGET_NO_SELF_UPDATE` | Don't check whether the launcher itself has moved on. |
 | `WIDGET_WORKSPACE` | Set on a tool command, naming the workspace it acts on. |
 | `WIDGET_TOOL_ROOT` | Set alongside it, naming that tool's materialised root. |
+| `WIDGET_CONFIG` | Put the person's config directory here. The whole path, same as the cache. |
+| `WIDGET_CFG_MODEL_BASE` | One per setting, here `model.base`: override it, and read it on the engine's side. Dots in the key become underscores. |
+| `WIDGET_CONFIG_FILE` | Set on the engine, naming the person's settings file. |
 
 The last two are what a tool command inherits. A tool's code sits in a cache
 shared by every workspace on the machine and its data does not, so it can't

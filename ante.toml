@@ -21,10 +21,10 @@ maintainerEmail = "contact@hiisi.digital"
 contributorSelection = "commits"
 maxContributors = 3
 
-# Every directory that holds Rust, which for a library with no generated trees
-# and no fixtures is these two. A directory left out here still gets a header
-# the first time somebody writes one by hand, and then nothing keeps it current,
-# which is the whole thing ante exists to stop.
-include = ["src/**/*.rs", "tests/**/*.rs"]
+# Every directory that holds Rust: the sources and the tests of every crate
+# under `mock/crates/`, plus the lints mockspace compiles. A directory left out
+# here still gets a header the first time somebody writes one by hand, and then
+# nothing keeps it current, which is the whole thing ante exists to stop.
+include = ["mock/crates/*/src/**/*.rs", "mock/crates/*/tests/**/*.rs", "mock/lints/**/*.rs"]
 
 exclude = ["**/target/**"]

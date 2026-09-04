@@ -1,0 +1,23 @@
+[package]
+name = "renki-config"
+version = "0.0.1"
+edition = "2024"
+publish = true
+description = "A tool's configuration as contracts. Kinds and scopes as marker types, a typed setting and its erased row, a store contract, and a resolver with provenance. no_std, no alloc, one dependency."
+license = "MPL-2.0"
+homepage = "https://github.com/orgrinrt/renki"
+repository = "https://github.com/orgrinrt/renki"
+readme = "README.md"
+# The same floor as `renki`, for the same reason: the let-chains.
+rust-version = "1.88"
+categories = ["no-std", "config", "command-line-interface"]
+keywords = ["config", "settings", "no-std", "typestate", "toml"]
+include = ["src/**/*.rs", "tests/**/*.rs", "README.md", "LICENSE"]
+
+# notko's fallibility ladder, with the default features off so this builds on
+# the stable floor the launcher promises its installers.
+[dependencies]
+notko = { version = "0.0.1", default-features = false }
+
+[lib]
+doctest = true
