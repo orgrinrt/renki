@@ -58,22 +58,34 @@ case this exists for is `homma workspace`, which spawns a workspace where the
 cwd is not in one, so there is no config above the cwd, no root, no pin and
 no engine to build.
 
-The function gets an `Invocation`: the tool, the cwd, the root where one was
-found, the settings resolved from the two files, and the arguments after the
-name. It answers `Result<(), String>` the way a hook does, and a refusal is
-printed and exits nonzero the way `config`'s is. The settings arrive as the
-resolved rows the engine environment is built from, one per declared key with
-the canonical text and the source, so a command reads a value through the
-same kind an engine would and a list walks through `TextItems`. Nothing about
-the row changes for this beyond its visibility.
+The function gets an `Invocation`, read through accessors and built by nobody
+outside the crate: the tool, the cwd, the root where one was found, the
+settings resolved from the two files, and what followed the name with the
+launcher's own flags taken out wherever they sat, since `--dir`, `--engine`
+and `--cfg` are the launcher's before and after the name alike. It answers
+`Result<(), String>` the way a hook does, and a refusal is printed and exits
+nonzero the way `config`'s is. The settings arrive as the resolved rows the
+engine environment is built from, one per declared key with the canonical
+text and the source, so a command reads a value through the same kind an
+engine would and a list walks through `TextItems`. Nothing about the row
+changes for this beyond its visibility.
 
 A command is not a hook. It runs only when named, sees no pin and cannot reach
 the engine, since the engine may not be buildable where it runs. What the
 descriptor check refuses: an empty name, since the loop would match every
 bare argument; a name that is `locate`'s subcommand, or `config` on a tool
 with settings, since the crate's query is tried first and the tool's would
-never run; and two commands of one name. All of it is const and settles at
-build time with the rest of `Tool::defect`.
+never run; a name that is the directory flag, the engine flag, or `--cfg` on a
+tool with settings, since those come off the arguments before the table is
+looked at and the command would vanish, be refused as a flag with nothing
+after it, or be swallowed as a value; and two commands of one name. All of it
+is const and settles at build time with the rest of `Tool::defect`.
+
+The alternative was the consumer matching the name in its own `main` ahead of
+`renki::run`, with no change here. The table wins because the command gets
+the settings resolved by the same reader the engine environment comes from,
+and because the collision check above can only be made where the crate's own
+names are known, which a match in `main` runs before.
 
 ## The retried install
 

@@ -264,7 +264,8 @@ A tool can have questions of its own that the engine can't be asked, and
 `Tool::commands` is where they go: a name, a sentence and a function, tried
 right where `config` is, before the launcher goes looking for a root. The
 function gets the cwd, the root if there was one, the settings as resolved, and
-whatever followed the name, and it refuses the same way a hook does. The case
+whatever followed the name with the launcher's own flags taken out wherever
+they sat, and it refuses the same way a hook does. The case
 this was written for is a tool that makes a repository where there isn't one
 yet, which is exactly the place the engine can't run. It's not a hook, it runs
 only when named, and it can't reach the engine at all; a subcommand that needs
