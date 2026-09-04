@@ -452,3 +452,7 @@ fn s(v: &[&str]) -> Vec<std::ffi::OsString> {
 // their own by size.
 #[path = "lib_tests/locate_and_pins.rs"]
 mod locate_and_pins;
+
+// A tool's own commands, through the dispatch.
+#[path = "lib_tests/commands.rs"]
+mod commands;

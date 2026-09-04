@@ -143,8 +143,74 @@ pub struct Tool {
     /// Empty for a tool with nothing to configure, which also leaves the
     /// `config` subcommand to the engine.
     pub settings:        &'static [renki_config::Declared<crate::config::Toml>],
+    /// The subcommands this launcher answers itself, beside `locate` and
+    /// `config`, for the questions the engine cannot be asked. Tried where
+    /// `config` is, before a root is required, so one runs where there is no
+    /// repository at all. Empty for a tool with none. See [`Command`].
+    pub commands:        &'static [Command],
     /// The tool-specific parts, all optional.
     pub hooks:           Hooks,
+}
+
+/// A subcommand the launcher answers without the engine, declared by the
+/// tool.
+///
+/// `locate` and `config` are the crate's, fixed in name and in output. This
+/// is the tool's: a name, a sentence and a function, tried right where
+/// `config` is, after the launcher's own flags are off the arguments and
+/// before it goes looking for a root. The case it exists for is a command
+/// that makes a repository where there is none yet, which is exactly where
+/// the engine cannot run.
+///
+/// A command is not a hook. It runs only when named, sees no pin, and cannot
+/// reach the engine, since the engine may not be buildable where it runs. A
+/// subcommand that needs the engine belongs in the engine.
+#[derive(Debug, Clone, Copy)]
+pub struct Command {
+    /// The subcommand, as typed after the launcher's name.
+    pub name: &'static str,
+    /// One sentence, for whoever prints a listing.
+    pub doc:  &'static str,
+    /// What answers it. A refusal is printed under the tool's name and exits
+    /// nonzero, the way `config`'s is.
+    pub run:  fn(&Invocation<'_>) -> Result<(), String>,
+}
+
+/// What a [`Command`] is handed: everything the launcher knows at the point
+/// it stops looking for a root.
+pub struct Invocation<'a> {
+    /// The descriptor the command was declared on.
+    pub tool:     &'a Tool,
+    /// Where the launcher was run from.
+    pub cwd:      &'a Path,
+    /// The repository root, where the walk up from `cwd` found one. `None` is
+    /// a real answer here rather than a refusal: a command may be the thing
+    /// that makes the repository.
+    pub root:     Option<&'a Path>,
+    /// Every setting the tool declares, resolved from the flag, the variable,
+    /// the repository's file where one was found, the person's file and the
+    /// default, in that order. The text is the kind's canonical form, the
+    /// same bytes the engine reads out of its environment.
+    pub settings: &'a [crate::config::ResolvedSetting],
+    /// What followed the command's name on the command line.
+    pub args:     &'a [std::ffi::OsString],
+}
+
+impl Invocation<'_> {
+    /// The resolved text of one setting, by its dotted key.
+    ///
+    /// `None` only for a key the tool never declared, since every declared
+    /// key resolves to something, the default at least. A command asking for
+    /// its own tool's key gets `Some` every time, so the `None` arm is the
+    /// typo's, and a command that would rather not write that arm reads
+    /// through [`Invocation::setting`] once and keeps the text.
+    #[must_use]
+    pub fn setting(&self, key: &str) -> Option<&str> {
+        self.settings
+            .iter()
+            .find(|s| s.key() == key)
+            .map(|s| s.text())
+    }
 }
 
 /// Where a `version` pin is allowed to resolve the engine from.
@@ -543,8 +609,64 @@ impl Tool {
         locate:          Some(Locate::DEFAULT),
         self_update:     SelfUpdate::ChaseTheBranch,
         settings:        &[],
+        commands:        &[],
         hooks:           Hooks::NONE,
     };
+
+    /// The command `args` names, where the first argument is one of the
+    /// tool's own.
+    #[must_use]
+    pub fn command_named(&self, args: &[std::ffi::OsString]) -> Option<&'static Command> {
+        let first = args.first()?.to_str()?;
+        self.commands.iter().find(|c| c.name == first)
+    }
+
+    /// The first thing wrong with the command table, or `None`.
+    ///
+    /// An empty name is matched by every bare argument, so the launcher
+    /// answers the command instead of passing the argument to the engine. A
+    /// name the crate's own queries take is unreachable, since those are
+    /// tried first: `locate`'s subcommand, and `config` where the tool has
+    /// settings. Two commands of one name is the same defect between
+    /// themselves, decided by table order rather than by anything declared.
+    const fn commands_defect(&self) -> Option<&'static str> {
+        let mut i = 0;
+        while i < self.commands.len() {
+            let name = self.commands[i].name;
+            if name.is_empty() {
+                return Some(
+                    "a command's name is empty, so the launcher answers an empty argument \
+                     and the engine never sees it",
+                );
+            }
+            if let Some(l) = self.locate
+                && const_str_eq(name, l.subcommand)
+            {
+                return Some(
+                    "a command is named the same as locate's subcommand, which is tried first, \
+                     so the command never runs",
+                );
+            }
+            if !self.settings.is_empty() && const_str_eq(name, crate::config::query::SUBCOMMAND) {
+                return Some(
+                    "a command is named `config`, which a tool with settings answers first, \
+                     so the command never runs",
+                );
+            }
+            let mut j = 0;
+            while j < i {
+                if const_str_eq(name, self.commands[j].name) {
+                    return Some(
+                        "two commands share a name, so the second is unreachable and which \
+                         one runs is decided by table order",
+                    );
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+        None
+    }
 
     /// The file name of the binary the engine's build produces.
     #[must_use]
@@ -670,6 +792,9 @@ impl Tool {
             return Some(bad);
         }
         if let Some(bad) = self.config_keys_collide() {
+            return Some(bad);
+        }
+        if let Some(bad) = self.commands_defect() {
             return Some(bad);
         }
         None

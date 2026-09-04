@@ -129,7 +129,9 @@ pub use crate::tool::{
     Anchor,
     Check,
     Cli,
+    Command,
     Hooks,
+    Invocation,
     Locate,
     PinKeys,
     SelfUpdate,
@@ -394,6 +396,15 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
         return config::query::answer(tool, root.as_deref(), &cli, args);
     }
 
+    // And the tool's own, tried last of the three so the crate's queries keep
+    // their names. A root is looked for and not required: the command this
+    // exists for is the one that makes the repository, so `None` is handed
+    // on as an answer rather than turned into the refusal below.
+    if let Some(command) = tool.command_named(args) {
+        let root = discover::repo_root(tool);
+        return run_command(tool, command, root.as_deref(), &cli, &args[1 ..]);
+    }
+
     let root = discover::repo_root(tool).ok_or_else(|| discover::no_root(tool))?;
 
     // Keep the launcher itself current: branch installs only, hourly, opt-out.
@@ -542,6 +553,35 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Run one of the tool's own commands with everything the launcher knows at
+/// this point: the settings resolved from the two files, the root where one
+/// was found, and the arguments after the name.
+///
+/// The repository's file is read only where a root was found, the way the
+/// `config` query reads it, so a command run outside any repository sees the
+/// person's file and the defaults and nothing else.
+fn run_command(
+    tool: &Tool,
+    command: &Command,
+    root: Option<&Path>,
+    cli: &config::Cli,
+    args: &[OsString],
+) -> Result<(), String> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("the working directory cannot be read: {e}"))?;
+    let user_file = config::user_file(tool)?;
+    let repo_file = root.map(|r| r.join(tool.config_file));
+    let texts = config::read_texts(&user_file, repo_file.as_deref())?;
+    let settings = config::resolve_all(tool, cli, &texts)?;
+    (command.run)(&Invocation {
+        tool,
+        cwd: &cwd,
+        root,
+        settings: &settings,
+        args,
+    })
 }
 
 /// The pin: the config's own key, then whatever legacy fallback the tool

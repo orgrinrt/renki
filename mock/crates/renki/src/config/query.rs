@@ -190,7 +190,7 @@ impl core::fmt::Display for Canonical<'_> {
 
 /// The lines `config get` would print for every setting, for the tests.
 #[cfg(test)]
-pub(crate) fn lines(settings: &[super::Setting]) -> String {
+pub(crate) fn lines(settings: &[super::ResolvedSetting]) -> String {
     let mut out = String::new();
     for s in settings {
         out.push_str(s.key);
