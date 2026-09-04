@@ -105,6 +105,25 @@ fn declares_a_bin(manifest: &str) -> bool {
 /// asked for here is declared once, in `[package]`, above every other table, so
 /// the first match is the right one. A manifest that grew a second `description`
 /// under some other table would need a real parse instead.
+#[test]
+fn the_description_is_the_readme_s_tagline() {
+    // The description is the line the registry shows under the name and the
+    // tagline is the line the forge shows under the title, and a stranger
+    // reads one or the other first. They say the same thing, byte for byte:
+    // the first `>` line under the title, wherever the badge block puts it.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("no manifest");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("no readme");
+    let tagline = readme
+        .lines()
+        .skip_while(|l| !l.starts_with("# "))
+        .find(|l| l.starts_with("> "))
+        .expect("the readme carries no blockquote under its title")
+        .trim_start_matches("> ")
+        .trim();
+    assert_eq!(package_str(&manifest, "description"), tagline);
+}
+
 fn package_str<'a>(manifest: &'a str, key: &str) -> &'a str {
     let needle = format!("\n{key} = \"");
     let (_, rest) = manifest

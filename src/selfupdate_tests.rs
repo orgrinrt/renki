@@ -12,6 +12,23 @@ const CRATES_TOML: &str = "\
 ";
 
 #[test]
+fn a_reinstall_is_locked_to_the_launcher_s_own_lockfile() {
+    assert_eq!(
+        reinstall_args("ssh://git@github.com/o/r.git", "dev", "r-launcher"),
+        vec![
+            "install",
+            "--git",
+            "ssh://git@github.com/o/r.git",
+            "--branch",
+            "dev",
+            "r-launcher",
+            "--locked",
+            "--force",
+        ]
+    );
+}
+
+#[test]
 fn a_git_branch_install_is_parsed() {
     let src = installed_source_from("lch", CRATES_TOML).unwrap();
     assert_eq!(src.url, "ssh://git@github.com/o/r.git");

@@ -161,12 +161,17 @@ pub(crate) fn ensure_built(
 /// What the operator reads when no attempt produced a binary.
 ///
 /// The toolchain is named because it is a real cause the message otherwise
-/// hides. `cargo install` resolves the engine's dependencies fresh rather than
-/// from its committed lockfile, so a transitive crate can float to a version
-/// whose minimum rustc is above the one in effect, and the build then fails on
-/// a crate nobody in this repo named. The toolchain in effect is the launcher's
-/// own, since `cargo install` inherits this process's working directory: the
-/// consuming repo's `rust-toolchain.toml` governs, not the engine's.
+/// hides. The install is locked to the engine's committed lockfile, and a
+/// dependency that lockfile names can still want a rustc above the one in
+/// effect, so the build fails on a crate nobody in this repo named. The
+/// toolchain in effect is the launcher's own, since `cargo install` inherits
+/// this process's working directory: the consuming repo's
+/// `rust-toolchain.toml` governs, not the engine's.
+///
+/// The lockfile is named for the same reason. An engine that commits none
+/// gets a warning from cargo and a fresh resolution, which takes whatever the
+/// registry published since, and the operator cannot tell that from the
+/// output of a build that merely failed.
 ///
 /// Measured rather than reasoned: installing one engine over `--git` failed
 /// under rustc 1.94 on a transitive crate requiring 1.96, and succeeded
@@ -176,6 +181,7 @@ pub(crate) fn build_failure(engine_crate: &str, failures: &[String]) -> String {
         "could not build the {} engine for this pin; nothing was cached.\n  \
          tried, in order:\n    - {}\n  \
          the pin may be wrong, the release may not exist yet, the build may have broken, \
+         the engine may commit no lockfile and so have resolved fresh, \
          or the toolchain in effect here ({}) may be older than one of the engine's \
          dependencies requires.",
         engine_crate,
