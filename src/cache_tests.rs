@@ -149,71 +149,72 @@ fn a_working_directory_that_is_not_utf8_survives_the_handover() {
 }
 
 #[test]
-fn the_cache_root_prefers_xdg_and_falls_back_to_home() {
-    let r = cache_root_from(&T, None, Some("/x/cache".into()), Some("/home/u".into())).unwrap();
+fn the_roots_are_the_table_renki_dirs_answers_for_this_host() {
+    // The table itself is `renki-dirs`'s and tested there over every platform.
+    // What this crate adds is the reading: the three values arrive from the
+    // environment as `OsStr`, the tool's own variable wins as the whole path,
+    // the XDG one takes the namespace under it, and the platform default is
+    // whatever the host's column says.
+    use std::ffi::OsStr;
+    let os = |s: &'static str| Some(OsStr::new(s));
+    let r = root_from::<renki_dirs::Cache>(&T, None, os("/x/cache"), os("/home/u")).unwrap();
     assert_eq!(r, Path::new("/x/cache/tns"));
-
-    let r = cache_root_from(&T, None, None, Some("/home/u".into())).unwrap();
-    assert_eq!(r, Path::new("/home/u/.cache/tns"));
-    // an empty XDG is not a setting
-    let r = cache_root_from(&T, None, Some("".into()), Some("/home/u".into())).unwrap();
-    assert_eq!(r, Path::new("/home/u/.cache/tns"));
+    let r =
+        root_from::<renki_dirs::Cache>(&T, os("/mnt/big"), os("/x/cache"), os("/home/u")).unwrap();
+    assert_eq!(r, Path::new("/mnt/big"));
+    let r = root_from::<renki_dirs::State>(&T, os("/mnt/state"), None, os("/home/u")).unwrap();
+    assert_eq!(r, Path::new("/mnt/state"));
+    // an empty value is not a setting
+    let r = root_from::<renki_dirs::Cache>(&T, os(""), os(""), os("/home/u")).unwrap();
+    let want = if cfg!(target_os = "macos") {
+        "/home/u/Library/Caches/tns"
+    } else {
+        "/home/u/.cache/tns"
+    };
+    assert_eq!(r, Path::new(want));
+    // and the state never lands beside the cache, on this host or any
+    let c = root_from::<renki_dirs::Cache>(&T, None, None, os("/home/u")).unwrap();
+    let s = root_from::<renki_dirs::State>(&T, None, None, os("/home/u")).unwrap();
+    assert_ne!(c, s);
+    assert!(!s.starts_with(&c));
 }
 
 #[test]
-fn the_tools_own_cache_variable_wins_and_is_the_whole_path() {
-    // The asymmetry this closes: a user could say which repository to work
-    // on, through `<SHORT>_ROOT`, and could not say where several hundred
-    // megabytes of built engines were going to land. `XDG_CACHE_HOME` moves
-    // every other program's cache with it, which is a different request.
-    let r = cache_root_from(
-        &T,
-        Some("/mnt/big".into()),
-        Some("/x/cache".into()),
-        Some("/home/u".into()),
-    )
-    .unwrap();
-    assert_eq!(
-        r,
-        Path::new("/mnt/big"),
-        "the namespace was appended to a path that already names this tool's cache"
-    );
-
-    // it wins over the fallback too, not only over XDG
-    let r = cache_root_from(&T, Some("/mnt/big".into()), None, Some("/home/u".into())).unwrap();
-    assert_eq!(r, Path::new("/mnt/big"));
-
-    // an empty value is not a setting, the same as XDG's
-    let r = cache_root_from(&T, Some("".into()), None, Some("/home/u".into())).unwrap();
-    assert_eq!(r, Path::new("/home/u/.cache/tns"));
-
-    // and the name is the tool's own, so two launchers do not read each
-    // other's variable
+fn the_variables_are_the_tools_own_so_two_launchers_do_not_read_each_others() {
     assert_eq!(T.cache_env(), "T_CACHE");
+    assert_eq!(T.state_env(), "T_STATE");
     const OTHER: Tool = Tool {
         short: "widget",
         ..T
     };
     assert_eq!(OTHER.cache_env(), "WIDGET_CACHE");
+    assert_eq!(OTHER.state_env(), "WIDGET_STATE");
 }
 
 #[test]
-fn two_tools_never_share_a_cache_root() {
-    // the control on the namespace being a parameter at all: without it
-    // every tool builds into the same directory and one evicts the other's
-    // engines on its own collection pass.
-    const OTHER: Tool = Tool {
-        cache_namespace: "another",
-        ..T
-    };
-    let a = cache_root_from(&T, None, Some("/x".into()), None).unwrap();
-    let b = cache_root_from(&OTHER, None, Some("/x".into()), None).unwrap();
-    assert_ne!(a, b);
+fn a_value_that_is_not_text_is_refused_by_name_rather_than_replaced() {
+    // A directory whose bytes do not decode would print as a different
+    // directory, one that does not exist, under a name the operator cannot
+    // find on disk. The refusal says which variable.
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let raw = OsStr::from_bytes(b"/home/\xff\xfe");
+    let e = root_from::<renki_dirs::Cache>(&T, None, None, Some(raw)).unwrap_err();
+    assert!(e.contains("HOME"), "{e}");
+    let e = root_from::<renki_dirs::Cache>(&T, Some(raw), None, Some(OsStr::new("/home/u")))
+        .unwrap_err();
+    assert!(e.contains("T_CACHE"), "{e}");
+    let e = root_from::<renki_dirs::State>(&T, None, Some(raw), Some(OsStr::new("/home/u")))
+        .unwrap_err();
+    assert!(e.contains("XDG_STATE_HOME"), "{e}");
 }
 
 #[test]
-fn no_home_and_no_xdg_is_an_error_rather_than_a_guess() {
-    assert!(cache_root_from(&T, None, None, None).is_err());
+fn no_home_and_no_xdg_is_an_error_naming_the_kind_rather_than_a_guess() {
+    let e = root_from::<renki_dirs::Cache>(&T, None, None, None).unwrap_err();
+    assert!(e.contains("XDG_CACHE_HOME"), "{e}");
+    let e = root_from::<renki_dirs::State>(&T, None, None, None).unwrap_err();
+    assert!(e.contains("XDG_STATE_HOME"), "{e}");
 }
 
 #[test]

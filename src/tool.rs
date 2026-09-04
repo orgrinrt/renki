@@ -766,9 +766,18 @@ impl Tool {
 
     /// The environment variable naming this launcher's cache directory,
     /// overriding `$XDG_CACHE_HOME` and the namespace both: the short name
-    /// uppercased, plus `_CACHE`.
+    /// uppercased, plus `_CACHE`. Named by `renki-dirs`, so the launcher and
+    /// a tool that reads the table without the launcher agree.
     pub fn cache_env(&self) -> String {
-        format!("{}_CACHE", self.short.to_uppercase())
+        renki_dirs::EnvName::<renki_dirs::Cache>::of(renki_dirs::Short(self.short)).to_string()
+    }
+
+    /// The environment variable naming this launcher's state directory, where
+    /// the registry and the self-update marker live: the short name
+    /// uppercased, plus `_STATE`. Overrides `$XDG_STATE_HOME` and the
+    /// namespace both, the way `cache_env` does for the cache.
+    pub fn state_env(&self) -> String {
+        renki_dirs::EnvName::<renki_dirs::State>::of(renki_dirs::Short(self.short)).to_string()
     }
 
     /// The environment variable that opts out of launcher self-update.

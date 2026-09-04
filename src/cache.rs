@@ -21,62 +21,89 @@
 //! build and the exec, which the run re-materialises a bounded number of
 //! times.
 //!
-//! The cache lives under `~/.cache`, honouring `XDG_CACHE_HOME`. Never under
-//! `~/.config`, which is per-developer configuration rather than machine
-//! content that can be deleted and rebuilt.
+//! Where the cache is, and the state beside it, is `renki-dirs`'s table: the
+//! platform's own directory for each, with the tool's `<SHORT>_CACHE` and
+//! `<SHORT>_STATE` naming a whole path over it and the XDG variable for the
+//! kind over the default. The cache holds what a cleanup may take at any time
+//! and the launcher rebuilds. The state holds the registry and the self-update
+//! marker, which the launcher would behave differently without, so they do
+//! not sit where a cleanup takes them.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use notko::{Maybe, Outcome};
+use renki_dirs::{EnvName, Host, Kind, Namespace, Root, Short, Sources};
+
 use crate::hash::Fnv;
 use crate::pin::Resolved;
 use crate::tool::Tool;
 
-/// `<SHORT>_CACHE`, else `$XDG_CACHE_HOME/<namespace>`, else
-/// `~/.cache/<namespace>`.
+/// The cache root on this machine: `<SHORT>_CACHE`, else the XDG cache
+/// directory with the namespace under it, else the platform's default.
 pub(crate) fn cache_root(tool: &Tool) -> Result<PathBuf, String> {
-    cache_root_from(
-        tool,
-        std::env::var_os(tool.cache_env()),
-        std::env::var_os("XDG_CACHE_HOME"),
-        std::env::var_os("HOME"),
-    )
+    root_of::<renki_dirs::Cache>(tool)
 }
 
-/// Pure core of [`cache_root`]: env values passed in so it is testable without
+/// The state root on this machine, by the same precedence over `<SHORT>_STATE`
+/// and `XDG_STATE_HOME`.
+pub(crate) fn state_root(tool: &Tool) -> Result<PathBuf, String> {
+    root_of::<renki_dirs::State>(tool)
+}
+
+/// One kind's root, read off the environment. The table and the precedence are
+/// `renki-dirs`'s; what is this crate's is the reading and the one refusal the
+/// table cannot make, a value that is not text.
+fn root_of<K: Kind>(tool: &Tool) -> Result<PathBuf, String> {
+    let own = std::env::var_os(EnvName::<K>::of(Short(tool.short)).to_string());
+    let xdg = std::env::var_os(K::XDG_VAR);
+    let home = std::env::var_os("HOME");
+    root_from::<K>(tool, own.as_deref(), xdg.as_deref(), home.as_deref())
+}
+
+/// Pure core of [`root_of`]: the values passed in so it is testable without
 /// mutating process env (cargo runs tests in parallel threads, where `set_var`
 /// is a data race).
-fn cache_root_from(
+///
+/// A value that is not text is refused by name rather than replaced. The table
+/// prints a path as text, and a directory whose bytes do not decode would come
+/// back as a different directory, one that does not exist, reported under a
+/// name the operator cannot find on disk.
+fn root_from<K: Kind>(
     tool: &Tool,
-    own: Option<std::ffi::OsString>,
-    xdg: Option<std::ffi::OsString>,
-    home: Option<std::ffi::OsString>,
+    own: Option<&std::ffi::OsStr>,
+    xdg: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
 ) -> Result<PathBuf, String> {
-    // The tool's own variable is the whole path rather than a parent to join
-    // the namespace onto, because the request it answers is "put this tool's
-    // builds here" and a namespace appended is the launcher arguing with it.
-    // The root discovery override reads the same way, which is the asymmetry
-    // this closes: a user could say which repository to work on and not where
-    // several hundred megabytes of engines were going to land. Setting
-    // `XDG_CACHE_HOME` works and moves every other program's cache too, which
-    // is a different request.
-    if let Some(o) = own
-        && !o.is_empty()
-    {
-        return Ok(PathBuf::from(o));
+    fn text<'a>(name: &str, v: Option<&'a std::ffi::OsStr>) -> Result<Maybe<&'a str>, String> {
+        match v {
+            None => Ok(Maybe::Isnt),
+            Some(s) => {
+                s.to_str()
+                    .map(Maybe::Is)
+                    .ok_or_else(|| format!("{name} is set to something that is not text"))
+            },
+        }
     }
-    if let Some(x) = xdg
-        && !x.is_empty()
-    {
-        return Ok(PathBuf::from(x).join(tool.cache_namespace));
+    let sources = Sources {
+        own:  text(&EnvName::<K>::of(Short(tool.short)).to_string(), own)?,
+        xdg:  text(K::XDG_VAR, xdg)?,
+        home: text("HOME", home)?,
+    };
+    let ns = match Namespace::new(tool.cache_namespace) {
+        Outcome::Ok(ns) => ns,
+        Outcome::Err(e) => {
+            return Err(format!(
+                "the tool's cache namespace {:?} is not a directory name: {e:?}",
+                tool.cache_namespace
+            ));
+        },
+    };
+    match Root::<K, Host>::resolve(ns, sources) {
+        Outcome::Ok(root) => Ok(PathBuf::from(root.to_string())),
+        Outcome::Err(e) => Err(e.to_string()),
     }
-    let home = home
-        .filter(|h| !h.is_empty())
-        .ok_or_else(|| "neither XDG_CACHE_HOME nor HOME is set".to_string())?;
-    Ok(PathBuf::from(home)
-        .join(".cache")
-        .join(tool.cache_namespace))
 }
 
 fn builds_dir(root: &Path) -> PathBuf {

@@ -239,6 +239,7 @@ fn the_variables_the_readme_names_are_the_ones_a_launcher_reads() {
     // Neither half is an assertion on its own: the pairing is.
     assert_eq!(WIDGET.root_env(), "WIDGET_ROOT");
     assert_eq!(WIDGET.cache_env(), "WIDGET_CACHE");
+    assert_eq!(WIDGET.state_env(), "WIDGET_STATE");
     assert_eq!(WIDGET.no_self_update_env(), "WIDGET_NO_SELF_UPDATE");
 
     // The two a tool command inherits are derived by `extension::command` from
@@ -249,7 +250,12 @@ fn the_variables_the_readme_names_are_the_ones_a_launcher_reads() {
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let readme = std::fs::read_to_string(root.join("README.md")).expect("no readme");
-    let mut want = vec![WIDGET.root_env(), WIDGET.cache_env(), WIDGET.no_self_update_env()];
+    let mut want = vec![
+        WIDGET.root_env(),
+        WIDGET.cache_env(),
+        WIDGET.state_env(),
+        WIDGET.no_self_update_env(),
+    ];
     want.extend(spawned);
     assert_eq!(
         widget_variables_the_readme_names(&readme),

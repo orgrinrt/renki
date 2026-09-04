@@ -1,0 +1,30 @@
+[package]
+name = "renki-dirs"
+version = "0.0.1"
+edition = "2024"
+publish = true
+description = "Where a tool's files go, typed. Cache, state, config and data roots per platform, as marker types. no_std, no alloc, one dependency."
+license = "MPL-2.0"
+homepage = "https://github.com/orgrinrt/renki"
+repository = "https://github.com/orgrinrt/renki"
+readme = "README.md"
+# The same floor as `renki`, for the same reason: the let-chains.
+rust-version = "1.88"
+categories = ["no-std", "filesystem", "command-line-interface"]
+keywords = ["no_std", "xdg", "directories", "typestate", "renki"]
+# The tests ship, being about the crate rather than about this repository, and
+# the refusal's expected diagnostic ships with them or the compile-fail test
+# reports the case as unverified where the package lands.
+include = ["src/**/*.rs", "tests/**/*.rs", "tests/refusals/*.stderr", "README.md", "LICENSE"]
+
+# notko's fallibility ladder, with the default features off so this builds on
+# the stable floor the launcher promises its installers.
+[dependencies]
+notko = { version = "0.0.1", default-features = false }
+
+[dev-dependencies]
+trybuild = "1"
+
+[lib]
+name = "renki_dirs"
+path = "src/lib.rs"
