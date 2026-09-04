@@ -30,13 +30,22 @@ repository's `<config_file>` where the setting's scope allows it, the
 person's `<config root>/<config_file>`, then the default. A key the schema
 does not know is refused by name from any of those places, and a value the
 kind refuses is refused with its source named. The engine receives the result
-as `<SHORT>_CFG_<KEY>` per setting plus `<SHORT>_CONFIG` naming the person's
-file, the way it receives `--dir`, and never has two answers to choose from.
+as `<SHORT>_CFG_<KEY>` per setting plus `<SHORT>_CONFIG_FILE` naming the
+person's file, the way it receives `--dir`, and never has two answers to choose
+from. `<SHORT>_CONFIG` is the config directory's override, `renki-dirs`'s, and
+is a different variable. A tool with no settings gets none of this and keeps
+its arguments as they were, `--cfg` included, since that flag is then the
+engine's to read.
 
 `widget config` joins `widget locate` as a query the launcher answers without
 the engine, since the engine is what is being configured and may not build:
 `path`, `schema`, `get <key>`, `set <key> <value>` and `edit`. `get` prints
 the source beside the value. The output is `key=value` lines like `locate`.
+`set` and `edit` both create the person's config directory when it is not
+there yet, and `set` puts a key where a reader would look for it: a top-level
+key at the end of the top level, which is above the first table header when
+the file opens with one, and a dotted key at the end of its table, or in a new
+table at the end where the file has none.
 
 ## The retried install
 
@@ -45,4 +54,6 @@ failure that prompted it was a registry deleted under the build and the second
 attempt succeeded alone. Before the first attempt the launcher checks that
 `cargo` is on `PATH` and refuses naming that rather than failing inside
 cargo's output. Two attempts, then the existing failure message with the retry
-recorded in it.
+recorded in it. The engine's build in `materialise` and the launcher's own
+reinstall in `selfupdate` go through the same `install_with_retry`, after the
+same check.

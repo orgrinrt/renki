@@ -18,7 +18,9 @@ it over; and back to a `Literal` for a store to write. Every kind is stateless
 by construction, nothing on it is `self`. The kinds that ship: `Bool` to
 `bool`; `Int` to `i64`; `Text` and `PathText` to `&'a str`, the second
 refusing an empty one; `List<K>` to an iterator over `K`'s values, the
-store's own iterator through an associated type rather than a `Vec`; and
+store's own iterator through an associated type rather than a `Vec`, whose
+canonical text is `["a", "b"]` and which therefore refuses a text item
+holding a `"`, since the canonical form has no escape for one; and
 `Choice<C>` to a `&'static str` drawn from `C::OPTIONS`, where `C: Choices`
 is a marker a tool declares per closed set with the `choices!` macro.
 
