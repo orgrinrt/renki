@@ -21,10 +21,10 @@ maintainerEmail = "contact@hiisi.digital"
 contributorSelection = "commits"
 maxContributors = 3
 
-# Every directory that holds Rust, which for a library with no generated trees
-# and no fixtures is these two. A directory left out here still gets a header
-# the first time somebody writes one by hand, and then nothing keeps it current,
-# which is the whole thing ante exists to stop.
-include = ["src/**/*.rs", "tests/**/*.rs"]
+# Every directory that holds Rust: the launcher's two, and the same two under
+# `renki-dirs`, the second crate this repository ships. A directory left out
+# here still gets a header the first time somebody writes one by hand, and then
+# nothing keeps it current, which is the whole thing ante exists to stop.
+include = ["src/**/*.rs", "tests/**/*.rs", "renki-dirs/src/**/*.rs", "renki-dirs/tests/**/*.rs"]
 
 exclude = ["**/target/**"]
