@@ -40,7 +40,7 @@ contracts back out of its environment.
 
 ```toml
 [dependencies]
-renki-config = "0.0.0"
+renki-config = "0.0.1"
 ```
 
 A tool declares its settings as a static table of rows, each built from a

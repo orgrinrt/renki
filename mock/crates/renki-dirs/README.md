@@ -39,7 +39,7 @@ whole no-alloc surface, and it is enough: a `std` caller formats it into a
 
 ```toml
 [dependencies]
-renki-dirs = "0.0.0"
+renki-dirs = "0.0.1"
 ```
 
 ```rust
