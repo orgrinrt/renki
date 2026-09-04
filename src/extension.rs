@@ -794,6 +794,31 @@ pub struct CargoPlan {
 /// has nothing to hand it.
 pub struct Cargo;
 
+/// The whole argument list of one install: the attempt's own source selector
+/// and package, then `--locked`, the root and `--force`.
+///
+/// `--locked` because the source's lockfile is what its author built and
+/// tested, and an install that resolves afresh takes whatever the registry
+/// published since. One such crate, released the same morning, did not build
+/// on the toolchain the source pins, and every launcher on the machine stopped
+/// until the engine was installed by hand. A pin names a revision so the build
+/// is the same one every time; a fresh resolution is a different build wearing
+/// the revision's name.
+///
+/// Holds where the source commits a lockfile. A source without one gets a
+/// warning from cargo and the fresh resolution anyway, which is cargo's rule
+/// and not this crate's to change; `build_failure` names it as a cause.
+pub(crate) fn install_args(attempt: &[String], into: &Path) -> Vec<String> {
+    let mut args = Vec::with_capacity(attempt.len() + 5);
+    args.push("install".into());
+    args.extend(attempt.iter().cloned());
+    args.push("--locked".into());
+    args.push("--root".into());
+    args.push(into.display().to_string());
+    args.push("--force".into());
+    args
+}
+
 impl Backend for Cargo {
     type Plan = CargoPlan;
 
@@ -809,16 +834,13 @@ impl Backend for Cargo {
         crate::cache::rustc_fingerprint()
     }
 
-    /// `cargo install --root <into> --force`, per attempt, first success wins.
+    /// `cargo install <attempt> --locked --root <into> --force`, per attempt,
+    /// first success wins.
     fn materialise(plan: &Self::Plan, into: &Path) -> Result<(), String> {
         let mut failures = Vec::new();
         for attempt in &plan.attempts {
             let status = Command::new("cargo")
-                .arg("install")
-                .args(attempt)
-                .arg("--root")
-                .arg(into)
-                .arg("--force")
+                .args(install_args(attempt, into))
                 .status()
                 .map_err(|e| format!("could not run cargo install: {e}"))?;
             if !status.success() {

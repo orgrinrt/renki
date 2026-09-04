@@ -255,6 +255,51 @@ fn the_builtin_table_carries_both_shipped_backends() {
     assert!(r.get("git").is_some());
 }
 
+#[test]
+fn a_cargo_install_is_locked_to_the_source_s_own_lockfile() {
+    // The failure this pins: an install that resolves afresh takes whatever
+    // the registry published since the source was locked, and one such crate
+    // did not build on the toolchain the source pins.
+    let attempt = vec![
+        "--git".to_string(),
+        "https://x/y.git".to_string(),
+        "--rev".to_string(),
+        "abc".to_string(),
+        "y-engine".to_string(),
+    ];
+    let args = install_args(&attempt, Path::new("/cache/k"));
+    assert_eq!(args, vec![
+        "install",
+        "--git",
+        "https://x/y.git",
+        "--rev",
+        "abc",
+        "y-engine",
+        "--locked",
+        "--root",
+        "/cache/k",
+        "--force",
+    ]);
+    // the attempt's own arguments come first and whole, since cargo reads
+    // the package name positionally after the source selector; the four
+    // shapes the crate builds, per `pin.rs` and `engine.rs`
+    let shapes: [&[&str]; 3] = [
+        &["--path", "/src", "--target-dir", "/cache/k/target"],
+        &["--git", "https://x/y.git", "--tag", "0.2.0", "y-engine"],
+        &["y-engine", "--version", "0.2.0"],
+    ];
+    for shape in shapes {
+        let attempt: Vec<String> = shape.iter().map(|s| s.to_string()).collect();
+        let args = install_args(&attempt, Path::new("/cache/k"));
+        assert_eq!(&args[1 .. 1 + shape.len()], attempt.as_slice(), "{shape:?}");
+        assert_eq!(
+            &args[1 + shape.len() ..],
+            ["--locked", "--root", "/cache/k", "--force"],
+            "{shape:?}"
+        );
+    }
+}
+
 // --- locating ------------------------------------------------------------
 
 #[test]

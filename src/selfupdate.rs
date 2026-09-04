@@ -163,9 +163,28 @@ fn mark_checked(marker: &Path, now: u64) {
     let _ = std::fs::write(marker, now.to_string());
 }
 
+/// The whole argument list of a launcher reinstall: the branch it was
+/// installed from, the launcher crate, and `--locked`, for the reason
+/// `extension::install_args` gives.
+pub(crate) fn reinstall_args(url: &str, branch: &str, launcher_crate: &str) -> Vec<String> {
+    [
+        "install",
+        "--git",
+        url,
+        "--branch",
+        branch,
+        launcher_crate,
+        "--locked",
+        "--force",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
     let status = std::process::Command::new("cargo")
-        .args(["install", "--git", url, "--branch", branch, tool.launcher_crate, "--force"])
+        .args(reinstall_args(url, branch, tool.launcher_crate))
         .status()
         .map_err(|e| format!("could not run cargo install: {e}"))?;
     if status.success() {

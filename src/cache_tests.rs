@@ -30,12 +30,16 @@ fn the_build_failure_names_every_cause_including_the_toolchain() {
         msg.contains("a failed") && msg.contains("b failed"),
         "{msg}"
     );
-    // the four causes, the last of which is the one an operator cannot see
-    // from the cargo output: `cargo install` resolves fresh rather than
-    // from the engine's committed lockfile, so a transitive crate floats to
-    // a version whose minimum rustc is above the one in effect, and the
-    // failure then names a crate nobody in the repo chose.
-    for cause in ["pin may be wrong", "release may not exist", "build may have broken"] {
+    // the five causes, the last two of which an operator cannot see from the
+    // cargo output: an engine committing no lockfile resolves fresh under a
+    // warning, and a locked dependency can still want a rustc above the one
+    // in effect, so the failure names a crate nobody in the repo chose.
+    for cause in [
+        "pin may be wrong",
+        "release may not exist",
+        "build may have broken",
+        "commit no lockfile",
+    ] {
         assert!(msg.contains(cause), "missing `{cause}`: {msg}");
     }
     assert!(msg.contains("toolchain in effect"), "{msg}");
