@@ -1,0 +1,12 @@
+# The same nightly the rest of the stack pins, so `cargo fmt` here reproduces
+# what `.shared/configs/rustfmt.toml` describes. Stable silently discards 49 of
+# that file's 76 keys, which is 120 diff hunks of disagreement rather than a
+# formatting anybody can check.
+#
+# It does not reach consumers. `include` in `Cargo.toml` is an allowlist and
+# this file is not on it, so the published crate carries no toolchain file and
+# builds on whatever the installer already has. `rust-version` is what states
+# the bar for them.
+[toolchain]
+channel = "nightly-2026-05-28"
+components = ["rustfmt", "clippy", "rust-src"]

@@ -1,0 +1,83 @@
+# renki-config. Design
+
+The contracts a tool's configuration is declared, read and written through.
+The launcher resolves every setting once from five places in a fixed order
+and hands the engine the result, the way it hands over `--dir`; a gui, a cli
+and a hand edit all go through one schema and one file. This crate is the
+schema, the store contract and the resolver, and nothing else: it reads no
+file and no environment, allocates nothing, borrows every string from text
+the caller holds, and speaks notko's `Outcome` and `Maybe`. The launcher
+implements the store and does the reading.
+
+## Kinds, as types
+
+`Kind` is a trait over marker types, with a borrowed associated value type
+`Value<'a>`, a `NAME` the schema prints, and three associated functions: from
+text, as a flag or a variable carries it; from a `Literal`, as a store hands
+it over; and back to a `Literal` for a store to write. Every kind is stateless
+by construction, nothing on it is `self`. The kinds that ship: `Bool` to
+`bool`; `Int` to `i64`; `Text` and `PathText` to `&'a str`, the second
+refusing an empty one; `List<K>` to an iterator over `K`'s values, the
+store's own iterator through an associated type rather than a `Vec`; and
+`Choice<C>` to a `&'static str` drawn from `C::OPTIONS`, where `C: Choices`
+is a marker a tool declares per closed set with the `choices!` macro.
+
+`Literal<'a, L>` is the seam between a store and a kind: `Bool`, `Int`,
+`Str(&'a str)` and `List(L)`, with `L` the store's list iterator. A store
+turns its node into one, a kind turns one into its value, and neither knows
+the other. `BadValue` is the refusal, carrying the kind's name and the text
+offered.
+
+## Scopes, as types
+
+`Scope` is a trait over `User`, `Repo` and `Either`, each saying whether the
+person's file and the repository's file are read for a setting of that
+scope. A repository file carrying a person's setting is refused by name from
+the table the declaration filled in, rather than by a check somebody
+remembered to write.
+
+## The setting and its row
+
+`Setting<K, S>` is one setting, typed: a dotted key, a default in the kind's
+text form, and one sentence of documentation. Its `row` is a `const fn`
+producing `Declared`, the erased shape a `Tool` carries in one static slice
+whatever the kinds of its settings: the kind's and scope's names, the scope's
+two booleans, the default, the doc, and the kind's two parsers as function
+pointers, so the row still checks a value the way its type would. `Declared`
+is built by `Setting::row` and nothing else, which is what keeps the pointers
+and the names in agreement, and `Declared::defect` is the descriptor check: a
+key that is not a dotted identifier, two rows sharing a key, or a default the
+row's own kind refuses.
+
+## The store
+
+`Store` is the backend contract, implemented by marker types. It names the
+format and its extension, parses text into a borrowed `Document<'a>`, answers
+a dotted key as a `Literal` or `Isnt`, iterates the keys a document holds so
+an unknown one is refused by name, and writes one key into text it is given,
+into a `core::fmt::Write` sink, keeping everything else in that text byte for
+byte, comments included. TOML is the store that ships, in the launcher, since
+parsing TOML is not a `no_std` job here; a second store is an impl of this
+trait and nothing more.
+
+## Resolution and provenance
+
+`Source` is the closed set of places a value comes from: `Flag`, `Env`,
+`Repo`, `User`, `Default`, in that precedence. `resolve` is generic over the
+store and over how the caller answers a flag and a variable by key, takes the
+two documents as `Maybe`s, and yields per setting a `Resolved<'a>`: the key,
+the literal, and the source that won. A key present in a file that no row
+declares is refused by name; a user-only key in the repository file is
+refused by name; a value a kind refuses is refused with its source named.
+`env_key` renders a setting's variable name, `<SHORT>_CFG_<KEY>` with dots
+to underscores, into a caller's sink, so the launcher and an engine in rust
+agree on it without either allocating.
+
+## What stays with the launcher
+
+Reading files and the environment, the TOML store, the `--cfg` flag, the
+`config` query's five verbs, `$EDITOR`, and the `String` diagnostics the
+operator reads. All of it is `std`, all of it is renki's, and none of it is
+reachable from here: the forbidden-imports lint refuses `renki::*` in this
+crate, and `no-std`, `no-alloc`, `no-bare-result` and `no-bare-option` refuse
+the rest.
