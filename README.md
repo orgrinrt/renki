@@ -61,7 +61,7 @@ Or in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-renki = "0.0.2"
+renki = "0.0.3"
 ```
 
 Do pin the exact version rather than a range. `0.0.x` releases are incompatible
