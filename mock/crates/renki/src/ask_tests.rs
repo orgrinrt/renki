@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::path::Path;
 
 use super::*;
 
@@ -40,10 +41,80 @@ fn a_child_writing_more_than_a_pipe_holds_is_not_stalled() {
     assert_eq!(out.stdout.len(), 1_000_000);
 }
 
+/// Set in a child of the test binary, which then runs the one test it names.
+const CHILD: &str = "RENKI_ASK_CHILD";
+
+/// Run the ignored test `name` again as a child of the test binary, in `dir`
+/// with `env` set, every ssh setting and the global and system configuration
+/// cleared, and stdin a pipe held open until it exits. What it printed.
+fn child_test(name: &str, dir: &Path, env: &[(&str, &str)]) -> String {
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child
+        .args([
+            "--exact",
+            &format!("ask::tests::{name}"),
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .current_dir(dir)
+        .env(CHILD, "1")
+        .env_remove("GIT_SSH_COMMAND")
+        .env_remove("GIT_SSH")
+        .env_remove("GIT_DIR")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in env {
+        child.env(k, v);
+    }
+    let mut running = child.spawn().unwrap();
+    // Held, and so open, until the child is done.
+    let held = running.stdin.take();
+    let out = running.wait_with_output().unwrap();
+    drop(held);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The value the child printed as `name=`.
+fn printed(stdout: &str, name: &str) -> String {
+    stdout
+        .lines()
+        .find_map(|l| l.strip_prefix(&format!("{name}=")))
+        .unwrap_or_else(|| panic!("the child printed no {name}: {stdout}"))
+        .to_string()
+}
+
 #[test]
-fn a_child_reading_stdin_reads_end_of_file_rather_than_waiting() {
-    let out = run_within(sh("cat; echo done"), Duration::from_secs(5), "x").unwrap();
-    assert_eq!(out.stdout, b"done\n");
+fn a_child_reading_stdin_reads_end_of_file_where_stdin_never_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = child_test("stdin_reports_itself", dir.path(), &[]);
+    assert_eq!(printed(&out, "read"), "\"done\\n\"");
+}
+
+#[test]
+#[ignore = "run as a child by child_test, whose stdin is a pipe it holds open"]
+fn stdin_reports_itself() {
+    assert!(
+        std::env::var_os(CHILD).is_some(),
+        "run only as a child, by `child_test`"
+    );
+    // A child inheriting this process's stdin would wait on the open pipe
+    // until the deadline and come back as an error.
+    let out = run_within(sh("cat; echo done"), Duration::from_secs(2), "reader");
+    println!();
+    println!(
+        "read={:?}",
+        out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_else(|e| e)
+    );
 }
 
 #[test]
@@ -148,12 +219,35 @@ fn env_of(git: &Command, key: &str) -> Option<OsString> {
 }
 
 #[test]
-fn quiet_git_never_asks_for_a_credential_whatever_ssh_is() {
+fn quiet_git_turns_the_prompt_and_a_helpers_window_off_whatever_ssh_is() {
     for sources in [Sources::silent(), Sources::of(Some("ssh -i key"), None, None)] {
-        let git = quiet_git(&sources, ASK_DEADLINE);
+        let mut git = quiet_git(&sources, ASK_DEADLINE);
         assert_eq!(git.get_program(), "git");
         assert_eq!(env_of(&git, "GIT_TERMINAL_PROMPT"), Some("0".into()));
+        // Ahead of the subcommand, where git reads a global option.
+        git.arg("ls-remote");
+        let args: Vec<_> = git.get_args().collect();
+        assert_eq!(args, ["-c", "credential.interactive=never", "ls-remote"]);
     }
+}
+
+#[test]
+fn the_git_that_runs_reads_credential_interactive_as_never() {
+    // What git itself makes of the argument, with no configuration of anybody's
+    // underneath: the setting a helper is handed is the one this reads back.
+    let dir = tempfile::tempdir().unwrap();
+    let mut git = quiet_git(&Sources::silent(), ASK_DEADLINE);
+    git.current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["config", "--get", "credential.interactive"]);
+    let out = run_within(git, ASK_DEADLINE, "config").unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "never");
 }
 
 #[test]
@@ -277,4 +371,128 @@ fn a_configuration_too_slow_or_failing_reads_as_nothing_set() {
         configured_value(sh("echo 'ssh -i key'; exit 1"), ASK_DEADLINE),
         None
     );
+}
+
+// --- this process, read from a child of the test binary --------------------------
+
+/// `git` in `dir` with nobody's configuration but the repository's own.
+fn git_in(dir: &Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git {args:?}");
+}
+
+fn sources_in(dir: &Path, env: &[(&str, &str)]) -> [String; 3] {
+    let out = child_test("this_process_reports_itself", dir, env);
+    ["ssh_command", "ssh", "core"].map(|name| printed(&out, name))
+}
+
+fn batch_in(dir: &Path, env: &[(&str, &str)]) -> String {
+    printed(
+        &child_test("this_process_reports_itself", dir, env),
+        "batch",
+    )
+}
+
+#[test]
+#[ignore = "run as a child by child_test, which reads what it prints"]
+fn this_process_reports_itself() {
+    assert!(
+        std::env::var_os(CHILD).is_some(),
+        "run only as a child, by `child_test`"
+    );
+    let p = ThisProcess;
+    // The harness prints the test's name with no newline before its output.
+    println!();
+    println!("ssh_command={:?}", p.ssh_command());
+    println!("ssh={:?}", p.ssh());
+    println!("core={:?}", p.core_ssh_command(ASK_DEADLINE));
+    println!(
+        "batch={:?}",
+        env_of(&quiet_git(&p, ASK_DEADLINE), "GIT_SSH_COMMAND")
+    );
+}
+
+#[test]
+fn this_process_reads_both_variables_and_the_clone_it_runs_in() {
+    let dir = tempfile::tempdir().unwrap();
+    git_in(dir.path(), &["init", "-q"]);
+    assert_eq!(sources_in(dir.path(), &[]), ["None", "None", "None"]);
+    assert_eq!(
+        sources_in(dir.path(), &[
+            ("GIT_SSH_COMMAND", "ssh -i one"),
+            ("GIT_SSH", "/bin/two")
+        ]),
+        [r#"Some("ssh -i one")"#, r#"Some("/bin/two")"#, "None"]
+    );
+    git_in(dir.path(), &["config", "core.sshCommand", "ssh -i three"]);
+    assert_eq!(sources_in(dir.path(), &[]), [
+        "None",
+        "None",
+        r#"Some("ssh -i three")"#
+    ]);
+}
+
+#[test]
+fn this_process_puts_ssh_in_batch_mode_only_in_a_clone_that_says_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    git_in(dir.path(), &["init", "-q"]);
+    assert_eq!(batch_in(dir.path(), &[]), r#"Some("ssh -o BatchMode=yes")"#);
+    assert_eq!(batch_in(dir.path(), &[("GIT_SSH", "/bin/two")]), "None");
+    // Nothing set over it, so git reads the one the environment carries.
+    assert_eq!(
+        batch_in(dir.path(), &[("GIT_SSH_COMMAND", "ssh -i one")]),
+        "None"
+    );
+    git_in(dir.path(), &["config", "core.sshCommand", "ssh -i three"]);
+    assert_eq!(batch_in(dir.path(), &[]), "None");
+}
+
+// --- the wrapper both callers reach ----------------------------------------------
+
+/// A repository in `dir` with one commit on `dev`, and that commit.
+fn repository_with_dev(dir: &Path) -> String {
+    git_in(dir, &["init", "-q", "-b", "dev"]);
+    git_in(dir, &[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+    ]);
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn the_launchers_own_ask_answers_a_branch_head_from_a_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = repository_with_dev(dir.path());
+    let url = format!("file://{}", dir.path().display());
+    assert_eq!(crate::pin::ls_remote_head(&url, "dev"), Ok(head));
+}
+
+#[test]
+fn the_launchers_own_ask_says_a_missing_branch_is_not_there() {
+    let dir = tempfile::tempdir().unwrap();
+    repository_with_dev(dir.path());
+    // A tag of the name asked for is not the branch, and is not answered as it.
+    git_in(dir.path(), &["tag", "main"]);
+    let url = format!("file://{}", dir.path().display());
+    let why = crate::pin::ls_remote_head(&url, "main").unwrap_err();
+    assert!(why.contains("branch 'main' not found"), "{why}");
 }
