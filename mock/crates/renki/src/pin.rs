@@ -249,18 +249,35 @@ fn read_resolution(path: &Path) -> Option<(u64, String)> {
 }
 
 pub(crate) fn ls_remote_head(url: &str, branch: &str) -> Result<String, String> {
+    ls_remote_head_from(
+        &crate::ask::ThisProcess,
+        url,
+        branch,
+        crate::ask::ASK_DEADLINE,
+    )
+}
+
+/// The head of `branch` on `url`, with one `deadline` over reading how ssh is
+/// configured and the listing both, so the listing gets what the read left.
+pub(crate) fn ls_remote_head_from(
+    sources: &impl crate::ask::SshSources,
+    url: &str,
+    branch: &str,
+    deadline: std::time::Duration,
+) -> Result<String, String> {
+    let started = std::time::Instant::now();
     // The full ref, because a bare name also matches `refs/tags/<name>` and
     // which one wins is then down to the order the remote lists them. Built
     // once and used for both the argument and the message, so the message
     // cannot describe a different question than the one that was asked.
     let refspec = format!("refs/heads/{branch}");
-    let out = std::process::Command::new("git")
-        .args(["ls-remote", url, &refspec])
-        .output()
-        .map_err(|e| format!("could not run git ls-remote: {e}"))?;
+    let what = format!("git ls-remote {url} {refspec}");
+    let mut git = crate::ask::quiet_git(sources, deadline);
+    git.args(["ls-remote", url, &refspec]);
+    let out = crate::ask::run_within(git, deadline.saturating_sub(started.elapsed()), &what)?;
     if !out.status.success() {
         return Err(format!(
-            "git ls-remote {url} {refspec} failed: {}",
+            "{what} failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }

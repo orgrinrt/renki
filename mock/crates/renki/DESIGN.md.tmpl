@@ -98,3 +98,33 @@ cargo's output. Two attempts, then the existing failure message with the retry
 recorded in it. The engine's build in `materialise` and the launcher's own
 reinstall in `selfupdate` go through the same `install_with_retry`, after the
 same check.
+
+## Asking a remote for a branch head
+
+A branch pin's head and the launcher's own head are both read with
+`git ls-remote`, through `ls_remote_head`, and it answers within five seconds
+or not at all. The five seconds are one deadline over the whole ask, reading
+how ssh is configured included, so the listing gets what the read left. Past
+the deadline the child is killed and the call returns an error naming the
+deadline, which both callers already take as a remote that
+could not be reached: a branch pin falls back to its last resolution, the
+self-update leaves the installed launcher alone. Waiting for git to give up
+instead meant a network dropping packets stalled every launch for as long as
+git took, and the fallback that exists for that network only started after.
+
+git never asks for a credential: `GIT_TERMINAL_PROMPT` is `0` and stdin is
+closed. ssh runs in `BatchMode` only where nothing has said how ssh runs: not
+`GIT_SSH_COMMAND`, not `GIT_SSH`, and not `core.sshCommand`, read in that order
+and only as far as the first that answers, so the configuration is read only
+when the environment says nothing. Setting the first over either of the others
+would override it, since git ranks it above both, and the key or agent somebody
+chose there would be lost. Where ssh is configured it is left alone, so it may
+still ask for a passphrase on the terminal, and the deadline holds over that
+too: a key wanting its passphrase is one more way of not answering.
+
+The child's output goes to two scratch files rather than pipes, removed once
+read, so a child writing more than a pipe holds cannot stall on a launcher
+that is only waiting for it to exit. The answer is what the child had written
+when it exited: something it leaves running with its output still open, an ssh
+control master say, is not waited for at all. Only the child is killed at the
+deadline; what it started finishes on its own.
