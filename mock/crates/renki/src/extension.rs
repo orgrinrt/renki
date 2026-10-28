@@ -519,16 +519,18 @@ pub fn cache_key(descriptor: &Descriptor, backend: &Registered) -> Result<String
 ///
 /// # Why there is no lock
 ///
-/// The launcher half holds none either, and says so, because `cargo install
-/// --root` takes cargo's own lock on the install root. That is a true statement
-/// about exactly one backend and it stops being true here.
+/// The launcher half does hold one, over its cargo build, because `cargo
+/// install --root` locks the install root only for the final move. That is a
+/// statement about exactly one backend and it stops being true here.
 ///
 /// So this does not take a lock; it makes one unnecessary. The backend
 /// materialises into a scratch directory of its own, and the finished directory
 /// is then moved into place with a single rename. Two callers racing on the same
 /// key both do the work and one rename wins, which costs a duplicated fetch in a
-/// rare case. A lock would trade that for a lock file to leak, a stale one to
-/// detect, and a failure mode where one crashed process blocks every other.
+/// rare case. A lock would trade that for a lock file to leave behind and a
+/// failure mode where one crashed process blocks every other, which the
+/// launcher's operating-system lock avoids by going when its holder does, and
+/// which a fetch cheap enough to repeat does not need.
 ///
 /// The scratch is named per call rather than per process, since this takes
 /// shared references and is `pub`, so several threads reach one key at once and
@@ -787,8 +789,8 @@ pub struct CargoPlan {
     /// Where cargo keeps its compiled intermediates, passed as `--target-dir`.
     /// Cargo's own install otherwise compiles in a temporary directory that is
     /// gone with the process, so a killed build starts over; named, it resumes,
-    /// and a build of a new revision recompiles only what moved. Cargo's lock
-    /// on the directory also keeps two builds sharing it from running at once.
+    /// and a build of a new revision recompiles only what moved. Builds sharing
+    /// it take turns, which the launcher's own lock over it guarantees.
     pub target_dir: PathBuf,
     /// The directory cargo runs in, when it is not the process's own. A
     /// toolchain file decides which rustc answers in a directory, so a build

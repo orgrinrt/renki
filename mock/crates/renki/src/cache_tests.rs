@@ -467,7 +467,7 @@ fn the_old_root_is_the_xdg_column_whatever_the_host_and_the_own_variable_wins_th
 }
 
 #[test]
-fn a_second_launcher_on_the_same_key_waits_for_the_first_build() {
+fn the_build_lock_is_exclusive_per_key_and_released_on_drop() {
     // The lock is what stops two launchers compiling one engine: while the
     // first holds it the second cannot take it, and it can once the first lets
     // go. A different key is a different lock, the control that makes the
@@ -519,6 +519,10 @@ fn a_waiter_finds_the_binary_the_holder_built() {
     let root = dir.path().to_path_buf();
     let waiter = std::thread::spawn(move || ensure_built(&T, &root, key, &none, &root));
     std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        !waiter.is_finished(),
+        "the waiter did not wait, so it never reached the re-check"
+    );
     std::fs::write(bin.join("engine"), b"#!/bin/sh\n").unwrap();
     drop(holder);
     assert_eq!(waiter.join().unwrap().unwrap(), bin.join("engine"));

@@ -12,12 +12,14 @@
 //! run once per launcher; [`ensure_built`] therefore holds an advisory lock on
 //! `<cache>/builds/<key>.lock` across the whole build, and a launcher that
 //! waited on it finds the binary already there. Keys differ per url, revision
-//! and toolchain, so launchers on different keys do not contend at all.
+//! and toolchain, so they have different install roots, but they take turns on
+//! the shared target directory below.
 //!
 //! The toolchain in the key and the toolchain that builds are the one that
 //! answers in the repo's root, so a toolchain file there decides both. The
 //! build keeps one cargo target directory at `<cache>/target` for every key, so
-//! a killed build resumes and a new revision recompiles only what moved.
+//! a killed build resumes and a new revision recompiles only what moved. It is not collected, and
+//! removing it costs a slower next build and nothing else.
 //!
 //! The one interleaving that is handled beside the lock is a collection pass
 //! evicting a build between the build and the exec, which the run
@@ -311,7 +313,12 @@ pub(crate) fn ensure_built(
     // One build per key across every launcher on the machine. Held until this
     // function returns, and released by the kernel if the process dies.
     let _held = BuildLock::take(&builds_dir(cache_root), key, tool.short)?;
-    // Whoever held it may have built the engine while this waited.
+    // Every key's install uplifts through the one shared target directory and
+    // cargo copies from there after it has let go of its own lock on it, so a
+    // second key compiling in between would put its binary under this key.
+    // One lock over the whole shared directory, inside the key's.
+    let _target = BuildLock::take(&builds_dir(cache_root), "target", tool.short)?;
+    // Whoever held the key may have built the engine while this waited.
     if bin.is_file() {
         return Ok(bin);
     }
@@ -339,9 +346,8 @@ pub(crate) fn ensure_built(
 /// hides. The install is locked to the engine's committed lockfile, and a
 /// dependency that lockfile names can still want a rustc above the one in
 /// effect, so the build fails on a crate nobody in this repo named. The
-/// toolchain in effect is the launcher's own, since `cargo install` inherits
-/// this process's working directory: the consuming repo's
-/// `rust-toolchain.toml` governs, not the engine's.
+/// toolchain in effect is the one the plan's directory selects, the consuming
+/// repo's root, so its `rust-toolchain.toml` governs, not the engine's.
 ///
 /// The lockfile is named for the same reason. An engine that commits none
 /// gets a warning from cargo and a fresh resolution, which takes whatever the
