@@ -465,3 +465,61 @@ fn the_old_root_is_the_xdg_column_whatever_the_host_and_the_own_variable_wins_th
         "/mnt/big"
     );
 }
+
+#[test]
+fn a_second_launcher_on_the_same_key_waits_for_the_first_build() {
+    // The lock is what stops two launchers compiling one engine: while the
+    // first holds it the second cannot take it, and it can once the first lets
+    // go. A different key is a different lock, the control that makes the
+    // refusal about the key.
+    let dir = tempfile::tempdir().unwrap();
+    let builds = builds_dir(dir.path());
+    let first = BuildLock::take(&builds, "aaaa", "t").unwrap();
+
+    let other = std::fs::OpenOptions::new()
+        .write(true)
+        .open(builds.join("aaaa.lock"))
+        .unwrap();
+    assert!(
+        matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "a second holder got the lock while the first still had it"
+    );
+
+    let different = BuildLock::take(&builds, "bbbb", "t").unwrap();
+    drop(different);
+
+    drop(first);
+    assert!(
+        other.try_lock().is_ok(),
+        "the lock was not released on drop"
+    );
+}
+
+#[test]
+fn a_waiter_finds_the_binary_the_holder_built() {
+    // The re-check after the lock: a launcher that waited must not build again.
+    // No attempts, so a build cannot succeed; returning the path is the only
+    // way this passes.
+    let dir = tempfile::tempdir().unwrap();
+    let key = "cafecafecafecafe";
+    let builds = builds_dir(dir.path());
+    let holder = BuildLock::take(&builds, key, "t").unwrap();
+    let bin = builds.join(key).join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+
+    let none = Resolved {
+        pin:         Pin {
+            url:       "u".into(),
+            reference: Reference::Rev("r".into()),
+        },
+        key_rev:     "r".into(),
+        attempts:    vec![],
+        version_tag: String::new(),
+    };
+    let root = dir.path().to_path_buf();
+    let waiter = std::thread::spawn(move || ensure_built(&T, &root, key, &none));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    std::fs::write(bin.join("engine"), b"#!/bin/sh\n").unwrap();
+    drop(holder);
+    assert_eq!(waiter.join().unwrap().unwrap(), bin.join("engine"));
+}

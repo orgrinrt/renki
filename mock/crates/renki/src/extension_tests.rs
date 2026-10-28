@@ -279,12 +279,14 @@ fn a_cargo_install_is_locked_to_the_source_s_own_lockfile() {
         "--root",
         "/cache/k",
         "--force",
+        "--target-dir",
+        "/cache/k/target",
     ]);
     // the attempt's own arguments come first and whole, since cargo reads
     // the package name positionally after the source selector; the four
     // shapes the crate builds, per `pin.rs` and `engine.rs`
     let shapes: [&[&str]; 3] = [
-        &["--path", "/src", "--target-dir", "/cache/k/target"],
+        &["--path", "/src"],
         &["--git", "https://x/y.git", "--tag", "0.2.0", "y-engine"],
         &["y-engine", "--version", "0.2.0"],
     ];
@@ -294,7 +296,7 @@ fn a_cargo_install_is_locked_to_the_source_s_own_lockfile() {
         assert_eq!(&args[1 .. 1 + shape.len()], attempt.as_slice(), "{shape:?}");
         assert_eq!(
             &args[1 + shape.len() ..],
-            ["--locked", "--root", "/cache/k", "--force"],
+            ["--locked", "--root", "/cache/k", "--force", "--target-dir", "/cache/k/target"],
             "{shape:?}"
         );
     }
@@ -504,13 +506,7 @@ fn a_cargo_install_that_succeeds_without_the_binary_is_a_failure() {
     std::fs::create_dir_all(&into).unwrap();
     let plan = |bin: &str| {
         CargoPlan {
-            attempts:   vec![
-                "--path".into(),
-                src.display().to_string(),
-                "--target-dir".into(),
-                into.join("target").display().to_string(),
-            ]
-            .pipe_one(),
+            attempts:   vec!["--path".into(), src.display().to_string()].pipe_one(),
             bin:        bin.into(),
             crate_name: "alpha".into(),
         }

@@ -7,19 +7,19 @@
 //!
 //! Each distinct compilation input (the engine's url and rev) is built once into
 //! `<cache>/builds/<key>/bin/<engine>` and shared by every repo pinned to it.
-//! This crate holds no lock of its own. What it relies on is narrower than
-//! that sounds and is worth stating exactly: `cargo install --root` takes
-//! cargo's own lock on the install root and moves the finished binary into
-//! place, so two launchers resolving the same key either serialise on that
-//! lock or find the binary already there. Keys differ per url, revision and
-//! toolchain, and two launchers on different keys share no install root, so
-//! they do not contend at all.
+//! One build per key at a time. `cargo install --root` locks the install root
+//! only for the final move of the finished binary, so the compile itself would
+//! run once per launcher; [`ensure_built`] therefore holds an advisory lock on
+//! `<cache>/builds/<key>.lock` across the whole build, and a launcher that
+//! waited on it finds the binary already there. Keys differ per url, revision
+//! and toolchain, so launchers on different keys do not contend at all.
 //!
-//! What has not been established is that no interleaving anywhere fails, and
-//! nothing here tests two launchers running at once. The one interleaving that
-//! is known and handled is a collection pass evicting a build between the
-//! build and the exec, which the run re-materialises a bounded number of
-//! times.
+//! The build also keeps its cargo target directory under the install root, so a
+//! build that was killed resumes where it stopped and a finished one removes it.
+//!
+//! The one interleaving that is handled beside the lock is a collection pass
+//! evicting a build between the build and the exec, which the run
+//! re-materialises a bounded number of times.
 //!
 //! Where the cache is, and the state beside it, is `renki-dirs`'s table: the
 //! platform's own directory for each, with the tool's `<SHORT>_CACHE` and
@@ -239,6 +239,48 @@ pub(crate) fn compute_key(url: &str, key_rev: &str, toolchain: &str) -> String {
     h.hex()
 }
 
+/// The exclusive lock over building one key's engine: an advisory lock on
+/// `<builds>/<key>.lock`, beside the install root so evicting a build does not
+/// remove what a waiting launcher holds.
+///
+/// `cargo install --root` locks only for the final move of the binary, so
+/// without this two launchers resolving one key compile the engine twice. The
+/// lock is the operating system's, so it goes when its holder does and a
+/// killed build leaves nothing to detect as stale.
+struct BuildLock(std::fs::File);
+
+impl BuildLock {
+    fn take(builds: &Path, key: &str, short: &str) -> Result<Self, String> {
+        std::fs::create_dir_all(builds)
+            .map_err(|e| format!("could not create {}: {e}", builds.display()))?;
+        let path = builds.join(format!("{key}.lock"));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|e| format!("could not open the build lock {}: {e}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => {},
+            Err(std::fs::TryLockError::WouldBlock) => {
+                eprintln!("{short}: another launcher is building this engine, waiting for it ...");
+                file.lock()
+                    .map_err(|e| format!("could not lock {}: {e}", path.display()))?;
+            },
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(format!("could not lock {}: {e}", path.display()));
+            },
+        }
+        Ok(Self(file))
+    }
+}
+
+impl Drop for BuildLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// The cached engine binary for `key`, building it once if missing.
 ///
 /// The resolved pin carries one or more install attempts (a `version` pin
@@ -260,6 +302,14 @@ pub(crate) fn ensure_built(
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create cache dir {}: {e}", root.display()))?;
 
+    // One build per key across every launcher on the machine. Held until this
+    // function returns, and released by the kernel if the process dies.
+    let _held = BuildLock::take(&builds_dir(cache_root), key, tool.short)?;
+    // Whoever held it may have built the engine while this waited.
+    if bin.is_file() {
+        return Ok(bin);
+    }
+
     eprintln!(
         "{}: building the engine for this pin (once per version) ...",
         tool.short
@@ -272,6 +322,9 @@ pub(crate) fn ensure_built(
         },
         &root,
     )?;
+    // The intermediates are many times the size of the binary and a finished
+    // build has no use for them; a failed one returned above and keeps them.
+    let _ = std::fs::remove_dir_all(crate::extension::target_dir(&root));
     Ok(bin)
 }
 

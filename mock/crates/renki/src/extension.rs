@@ -813,14 +813,24 @@ pub struct Cargo;
 /// and not this crate's to change; `build_failure` names it as a cause.
 // lint:allow(trait-first-signatures) reason: an argument list handed to `Command::args`, at the launcher's std boundary. FIXME: an iterator once the callers take one.
 pub(crate) fn install_args(attempt: &[String], into: &Path) -> Vec<String> {
-    let mut args = Vec::with_capacity(attempt.len() + 5);
+    let mut args = Vec::with_capacity(attempt.len() + 7);
     args.push("install".into());
     args.extend(attempt.iter().cloned());
     args.push("--locked".into());
     args.push("--root".into());
     args.push(into.display().to_string());
     args.push("--force".into());
+    // Under the install root, so an interrupted build resumes instead of
+    // starting over: without it cargo compiles in a temporary directory that
+    // is gone when the process is.
+    args.push("--target-dir".into());
+    args.push(target_dir(into).display().to_string());
     args
+}
+
+/// Where a build under `into` keeps its compiled intermediates.
+pub(crate) fn target_dir(into: &Path) -> PathBuf {
+    into.join("target")
 }
 
 use crate::retry::{Attempt, RETRY_PAUSE, cargo_is_on_path, install_with_retry};

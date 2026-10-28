@@ -15,10 +15,10 @@ repository = "https://github.com/orgrinrt/renki"
 # Cargo copies whatever `readme` names into the package whether or not
 # `include` lists it.
 readme = "../../../README.md"
-# The floor, measured in both directions rather than guessed. 1.88 builds and
-# runs the whole suite clean; 1.87 refuses the let-chains this uses throughout,
-# with `let expressions in this position are unstable` at every one of them.
-rust-version = "1.88"
+# The floor. 1.89 is where `File::lock` is stable, which the engine build lock
+# takes; below it, 1.87 also refuses the let-chains this uses throughout, with
+# `let expressions in this position are unstable` at every one of them.
+rust-version = "1.89"
 # `command-line-interface` rather than `command-line-utilities`: this is a
 # library a launcher is written against, not a utility anybody installs.
 # There is no `[[bin]]` here and `cargo install renki` installs nothing.
