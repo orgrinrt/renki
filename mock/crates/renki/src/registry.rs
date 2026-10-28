@@ -314,8 +314,21 @@ impl Registry {
             // checked against the only shape this crate ever writes rather than
             // trusted for having come from our own file. A registry somebody
             // hand-edited is exactly the case, and it is the cheap check.
+            //
+            // And a key whose build lock is held is being built right now, so
+            // its directory is not the collector's to delete. The lock is tried
+            // without waiting, kept while the directory goes so a launcher that
+            // starts on the key meanwhile waits for the removal, and a held key
+            // keeps its row for the next pass to look at again. A lock that
+            // cannot be tried at all is treated the same way, since deleting
+            // under a lock nobody could check is the case this exists to avoid.
             if is_build_key(&b.key) {
-                let _ = std::fs::remove_dir_all(builds_dir.join(&b.key));
+                match crate::cache::BuildLock::try_take(&builds_dir, &b.key) {
+                    Ok(Some(_held)) => {
+                        let _ = std::fs::remove_dir_all(builds_dir.join(&b.key));
+                    },
+                    Ok(None) | Err(_) => return true,
+                }
             }
             removed.push(b.key.clone());
             false

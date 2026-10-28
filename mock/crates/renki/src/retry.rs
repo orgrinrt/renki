@@ -159,7 +159,7 @@ mod tests {
     // that is the gap, and the FIXME on `cargo_is_on_path` names it.
 
     #[test]
-    #[ignore = "catalogue: the toolchain a checkout pins is not checked before cargo runs; the FIXME on cargo_is_on_path"]
+    #[ignore = "catalogue: the toolchain a checkout pins is not checked before cargo runs; the FIXME on cargo_is_on_path; tracked #30"]
     fn a_pinned_toolchain_rustup_lacks_is_refused_by_name_before_cargo_runs() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "catalogue: the network is not checked where the pin is a git source; the FIXME on cargo_is_on_path"]
+    #[ignore = "catalogue: the network is not checked where the pin is a git source; the FIXME on cargo_is_on_path; tracked #31"]
     fn an_unreachable_git_source_is_refused_by_name_before_cargo_runs() {
         let source = "ssh://git@nowhere.invalid/nobody/nothing.git";
         let err =

@@ -220,7 +220,20 @@ pub(crate) fn scratch_key(source: &Path) -> String {
 /// to run here would be a worse version of what cargo already does. cargo skips
 /// what genuinely did not change, and the target directory is kept between runs
 /// so it can.
-pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<PathBuf, String> {
+///
+/// The build runs in `repo_root`, the directory the pinned builds run in, so the
+/// toolchain the repository selects is the one that builds the engine under test.
+pub(crate) fn build(
+    tool: &Tool,
+    cache_root: &Path,
+    source: &Path,
+    repo_root: &Path,
+) -> Result<PathBuf, String> {
+    // Absolute, because the build runs in `repo_root` and cargo resolves `--root`
+    // and `--target-dir` there, while the sweep and the returned path resolve in
+    // this process's directory. A relative `<SHORT>_CACHE` would name two places.
+    let cache_root = &std::path::absolute(cache_root)
+        .map_err(|e| format!("could not resolve {}: {e}", cache_root.display()))?;
     let scratch = scratch_dir(cache_root);
     sweep(cache_root);
 
@@ -239,14 +252,11 @@ pub(crate) fn build(tool: &Tool, cache_root: &Path, source: &Path) -> Result<Pat
     // between runs, which is what makes an unchanged rebuild cheap.
     crate::extension::materialise_once::<crate::extension::Cargo>(
         &crate::extension::CargoPlan {
-            attempts:   vec![vec![
-                "--path".into(),
-                source.display().to_string(),
-                "--target-dir".into(),
-                root.join("target").display().to_string(),
-            ]],
+            attempts:   vec![vec!["--path".into(), source.display().to_string()]],
             bin:        tool.engine_bin_name().into(),
             crate_name: tool.engine_crate.into(),
+            target_dir: root.join("target"),
+            dir:        Some(repo_root.to_path_buf()),
         },
         &root,
     )

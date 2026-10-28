@@ -131,7 +131,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "renki"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "notko",
  "renki-config",
@@ -144,14 +144,14 @@ dependencies = [
 
 [[package]]
 name = "renki-config"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "notko",
 ]
 
 [[package]]
 name = "renki-dirs"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "notko",
  "trybuild",
