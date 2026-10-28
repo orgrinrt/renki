@@ -247,7 +247,7 @@ fn a_present_binary_short_circuits_without_invoking_cargo() {
         dir.path(),
     )
     .unwrap();
-    let got = ensure_built(&T, dir.path(), key, &resolved).unwrap();
+    let got = ensure_built(&T, dir.path(), key, &resolved, dir.path()).unwrap();
     assert_eq!(got, binpath.join("engine"));
 }
 
@@ -282,13 +282,13 @@ fn a_package_whose_binary_is_named_differently_is_still_found() {
         attempts:    vec![],
         version_tag: String::new(),
     };
-    let got = ensure_built(&RENAMED, dir.path(), key, &no_attempts).unwrap();
+    let got = ensure_built(&RENAMED, dir.path(), key, &no_attempts, dir.path()).unwrap();
     assert_eq!(got, binpath.join("shortname"));
 
     // and the control: the same cache is a miss for the tool that did not
     // rename, which is what makes the hit above about `engine_bin` rather
     // than about the file merely existing
-    assert!(ensure_built(&T, dir.path(), key, &no_attempts).is_err());
+    assert!(ensure_built(&T, dir.path(), key, &no_attempts, dir.path()).is_err());
 }
 
 #[test]
@@ -316,12 +316,12 @@ fn a_binary_under_another_tools_name_is_not_this_tools_build() {
         attempts:    vec![],
         version_tag: String::new(),
     };
-    assert!(ensure_built(&T, dir.path(), key, &no_attempts).is_err());
+    assert!(ensure_built(&T, dir.path(), key, &no_attempts, dir.path()).is_err());
 
     // and the positive control on the same input: the right name hits.
     std::fs::write(binpath.join("engine"), b"#!/bin/sh\n").unwrap();
     assert_eq!(
-        ensure_built(&T, dir.path(), key, &no_attempts).unwrap(),
+        ensure_built(&T, dir.path(), key, &no_attempts, dir.path()).unwrap(),
         binpath.join("engine")
     );
 }
@@ -517,9 +517,23 @@ fn a_waiter_finds_the_binary_the_holder_built() {
         version_tag: String::new(),
     };
     let root = dir.path().to_path_buf();
-    let waiter = std::thread::spawn(move || ensure_built(&T, &root, key, &none));
+    let waiter = std::thread::spawn(move || ensure_built(&T, &root, key, &none, &root));
     std::thread::sleep(std::time::Duration::from_millis(200));
     std::fs::write(bin.join("engine"), b"#!/bin/sh\n").unwrap();
     drop(holder);
     assert_eq!(waiter.join().unwrap().unwrap(), bin.join("engine"));
+}
+
+#[test]
+fn the_toolchain_is_asked_in_the_directory_it_is_given() {
+    // A toolchain file decides which rustc answers in a directory, so the key's
+    // fingerprint has to be taken where the build will run. Proved by a
+    // directory that does not exist: the command cannot start there, which is
+    // only so if the directory was applied. The existing one is the control.
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        !rustc_fingerprint(Some(dir.path())).is_empty(),
+        "no rustc answers in a plain directory, so the control proves nothing"
+    );
+    assert!(rustc_fingerprint(Some(&dir.path().join("missing"))).is_empty());
 }

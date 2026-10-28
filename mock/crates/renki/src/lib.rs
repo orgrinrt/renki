@@ -496,9 +496,9 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
 
     let (pin, source) = resolve_pin(tool, located.as_ref(), &root, &workdir)?;
     let resolved = pin::resolve(tool, &pin, &cache_root)?;
-    let toolchain = cache::rustc_fingerprint();
+    let toolchain = cache::rustc_fingerprint(Some(&root));
     let key = cache::compute_key(&pin.url, &resolved.key_rev, &toolchain);
-    let bin = cache::ensure_built(tool, &cache_root, &key, &resolved)?;
+    let bin = cache::ensure_built(tool, &cache_root, &key, &resolved, &root)?;
 
     // Record this repo and build in the registry, then at most once a day
     // collect engine builds nothing pins anymore. Best-effort throughout: the
@@ -532,7 +532,7 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
         if bin.is_file() {
             break;
         }
-        bin = cache::ensure_built(tool, &cache_root, &key, &resolved)?;
+        bin = cache::ensure_built(tool, &cache_root, &key, &resolved, &root)?;
     }
     if !bin.is_file() {
         return Err(eviction_exhausted(&bin));

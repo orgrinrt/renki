@@ -180,8 +180,8 @@ forces a coherent rebuild, and a backend that only copies bytes returns nothing.
 the destination directly or a scratch that gets renamed into place once it's
 finished, which is where they actually differ: `cargo install --root` holds
 cargo's own lock over the install root and moves the binary in itself, so a
-scratch around that would be a second, weaker mechanism over a working one, and
-would discard the incremental target directory on every build. Everything
+scratch around that would be a second, weaker mechanism over a working one.
+Everything
 fetched takes the scratch, which is what keeps a reader from seeing a
 half-written tree.
 

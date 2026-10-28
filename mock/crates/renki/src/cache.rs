@@ -14,8 +14,10 @@
 //! waited on it finds the binary already there. Keys differ per url, revision
 //! and toolchain, so launchers on different keys do not contend at all.
 //!
-//! The build also keeps its cargo target directory under the install root, so a
-//! build that was killed resumes where it stopped and a finished one removes it.
+//! The toolchain in the key and the toolchain that builds are the one that
+//! answers in the repo's root, so a toolchain file there decides both. The
+//! build keeps one cargo target directory at `<cache>/target` for every key, so
+//! a killed build resumes and a new revision recompiles only what moved.
 //!
 //! The one interleaving that is handled beside the lock is a collection pass
 //! evicting a build between the build and the exec, which the run
@@ -212,10 +214,13 @@ fn builds_dir(root: &Path) -> PathBuf {
 ///
 /// The empty string when rustc cannot be run at all. The key then omits it, and
 /// the build that follows would fail for the same reason anyway.
-pub(crate) fn rustc_fingerprint() -> String {
-    Command::new("rustc")
-        .arg("-vV")
-        .output()
+pub(crate) fn rustc_fingerprint(dir: Option<&Path>) -> String {
+    let mut cmd = Command::new("rustc");
+    cmd.arg("-vV");
+    if let Some(dir) = dir {
+        cmd.current_dir(dir);
+    }
+    cmd.output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
@@ -293,6 +298,7 @@ pub(crate) fn ensure_built(
     cache_root: &Path,
     key: &str,
     resolved: &Resolved,
+    dir: &Path,
 ) -> Result<PathBuf, String> {
     let root = builds_dir(cache_root).join(key);
     let bin = root.join("bin").join(tool.engine_bin_name());
@@ -319,12 +325,11 @@ pub(crate) fn ensure_built(
             attempts:   resolved.attempts.clone(),
             bin:        tool.engine_bin_name().into(),
             crate_name: tool.engine_crate.into(),
+            target_dir: cache_root.join("target"),
+            dir:        Some(dir.to_path_buf()),
         },
         &root,
     )?;
-    // The intermediates are many times the size of the binary and a finished
-    // build has no use for them; a failed one returned above and keeps them.
-    let _ = std::fs::remove_dir_all(crate::extension::target_dir(&root));
     Ok(bin)
 }
 

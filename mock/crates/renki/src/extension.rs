@@ -309,8 +309,7 @@ pub trait Backend {
     /// destination. [`Cargo`](crate::Cargo) is the case: `cargo install --root`
     /// takes cargo's own lock on the install root and moves the binary in
     /// itself, so a scratch and a rename would add a second, weaker mechanism
-    /// on top of a working one, and would throw away cargo's incremental
-    /// target directory every time.
+    /// on top of a working one.
     fn places_itself() -> bool {
         false
     }
@@ -785,6 +784,17 @@ pub struct CargoPlan {
     /// Named in the failure message, so an operator reads the crate that did
     /// not build rather than the launcher that asked for it.
     pub crate_name: String,
+    /// Where cargo keeps its compiled intermediates, passed as `--target-dir`.
+    /// Cargo's own install otherwise compiles in a temporary directory that is
+    /// gone with the process, so a killed build starts over; named, it resumes,
+    /// and a build of a new revision recompiles only what moved. Cargo's lock
+    /// on the directory also keeps two builds sharing it from running at once.
+    pub target_dir: PathBuf,
+    /// The directory cargo runs in, when it is not the process's own. A
+    /// toolchain file decides which rustc answers in a directory, so a build
+    /// has to run where the cache key's fingerprint was taken or one revision
+    /// is built under two toolchains and keyed twice.
+    pub dir:        Option<PathBuf>,
 }
 
 /// Building something with cargo.
@@ -812,7 +822,7 @@ pub struct Cargo;
 /// warning from cargo and the fresh resolution anyway, which is cargo's rule
 /// and not this crate's to change; `build_failure` names it as a cause.
 // lint:allow(trait-first-signatures) reason: an argument list handed to `Command::args`, at the launcher's std boundary. FIXME: an iterator once the callers take one.
-pub(crate) fn install_args(attempt: &[String], into: &Path) -> Vec<String> {
+pub(crate) fn install_args(attempt: &[String], into: &Path, target_dir: &Path) -> Vec<String> {
     let mut args = Vec::with_capacity(attempt.len() + 7);
     args.push("install".into());
     args.extend(attempt.iter().cloned());
@@ -820,17 +830,9 @@ pub(crate) fn install_args(attempt: &[String], into: &Path) -> Vec<String> {
     args.push("--root".into());
     args.push(into.display().to_string());
     args.push("--force".into());
-    // Under the install root, so an interrupted build resumes instead of
-    // starting over: without it cargo compiles in a temporary directory that
-    // is gone when the process is.
     args.push("--target-dir".into());
-    args.push(target_dir(into).display().to_string());
+    args.push(target_dir.display().to_string());
     args
-}
-
-/// Where a build under `into` keeps its compiled intermediates.
-pub(crate) fn target_dir(into: &Path) -> PathBuf {
-    into.join("target")
 }
 
 use crate::retry::{Attempt, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
@@ -847,7 +849,7 @@ impl Backend for Cargo {
     /// forces a coherent rebuild. A frozen binary paired with a moved toolchain
     /// is the failure this prevents.
     fn fingerprint() -> String {
-        crate::cache::rustc_fingerprint()
+        crate::cache::rustc_fingerprint(None)
     }
 
     /// `cargo install <attempt> --locked --root <into> --force`, per attempt,
@@ -855,8 +857,12 @@ impl Backend for Cargo {
     fn materialise(plan: &Self::Plan, into: &Path) -> Result<(), String> {
         cargo_is_on_path()?;
         let run = |attempt: &[String]| -> Result<Attempt, String> {
-            let status = Command::new("cargo")
-                .args(install_args(attempt, into))
+            let mut cmd = Command::new("cargo");
+            cmd.args(install_args(attempt, into, &plan.target_dir));
+            if let Some(dir) = &plan.dir {
+                cmd.current_dir(dir);
+            }
+            let status = cmd
                 .status()
                 .map_err(|e| format!("could not run cargo install: {e}"))?;
             Ok(if !status.success() {
@@ -874,8 +880,8 @@ impl Backend for Cargo {
 
     /// `cargo install --root` takes cargo's own lock on the install root and
     /// moves the binary in itself, so a scratch and a rename would stack a
-    /// second, weaker mechanism on a working one and throw away the incremental
-    /// target directory on every build.
+    /// second, weaker mechanism on a working one. The incremental state is the
+    /// plan's `target_dir`, which lives outside the root either way.
     fn places_itself() -> bool {
         true
     }
