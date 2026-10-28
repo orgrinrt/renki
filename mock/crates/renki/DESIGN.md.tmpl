@@ -119,23 +119,32 @@ detect as stale. It sits beside the install root rather than in it, so a
 collection pass evicting the build does not remove what a waiting launcher
 holds.
 
-Every key installs through one cargo target directory at `<cache>/target`, so a
-killed build resumes and a new revision recompiles only what moved. Cargo
-copies the finished binary out of that directory after it has let go of its own
-lock on it, which leaves a window where a second key compiling would put its
-binary under the first key. A second `BuildLock`, named `target` and taken
-inside the key's, closes the window: builds of different keys take turns on the
-shared directory. The order is the key's lock and then the directory's, always,
-so two launchers cannot wait on each other. The directory is not collected, and
-removing it costs a slower next build and nothing else.
+Each key installs through a cargo target directory of its own, at
+`<cache>/builds/<key>/target`, so a killed build resumes and a new revision of
+the same key's engine recompiles only what moved. Two keys share nothing while
+they build, which is why the key's lock is the only lock: a launcher waits only
+on a build of its own key, and a build that hangs holds up only the launchers
+that asked for that engine. The directory lives inside the key's own, so the
+collector removes it together with the build it belongs to and nothing else
+has to track it.
+
+The collector tries the key's lock before it removes a key, without waiting. A
+key whose lock is held is being built, so it is left in place with its row, and
+the next pass looks at it again. A key it can lock is not being built, and the
+lock is held while the directory goes, so a launcher that starts on the key
+meanwhile waits for the removal and then builds it afresh.
 
 The toolchain in the key and the toolchain that builds are the one that answers
 in the repository's root, so a `rust-toolchain.toml` there decides both and one
-revision is not keyed twice. For the same reason the cache root is made
-absolute before the build runs: the build is in the repository's root and cargo
-resolves `--root` and `--target-dir` there, while the lookups resolve in the
-launcher's own directory, and a relative `<SHORT>_CACHE` would otherwise name
-two places.
+revision is not keyed twice. `CargoPlan::dir` is that root, and cargo runs in
+it, for the pinned build and for the `--engine` scratch build alike. The
+fingerprint on the `Cargo` backend itself reads rustc in the launcher's own
+directory, because the contract it implements takes no plan; the launcher's key
+does not use it and reads the repository's root directly. For the same reason
+the cache root is made absolute before the build runs: the build is in the
+repository's root and cargo resolves `--root` and `--target-dir` there, while
+the lookups resolve in the launcher's own directory, and a relative
+`<SHORT>_CACHE` would otherwise name two places.
 
 The one interleaving the lock does not cover is a collection pass evicting a
 build between the build and the exec. The run re-materialises a bounded number

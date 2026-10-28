@@ -274,10 +274,10 @@ the engine belongs in the engine.
 
 Two directories, and which one a file goes in is decided by what losing it
 costs. The cache holds what gets rebuilt without anybody asking: built engines,
-materialised tools, the resolved head of any branch pin, and the one cargo
-target directory every engine build shares so an interrupted build resumes. The
-collector does not trim that directory; deleting it costs a slower next build
-and nothing else. The state holds the one
+materialised tools, the resolved head of any branch pin, and, inside each built
+engine's own directory, the cargo target directory its build used, so an
+interrupted build resumes. The collector removes that directory together with
+the engine it belongs to. The state holds the one
 thing the launcher writes for itself and would behave differently without, a
 small TOML registry, plus the self-update marker. A cleanup that empties the
 cache costs you a rebuild and nothing else, which is the whole point of keeping
