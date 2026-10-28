@@ -309,8 +309,7 @@ pub trait Backend {
     /// destination. [`Cargo`](crate::Cargo) is the case: `cargo install --root`
     /// takes cargo's own lock on the install root and moves the binary in
     /// itself, so a scratch and a rename would add a second, weaker mechanism
-    /// on top of a working one, and would throw away cargo's incremental
-    /// target directory every time.
+    /// on top of a working one.
     fn places_itself() -> bool {
         false
     }
@@ -520,16 +519,18 @@ pub fn cache_key(descriptor: &Descriptor, backend: &Registered) -> Result<String
 ///
 /// # Why there is no lock
 ///
-/// The launcher half holds none either, and says so, because `cargo install
-/// --root` takes cargo's own lock on the install root. That is a true statement
-/// about exactly one backend and it stops being true here.
+/// The launcher half does hold one, over its cargo build, because `cargo
+/// install --root` locks the install root only for the final move. That is a
+/// statement about exactly one backend and it stops being true here.
 ///
 /// So this does not take a lock; it makes one unnecessary. The backend
 /// materialises into a scratch directory of its own, and the finished directory
 /// is then moved into place with a single rename. Two callers racing on the same
 /// key both do the work and one rename wins, which costs a duplicated fetch in a
-/// rare case. A lock would trade that for a lock file to leak, a stale one to
-/// detect, and a failure mode where one crashed process blocks every other.
+/// rare case. A lock would trade that for a lock file to leave behind and a
+/// failure mode where one crashed process blocks every other, which the
+/// launcher's operating-system lock avoids by going when its holder does, and
+/// which a fetch cheap enough to repeat does not need.
 ///
 /// The scratch is named per call rather than per process, since this takes
 /// shared references and is `pub`, so several threads reach one key at once and
@@ -785,6 +786,22 @@ pub struct CargoPlan {
     /// Named in the failure message, so an operator reads the crate that did
     /// not build rather than the launcher that asked for it.
     pub crate_name: String,
+    /// Where cargo keeps its compiled intermediates, passed as `--target-dir`.
+    /// Cargo's own install otherwise compiles in a temporary directory that is
+    /// gone with the process, so a killed build starts over; named, it resumes.
+    /// One directory belongs to one build: two builds that compile into the same
+    /// one race on cargo's copy of the finished binary, and nothing here keeps
+    /// them apart, so a plan names a directory no other plan uses at the same
+    /// time.
+    pub target_dir: PathBuf,
+    /// The directory the build runs in, when it is not the process's own:
+    /// cargo is started with it as its working directory, so a relative path in
+    /// the install arguments, `--root` and `--target-dir` among them, resolves
+    /// there and not against the launcher. A toolchain file decides which rustc
+    /// answers in a directory, so the build runs where the cache key's
+    /// fingerprint was taken, the repository's root, or one revision is built
+    /// under two toolchains and keyed twice.
+    pub dir:        Option<PathBuf>,
 }
 
 /// Building something with cargo.
@@ -812,14 +829,16 @@ pub struct Cargo;
 /// warning from cargo and the fresh resolution anyway, which is cargo's rule
 /// and not this crate's to change; `build_failure` names it as a cause.
 // lint:allow(trait-first-signatures) reason: an argument list handed to `Command::args`, at the launcher's std boundary. FIXME: an iterator once the callers take one.
-pub(crate) fn install_args(attempt: &[String], into: &Path) -> Vec<String> {
-    let mut args = Vec::with_capacity(attempt.len() + 5);
+pub(crate) fn install_args(attempt: &[String], into: &Path, target_dir: &Path) -> Vec<String> {
+    let mut args = Vec::with_capacity(attempt.len() + 7);
     args.push("install".into());
     args.extend(attempt.iter().cloned());
     args.push("--locked".into());
     args.push("--root".into());
     args.push(into.display().to_string());
     args.push("--force".into());
+    args.push("--target-dir".into());
+    args.push(target_dir.display().to_string());
     args
 }
 
@@ -836,8 +855,18 @@ impl Backend for Cargo {
     /// rustc is part of the compilation input, so a toolchain change re-keys and
     /// forces a coherent rebuild. A frozen binary paired with a moved toolchain
     /// is the failure this prevents.
+    ///
+    /// Read in the launcher's own directory, which is not where the build runs:
+    /// the build runs in [`CargoPlan::dir`], where a `rust-toolchain.toml` can
+    /// select another rustc. [`Backend::fingerprint`] takes no plan, and it is
+    /// held as a function pointer by [`Registered`], so the directory cannot
+    /// reach it without changing the contract every backend implements. The
+    /// launcher's own key does not use this method; it reads rustc in the
+    /// repository's root directly, the directory the build runs in, so the key
+    /// and the build agree. A host that keys a [`Cargo`] build by this method
+    /// gets the launcher's directory's toolchain and not the build's.
     fn fingerprint() -> String {
-        crate::cache::rustc_fingerprint()
+        crate::cache::rustc_fingerprint(None)
     }
 
     /// `cargo install <attempt> --locked --root <into> --force`, per attempt,
@@ -845,8 +874,12 @@ impl Backend for Cargo {
     fn materialise(plan: &Self::Plan, into: &Path) -> Result<(), String> {
         cargo_is_on_path()?;
         let run = |attempt: &[String]| -> Result<Attempt, String> {
-            let status = Command::new("cargo")
-                .args(install_args(attempt, into))
+            let mut cmd = Command::new("cargo");
+            cmd.args(install_args(attempt, into, &plan.target_dir));
+            if let Some(dir) = &plan.dir {
+                cmd.current_dir(dir);
+            }
+            let status = cmd
                 .status()
                 .map_err(|e| format!("could not run cargo install: {e}"))?;
             Ok(if !status.success() {
@@ -864,8 +897,8 @@ impl Backend for Cargo {
 
     /// `cargo install --root` takes cargo's own lock on the install root and
     /// moves the binary in itself, so a scratch and a rename would stack a
-    /// second, weaker mechanism on a working one and throw away the incremental
-    /// target directory on every build.
+    /// second, weaker mechanism on a working one. The incremental state is the
+    /// plan's `target_dir`, which the plan names and this backend does not move.
     fn places_itself() -> bool {
         true
     }

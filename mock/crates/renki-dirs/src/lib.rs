@@ -43,14 +43,14 @@ use core::marker::PhantomData;
 use notko::{Maybe, Outcome};
 
 mod sealed {
-    pub trait Sealed {}
+    pub trait DirsSealed {}
 }
 
 /// The kind of file a root holds, which decides where it goes.
 ///
 /// Sealed: the four kinds are the whole vocabulary, and a fifth would need a
 /// platform directory this crate has not named.
-pub trait Kind: sealed::Sealed + Copy + Default + 'static {
+pub trait DirKind: sealed::DirsSealed + Copy + Default + 'static {
     /// The word after `<SHORT>_` in the tool's own override variable, and the
     /// word a diagnostic uses for the kind.
     const NAME: &'static str; // lint:allow(no-bare-static-str) reason: a kind's static name; the port to `hilavitkutin_str::Str` is a later unit. FIXME: port to Str.
@@ -70,8 +70,8 @@ macro_rules! kind {
         $(#[$m])*
         #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
         pub struct $name;
-        impl sealed::Sealed for $name {}
-        impl Kind for $name {
+        impl sealed::DirsSealed for $name {}
+        impl DirKind for $name {
             const NAME: &'static str = $upper;
             const XDG_VAR: &'static str = $var;
             const XDG_DEFAULT: &'static str = $default;
@@ -109,20 +109,20 @@ kind!(
 
 /// Which platform's directory layout applies.
 ///
-/// Sealed for the same reason as [`Kind`]: a platform is a table, and a table
+/// Sealed for the same reason as [`DirKind`]: a platform is a table, and a table
 /// this crate does not carry is not one it can answer for.
-pub trait Platform: sealed::Sealed + Copy + Default + 'static {
+pub trait Platform: sealed::DirsSealed + Copy + Default + 'static {
     /// The directory under the home directory for `K`, and what follows the
     /// namespace there.
-    fn under_home<K: Kind>() -> (&'static str, Maybe<&'static str>);
+    fn under_home<K: DirKind>() -> (&'static str, Maybe<&'static str>);
 }
 
 /// The XDG base directory specification: linux, the BSDs, illumos.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Xdg;
-impl sealed::Sealed for Xdg {}
+impl sealed::DirsSealed for Xdg {}
 impl Platform for Xdg {
-    fn under_home<K: Kind>() -> (&'static str, Maybe<&'static str>) {
+    fn under_home<K: DirKind>() -> (&'static str, Maybe<&'static str>) {
         (K::XDG_DEFAULT, Maybe::Isnt)
     }
 }
@@ -130,9 +130,9 @@ impl Platform for Xdg {
 /// `~/Library`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MacOs;
-impl sealed::Sealed for MacOs {}
+impl sealed::DirsSealed for MacOs {}
 impl Platform for MacOs {
-    fn under_home<K: Kind>() -> (&'static str, Maybe<&'static str>) {
+    fn under_home<K: DirKind>() -> (&'static str, Maybe<&'static str>) {
         (K::MACOS_DIR, K::MACOS_TAIL)
     }
 }
@@ -253,12 +253,12 @@ impl<'a> Short<'a> {
 /// The tool's own override variable for a kind: `<SHORT>_CACHE`, `<SHORT>_STATE`,
 /// uppercased through [`fmt::Display`] so nothing is allocated to name it.
 #[derive(Debug, Clone, Copy)]
-pub struct EnvName<'a, K: Kind> {
+pub struct EnvName<'a, K: DirKind> {
     short: Short<'a>,
     _kind: PhantomData<K>,
 }
 
-impl<'a, K: Kind> EnvName<'a, K> {
+impl<'a, K: DirKind> EnvName<'a, K> {
     /// The variable named after `short` for `K`.
     pub const fn of(short: Short<'a>) -> Self {
         EnvName {
@@ -268,7 +268,7 @@ impl<'a, K: Kind> EnvName<'a, K> {
     }
 }
 
-impl<K: Kind> fmt::Display for EnvName<'_, K> {
+impl<K: DirKind> fmt::Display for EnvName<'_, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use fmt::Write;
         // ASCII by construction, so the uppercase of a char is one char.
@@ -282,7 +282,7 @@ impl<K: Kind> fmt::Display for EnvName<'_, K> {
 
 /// The three environment values a root depends on, read by the caller.
 ///
-/// `own` is the tool's variable named by [`EnvName`]; `xdg` is [`Kind::XDG_VAR`];
+/// `own` is the tool's variable named by [`EnvName`]; `xdg` is [`DirKind::XDG_VAR`];
 /// `home` is `HOME`. A value the caller could not read, or read as something
 /// that is not text, is `Isnt`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -306,7 +306,7 @@ impl<'a> Sources<'a> {
 
 /// Which of the three sources decided a root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
+pub enum PathSource {
     /// The tool's own variable, holding the whole path.
     Own,
     /// The XDG variable for the kind, with the namespace under it.
@@ -319,9 +319,9 @@ pub enum Source {
 /// to put the files. Carries the kind so the operator learns which root
 /// failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoHome<K: Kind>(PhantomData<K>);
+pub struct NoHome<K: DirKind>(PhantomData<K>);
 
-impl<K: Kind> fmt::Display for NoHome<K> {
+impl<K: DirKind> fmt::Display for NoHome<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -361,17 +361,17 @@ impl fmt::Display for Lower<'_> {
 /// the home directory, the platform's directory for the kind, the namespace,
 /// and the kind's tail where the platform has one.
 #[derive(Debug, Clone, Copy)]
-pub struct Root<'a, K: Kind, P: Platform> {
+pub struct Root<'a, K: DirKind, P: Platform> {
     base:   &'a str, // lint:allow(no-bare-string) reason: borrowed from the caller's environment text; the port to `hilavitkutin_str::Str` is a later unit. FIXME: port to Str.
     under:  Maybe<&'static str>,
     ns:     Maybe<Namespace<'a>>,
     tail:   Maybe<&'static str>,
-    source: Source,
+    source: PathSource,
     _kind:  PhantomData<K>,
     _plat:  PhantomData<P>,
 }
 
-impl<'a, K: Kind, P: Platform> Root<'a, K, P> {
+impl<'a, K: DirKind, P: Platform> Root<'a, K, P> {
     /// Resolve the root for `ns` from what the caller read.
     pub fn resolve(ns: Namespace<'a>, sources: Sources<'a>) -> Outcome<Self, NoHome<K>> {
         if let Maybe::Is(o) = sources.own
@@ -382,7 +382,7 @@ impl<'a, K: Kind, P: Platform> Root<'a, K, P> {
                 under:  Maybe::Isnt,
                 ns:     Maybe::Isnt,
                 tail:   Maybe::Isnt,
-                source: Source::Own,
+                source: PathSource::Own,
                 _kind:  PhantomData,
                 _plat:  PhantomData,
             });
@@ -395,7 +395,7 @@ impl<'a, K: Kind, P: Platform> Root<'a, K, P> {
                 under:  Maybe::Isnt,
                 ns:     Maybe::Is(ns),
                 tail:   Maybe::Isnt,
-                source: Source::Xdg,
+                source: PathSource::Xdg,
                 _kind:  PhantomData,
                 _plat:  PhantomData,
             });
@@ -412,14 +412,14 @@ impl<'a, K: Kind, P: Platform> Root<'a, K, P> {
             under: Maybe::Is(under),
             ns: Maybe::Is(ns),
             tail,
-            source: Source::Default,
+            source: PathSource::Default,
             _kind: PhantomData,
             _plat: PhantomData,
         })
     }
 
     /// Which source decided this root.
-    pub const fn source(&self) -> Source {
+    pub const fn source(&self) -> PathSource {
         self.source
     }
 
@@ -431,7 +431,7 @@ impl<'a, K: Kind, P: Platform> Root<'a, K, P> {
     }
 }
 
-impl<K: Kind, P: Platform> fmt::Display for Root<'_, K, P> {
+impl<K: DirKind, P: Platform> fmt::Display for Root<'_, K, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.base)?;
         if let Maybe::Is(u) = self.under {

@@ -247,7 +247,7 @@ fn a_present_binary_short_circuits_without_invoking_cargo() {
         dir.path(),
     )
     .unwrap();
-    let got = ensure_built(&T, dir.path(), key, &resolved).unwrap();
+    let got = ensure_built(&T, dir.path(), key, &resolved, dir.path()).unwrap();
     assert_eq!(got, binpath.join("engine"));
 }
 
@@ -282,13 +282,13 @@ fn a_package_whose_binary_is_named_differently_is_still_found() {
         attempts:    vec![],
         version_tag: String::new(),
     };
-    let got = ensure_built(&RENAMED, dir.path(), key, &no_attempts).unwrap();
+    let got = ensure_built(&RENAMED, dir.path(), key, &no_attempts, dir.path()).unwrap();
     assert_eq!(got, binpath.join("shortname"));
 
     // and the control: the same cache is a miss for the tool that did not
     // rename, which is what makes the hit above about `engine_bin` rather
     // than about the file merely existing
-    assert!(ensure_built(&T, dir.path(), key, &no_attempts).is_err());
+    assert!(ensure_built(&T, dir.path(), key, &no_attempts, dir.path()).is_err());
 }
 
 #[test]
@@ -316,12 +316,12 @@ fn a_binary_under_another_tools_name_is_not_this_tools_build() {
         attempts:    vec![],
         version_tag: String::new(),
     };
-    assert!(ensure_built(&T, dir.path(), key, &no_attempts).is_err());
+    assert!(ensure_built(&T, dir.path(), key, &no_attempts, dir.path()).is_err());
 
     // and the positive control on the same input: the right name hits.
     std::fs::write(binpath.join("engine"), b"#!/bin/sh\n").unwrap();
     assert_eq!(
-        ensure_built(&T, dir.path(), key, &no_attempts).unwrap(),
+        ensure_built(&T, dir.path(), key, &no_attempts, dir.path()).unwrap(),
         binpath.join("engine")
     );
 }
@@ -464,4 +464,163 @@ fn the_old_root_is_the_xdg_column_whatever_the_host_and_the_own_variable_wins_th
         Root::<Cache, Xdg>::resolve(ns, own).unwrap().to_string(),
         "/mnt/big"
     );
+}
+
+#[test]
+fn the_build_lock_is_exclusive_per_key_and_released_on_drop() {
+    // The lock is what stops two launchers compiling one engine: while the
+    // first holds it the second cannot take it, and it can once the first lets
+    // go. A different key is a different lock, the control that makes the
+    // refusal about the key.
+    let dir = tempfile::tempdir().unwrap();
+    let builds = builds_dir(dir.path());
+    let first = BuildLock::take(&builds, "aaaa", "t").unwrap();
+
+    let other = std::fs::OpenOptions::new()
+        .write(true)
+        .open(builds.join("aaaa.lock"))
+        .unwrap();
+    assert!(
+        matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "a second holder got the lock while the first still had it"
+    );
+
+    let different = BuildLock::take(&builds, "bbbb", "t").unwrap();
+    drop(different);
+
+    drop(first);
+    assert!(
+        other.try_lock().is_ok(),
+        "the lock was not released on drop"
+    );
+}
+
+/// `ensure_built` on a second thread, which is how the tests below hold a second
+/// launcher on a lock they own while they go on running.
+///
+/// A thread rather than a child process because the call under test is in this
+/// process: the backend it builds with is a type in this module, and a child
+/// would have to be the test binary re-entering itself to reach the same call.
+fn ensure_built_on_a_thread(
+    root: PathBuf,
+    key: &'static str,
+    resolved: Resolved,
+) -> std::thread::JoinHandle<Result<PathBuf, String>> {
+    std::thread::spawn(move || ensure_built(&T, &root, key, &resolved, &root)) // lint:allow(no-runtime-spawn) reason: the second launcher the lock tests hold, in-process because the call under test is.
+}
+
+#[test]
+fn a_waiter_finds_the_binary_the_holder_built() {
+    // The re-check after the lock: a launcher that waited must not build again.
+    // No attempts, so a build cannot succeed; returning the path is the only
+    // way this passes.
+    let dir = tempfile::tempdir().unwrap();
+    let key = "cafecafecafecafe";
+    let builds = builds_dir(dir.path());
+    let holder = BuildLock::take(&builds, key, "t").unwrap();
+    let bin = builds.join(key).join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+
+    let none = Resolved {
+        pin:         Pin {
+            url:       "u".into(),
+            reference: Reference::Rev("r".into()),
+        },
+        key_rev:     "r".into(),
+        attempts:    vec![],
+        version_tag: String::new(),
+    };
+    let waiter = ensure_built_on_a_thread(dir.path().to_path_buf(), key, none);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        !waiter.is_finished(),
+        "the waiter did not wait, so it never reached the re-check"
+    );
+    std::fs::write(bin.join("engine"), b"#!/bin/sh\n").unwrap();
+    drop(holder);
+    assert_eq!(waiter.join().unwrap().unwrap(), bin.join("engine"));
+}
+
+#[test]
+fn the_toolchain_is_asked_in_the_directory_it_is_given() {
+    // A toolchain file decides which rustc answers in a directory, so the key's
+    // fingerprint has to be taken where the build will run. Proved by a
+    // directory that does not exist: the command cannot start there, which is
+    // only so if the directory was applied. The existing one is the control.
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        !rustc_fingerprint(Some(dir.path())).is_empty(),
+        "no rustc answers in a plain directory, so the control proves nothing"
+    );
+    assert!(rustc_fingerprint(Some(&dir.path().join("missing"))).is_empty());
+}
+
+#[test]
+fn a_relative_cache_root_names_one_place_for_the_build_and_the_lookup() {
+    // The build runs in another directory, where a relative root would mean a
+    // different path than it does here. The lookup is made absolute first, so a
+    // binary at the absolute spot is found from a relative spelling.
+    let dir = tempfile::tempdir().unwrap();
+    let key = "0123012301230123";
+    let bin = builds_dir(dir.path()).join(key).join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("engine"), b"#!/bin/sh\n").unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let relative = pathdiff_from(&cwd, dir.path());
+    assert!(relative.is_relative());
+    let none = Resolved {
+        pin:         Pin {
+            url:       "u".into(),
+            reference: Reference::Rev("r".into()),
+        },
+        key_rev:     "r".into(),
+        attempts:    vec![],
+        version_tag: String::new(),
+    };
+    let got = ensure_built(&T, &relative, key, &none, dir.path()).unwrap();
+    assert!(got.is_absolute(), "{}", got.display());
+    assert_eq!(
+        got.canonicalize().unwrap(),
+        bin.join("engine").canonicalize().unwrap()
+    );
+}
+
+/// `to` spelled relative to `from`, both absolute, by climbing out with `..`.
+fn pathdiff_from(from: &std::path::Path, to: &std::path::Path) -> std::path::PathBuf {
+    let from: Vec<_> = from.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let shared = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut out = std::path::PathBuf::new();
+    for _ in shared .. from.len() {
+        out.push("..");
+    }
+    for c in &to[shared ..] {
+        out.push(c);
+    }
+    out
+}
+
+#[test]
+fn a_build_compiles_into_a_target_directory_inside_its_own_key() {
+    // One directory per build is what keeps two keys from compiling into each
+    // other's, and inside the key's directory is what lets the collector take it
+    // with the key. Two keys give two directories; each sits under its own key.
+    let dir = tempfile::tempdir().unwrap();
+    let resolved = Resolved {
+        pin:         Pin {
+            url:       "u".into(),
+            reference: Reference::Rev("r".into()),
+        },
+        key_rev:     "r".into(),
+        attempts:    vec![vec!["--path".into(), "x".into()]],
+        version_tag: String::new(),
+    };
+    let builds = builds_dir(dir.path());
+    let first = build_plan(&T, &resolved, &builds.join("aaaa"), dir.path());
+    let second = build_plan(&T, &resolved, &builds.join("bbbb"), dir.path());
+    assert_eq!(first.target_dir, builds.join("aaaa").join("target"));
+    assert_eq!(second.target_dir, builds.join("bbbb").join("target"));
+    assert_ne!(first.target_dir, second.target_dir);
+    assert_eq!(first.dir.as_deref(), Some(dir.path()));
+    assert_eq!(first.attempts, resolved.attempts);
 }

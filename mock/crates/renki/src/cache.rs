@@ -7,19 +7,22 @@
 //!
 //! Each distinct compilation input (the engine's url and rev) is built once into
 //! `<cache>/builds/<key>/bin/<engine>` and shared by every repo pinned to it.
-//! This crate holds no lock of its own. What it relies on is narrower than
-//! that sounds and is worth stating exactly: `cargo install --root` takes
-//! cargo's own lock on the install root and moves the finished binary into
-//! place, so two launchers resolving the same key either serialise on that
-//! lock or find the binary already there. Keys differ per url, revision and
-//! toolchain, and two launchers on different keys share no install root, so
-//! they do not contend at all.
+//! One build per key at a time. `cargo install --root` locks the install root
+//! only for the final move of the finished binary, so the compile itself would
+//! run once per launcher; [`ensure_built`] therefore holds an advisory lock on
+//! `<cache>/builds/<key>.lock` across the whole build, and a launcher that
+//! waited on it finds the binary already there. Keys differ per url, revision
+//! and toolchain, and share nothing while they build.
 //!
-//! What has not been established is that no interleaving anywhere fails, and
-//! nothing here tests two launchers running at once. The one interleaving that
-//! is known and handled is a collection pass evicting a build between the
-//! build and the exec, which the run re-materialises a bounded number of
-//! times.
+//! The toolchain in the key and the toolchain that builds are the one that
+//! answers in the repo's root, so a toolchain file there decides both. The
+//! build keeps its cargo target directory at `<cache>/builds/<key>/target`, so a
+//! killed build of that key resumes, and the collector removes the directory
+//! together with the key.
+//!
+//! The one interleaving that is handled beside the lock is a collection pass
+//! evicting a build between the build and the exec, which the run
+//! re-materialises a bounded number of times.
 //!
 //! Where the cache is, and the state beside it, is `renki-dirs`'s table: the
 //! platform's own directory for each, with the tool's `<SHORT>_CACHE` and
@@ -34,8 +37,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use notko::{Maybe, Outcome};
-use renki_dirs::{EnvName, Host, Kind, Namespace, Root, Sources};
+use renki_dirs::{DirKind, EnvName, Host, Namespace, Root, Sources};
 
+use crate::extension::CargoPlan;
 use crate::hash::Fnv;
 use crate::pin::Resolved;
 use crate::tool::Tool;
@@ -61,7 +65,7 @@ pub(crate) fn config_root(tool: &Tool) -> Result<PathBuf, String> {
 /// One kind's root, read off the environment. The table and the precedence are
 /// `renki-dirs`'s; what is this crate's is the reading and the one refusal the
 /// table cannot make, a value that is not text.
-fn root_of<K: Kind>(tool: &Tool) -> Result<PathBuf, String> {
+fn root_of<K: DirKind>(tool: &Tool) -> Result<PathBuf, String> {
     let own = std::env::var_os(EnvName::<K>::of(tool.short_typed()).to_string());
     let xdg = std::env::var_os(K::XDG_VAR);
     let home = std::env::var_os("HOME");
@@ -76,7 +80,7 @@ fn root_of<K: Kind>(tool: &Tool) -> Result<PathBuf, String> {
 /// prints a path as text, and a directory whose bytes do not decode would come
 /// back as a different directory, one that does not exist, reported under a
 /// name the operator cannot find on disk.
-fn root_from<K: Kind>(
+fn root_from<K: DirKind>(
     tool: &Tool,
     own: Option<&std::ffi::OsStr>,
     xdg: Option<&std::ffi::OsStr>,
@@ -212,10 +216,13 @@ fn builds_dir(root: &Path) -> PathBuf {
 ///
 /// The empty string when rustc cannot be run at all. The key then omits it, and
 /// the build that follows would fail for the same reason anyway.
-pub(crate) fn rustc_fingerprint() -> String {
-    Command::new("rustc")
-        .arg("-vV")
-        .output()
+pub(crate) fn rustc_fingerprint(dir: Option<&Path>) -> String {
+    let mut cmd = Command::new("rustc");
+    cmd.arg("-vV");
+    if let Some(dir) = dir {
+        cmd.current_dir(dir);
+    }
+    cmd.output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
@@ -239,6 +246,70 @@ pub(crate) fn compute_key(url: &str, key_rev: &str, toolchain: &str) -> String {
     h.hex()
 }
 
+/// The exclusive lock over building one key's engine: an advisory lock on
+/// `<builds>/<key>.lock`, beside the install root so evicting a build does not
+/// remove what a waiting launcher holds.
+///
+/// `cargo install --root` locks only for the final move of the binary, so
+/// without this two launchers resolving one key compile the engine twice. The
+/// lock is the operating system's, so it goes when its holder does and a
+/// killed build leaves nothing to detect as stale.
+pub(crate) struct BuildLock(std::fs::File);
+
+impl BuildLock {
+    /// The lock file for `key`, created if it is not there yet, and its path.
+    fn open(builds: &Path, key: &str) -> Result<(std::fs::File, PathBuf), String> {
+        std::fs::create_dir_all(builds)
+            .map_err(|e| format!("could not create {}: {e}", builds.display()))?;
+        let path = builds.join(format!("{key}.lock"));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|e| format!("could not open the build lock {}: {e}", path.display()))?;
+        Ok((file, path))
+    }
+
+    /// Take the lock, waiting for its holder when there is one.
+    pub(crate) fn take(builds: &Path, key: &str, short: &str) -> Result<Self, String> {
+        let (file, path) = Self::open(builds, key)?;
+        match file.try_lock() {
+            Ok(()) => {},
+            Err(std::fs::TryLockError::WouldBlock) => {
+                eprintln!("{short}: another launcher is building ({key}), waiting for it ...");
+                file.lock()
+                    .map_err(|e| format!("could not lock {}: {e}", path.display()))?;
+            },
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(format!("could not lock {}: {e}", path.display()));
+            },
+        }
+        Ok(Self(file))
+    }
+
+    /// Take the lock if nobody holds it, and say so with `None` if somebody
+    /// does. Never waits, which is what the collector needs: a key being built
+    /// is not its to remove, and a pass that blocked on one would stop on the
+    /// longest build in the cache.
+    pub(crate) fn try_take(builds: &Path, key: &str) -> Result<Option<Self>, String> {
+        let (file, path) = Self::open(builds, key)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self(file))),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => {
+                Err(format!("could not lock {}: {e}", path.display()))
+            },
+        }
+    }
+}
+
+impl Drop for BuildLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// The cached engine binary for `key`, building it once if missing.
 ///
 /// The resolved pin carries one or more install attempts (a `version` pin
@@ -251,7 +322,13 @@ pub(crate) fn ensure_built(
     cache_root: &Path,
     key: &str,
     resolved: &Resolved,
+    dir: &Path,
 ) -> Result<PathBuf, String> {
+    // Absolute, because the build runs in `dir` and cargo resolves `--root` and
+    // `--target-dir` there, while the lookups here resolve in this process's
+    // directory. A relative `<SHORT>_CACHE` would otherwise name two places.
+    let cache_root = &std::path::absolute(cache_root)
+        .map_err(|e| format!("could not resolve {}: {e}", cache_root.display()))?;
     let root = builds_dir(cache_root).join(key);
     let bin = root.join("bin").join(tool.engine_bin_name());
     if bin.is_file() {
@@ -260,19 +337,39 @@ pub(crate) fn ensure_built(
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create cache dir {}: {e}", root.display()))?;
 
+    // One build per key across every launcher on the machine. Held until this
+    // function returns, and released by the kernel if the process dies.
+    let _held = BuildLock::take(&builds_dir(cache_root), key, tool.short)?;
+    // Whoever held the key may have built the engine while this waited.
+    if bin.is_file() {
+        return Ok(bin);
+    }
+
     eprintln!(
         "{}: building the engine for this pin (once per version) ...",
         tool.short
     );
     crate::extension::materialise_once::<crate::extension::Cargo>(
-        &crate::extension::CargoPlan {
-            attempts:   resolved.attempts.clone(),
-            bin:        tool.engine_bin_name().into(),
-            crate_name: tool.engine_crate.into(),
-        },
+        &build_plan(tool, resolved, &root, dir),
         &root,
     )?;
     Ok(bin)
+}
+
+/// What one key's build is told: the attempts to try, the binary to expect, and
+/// where cargo works.
+///
+/// The target directory is inside the key's own directory, so a killed build of
+/// the key resumes, nothing else compiles into it, and the collector removes it
+/// together with the key. `dir` is the directory cargo runs in.
+fn build_plan(tool: &Tool, resolved: &Resolved, root: &Path, dir: &Path) -> CargoPlan {
+    CargoPlan {
+        attempts:   resolved.attempts.clone(),
+        bin:        tool.engine_bin_name().into(),
+        crate_name: tool.engine_crate.into(),
+        target_dir: root.join("target"),
+        dir:        Some(dir.to_path_buf()),
+    }
 }
 
 /// What the operator reads when no attempt produced a binary.
@@ -281,9 +378,8 @@ pub(crate) fn ensure_built(
 /// hides. The install is locked to the engine's committed lockfile, and a
 /// dependency that lockfile names can still want a rustc above the one in
 /// effect, so the build fails on a crate nobody in this repo named. The
-/// toolchain in effect is the launcher's own, since `cargo install` inherits
-/// this process's working directory: the consuming repo's
-/// `rust-toolchain.toml` governs, not the engine's.
+/// toolchain in effect is the one the plan's directory selects, the consuming
+/// repo's root, so its `rust-toolchain.toml` governs, not the engine's.
 ///
 /// The lockfile is named for the same reason. An engine that commits none
 /// gets a warning from cargo and a fresh resolution, which takes whatever the

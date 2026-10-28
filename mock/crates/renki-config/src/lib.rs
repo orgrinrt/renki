@@ -51,7 +51,7 @@ pub use resolve::{
     BadConfig,
     EnvKey,
     Lookup,
-    Resolved,
+    ResolvedView,
     Value,
     misplaced_keys,
     resolve,
@@ -59,4 +59,4 @@ pub use resolve::{
 };
 pub use scope::{Either, Repo, Scope, User};
 pub use setting::{BadTable, Declared, Setting, key_is_wellformed};
-pub use store::{BadDocument, Rendered, Source, Store};
+pub use store::{BadDocument, Origin, Rendered, Store};

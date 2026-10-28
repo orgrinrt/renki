@@ -214,6 +214,52 @@ fn gc_removes_orphan_build_but_keeps_pinned() {
 }
 
 #[test]
+fn gc_leaves_a_build_in_progress_and_takes_it_once_it_is_done() {
+    // An orphan build whose lock another launcher holds is being built, and
+    // the directory it is writing into is not the collector's to delete. The
+    // control is the same key after the lock is let go: it is evicted then,
+    // so the first pass leaving it is about the lock and not about the key.
+    const HELD: &str = "3333333333333333";
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    touch_build_dir(root, HELD);
+    // what a build of the key left in its own target directory goes with it.
+    let target = root.join("builds").join(HELD).join("target").join("debug");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("engine.d"), b"").unwrap();
+    let mut r = Registry::default();
+    r.builds.push(Build {
+        key:        HELD.into(),
+        engine_url: "u".into(),
+        key_rev:    "r".into(),
+        toolchain:  "tc".into(),
+        built_at:   1,
+        last_used:  1,
+    });
+
+    let lock = crate::cache::BuildLock::take(&root.join("builds"), HELD, "t").unwrap();
+    let removed = r.gc(root, "another-key", RETENTION, 2000);
+    assert!(
+        removed.is_empty(),
+        "a build in progress was evicted: {removed:?}"
+    );
+    assert!(
+        root.join("builds").join(HELD).is_dir(),
+        "the directory of a build in progress was deleted"
+    );
+    assert_eq!(
+        r.builds.len(),
+        1,
+        "the row of a build in progress was dropped"
+    );
+
+    drop(lock);
+    let removed = r.gc(root, "another-key", RETENTION, 3000);
+    assert_eq!(removed, vec![HELD.to_string()]);
+    assert!(!root.join("builds").join(HELD).exists());
+}
+
+#[test]
 fn gc_evicts_build_whose_consumers_are_all_stale() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
