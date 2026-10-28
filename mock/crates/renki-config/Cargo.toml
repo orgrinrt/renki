@@ -1,6 +1,6 @@
 [package]
 name = "renki-config"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 publish = true
 description = "A tool's configuration as contracts. Kinds and scopes as marker types, a typed setting and its erased row, a store contract, and a resolver with provenance. no_std, no alloc, one dependency."
