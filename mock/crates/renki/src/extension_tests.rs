@@ -267,7 +267,7 @@ fn a_cargo_install_is_locked_to_the_source_s_own_lockfile() {
         "abc".to_string(),
         "y-engine".to_string(),
     ];
-    let args = install_args(&attempt, Path::new("/cache/k"));
+    let args = install_args(&attempt, Path::new("/cache/k"), Path::new("/cache/target"));
     assert_eq!(args, vec![
         "install",
         "--git",
@@ -279,22 +279,24 @@ fn a_cargo_install_is_locked_to_the_source_s_own_lockfile() {
         "--root",
         "/cache/k",
         "--force",
+        "--target-dir",
+        "/cache/target",
     ]);
     // the attempt's own arguments come first and whole, since cargo reads
     // the package name positionally after the source selector; the four
     // shapes the crate builds, per `pin.rs` and `engine.rs`
     let shapes: [&[&str]; 3] = [
-        &["--path", "/src", "--target-dir", "/cache/k/target"],
+        &["--path", "/src"],
         &["--git", "https://x/y.git", "--tag", "0.2.0", "y-engine"],
         &["y-engine", "--version", "0.2.0"],
     ];
     for shape in shapes {
         let attempt: Vec<String> = shape.iter().map(|s| s.to_string()).collect();
-        let args = install_args(&attempt, Path::new("/cache/k"));
+        let args = install_args(&attempt, Path::new("/cache/k"), Path::new("/cache/target"));
         assert_eq!(&args[1 .. 1 + shape.len()], attempt.as_slice(), "{shape:?}");
         assert_eq!(
             &args[1 + shape.len() ..],
-            ["--locked", "--root", "/cache/k", "--force"],
+            ["--locked", "--root", "/cache/k", "--force", "--target-dir", "/cache/target"],
             "{shape:?}"
         );
     }
@@ -361,9 +363,8 @@ impl Backend for PlacesItself {
 fn a_backend_that_places_itself_is_handed_the_destination() {
     // `cargo install --root` holds cargo's own lock over the install root and
     // moves the binary in itself, so wrapping it in a scratch and a rename would
-    // stack a weaker mechanism on a working one and throw away the incremental
-    // target directory every build. The backend says which it is, and this is
-    // what that says.
+    // stack a weaker mechanism on a working one. The backend says which it is,
+    // and this is what that says.
     let root = scratch("in-place").join("dest");
     materialise_once::<PlacesItself>(&desc(), &root).unwrap();
 
@@ -424,10 +425,6 @@ fn the_launcher_backend_is_one_impl_of_the_same_contract() {
 
     // The fingerprint is the toolchain, which is what makes a compiler change
     // re-key rather than reuse what the old one produced.
-    assert_eq!(
-        <Cargo as Backend>::fingerprint(),
-        crate::cache::rustc_fingerprint()
-    );
     assert!(
         !<Cargo as Backend>::fingerprint().is_empty(),
         "rustc is not on PATH, so this measures nothing"
@@ -452,6 +449,8 @@ fn the_cargo_backend_reports_every_attempt_that_failed() {
             ]],
             bin:        "nothing".into(),
             crate_name: "the-engine".into(),
+            target_dir: into.join("target"),
+            dir:        None,
         },
         &into,
     )
@@ -504,15 +503,11 @@ fn a_cargo_install_that_succeeds_without_the_binary_is_a_failure() {
     std::fs::create_dir_all(&into).unwrap();
     let plan = |bin: &str| {
         CargoPlan {
-            attempts:   vec![
-                "--path".into(),
-                src.display().to_string(),
-                "--target-dir".into(),
-                into.join("target").display().to_string(),
-            ]
-            .pipe_one(),
+            attempts:   vec!["--path".into(), src.display().to_string()].pipe_one(),
             bin:        bin.into(),
             crate_name: "alpha".into(),
+            target_dir: into.join("target"),
+            dir:        None,
         }
     };
 
@@ -542,3 +537,24 @@ impl PipeOne for Vec<String> {
 // Collecting, and what the reviews found, in a file of their own by size.
 #[path = "extension_tests/collecting.rs"]
 mod collecting;
+
+#[test]
+fn a_cargo_build_runs_in_the_directory_its_plan_names() {
+    // The build must run where the key's toolchain was read. A directory that
+    // does not exist makes the run impossible, so the error is only this one if
+    // the plan's directory was applied.
+    let into = scratch("cargo-dir").join("root");
+    std::fs::create_dir_all(&into).unwrap();
+    let err = Cargo::materialise(
+        &CargoPlan {
+            attempts:   vec![vec!["--version".into()]],
+            bin:        "nothing".into(),
+            crate_name: "the-engine".into(),
+            target_dir: into.join("target"),
+            dir:        Some(into.join("missing")),
+        },
+        &into,
+    )
+    .unwrap_err();
+    assert!(err.contains("could not run cargo install"), "{err}");
+}

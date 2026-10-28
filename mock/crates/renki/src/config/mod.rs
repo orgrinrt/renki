@@ -22,7 +22,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use notko::{Maybe, Outcome};
-use renki_config::{Declared, EnvKey, Lookup, Source, Store};
+use renki_config::{Declared, EnvKey, Lookup, Origin, Store};
 
 pub use self::toml::Toml;
 use crate::tool::Tool;
@@ -188,7 +188,7 @@ pub struct ResolvedSetting {
     key:    &'static str,
     // lint:allow(no-bare-string) reason: the canonical text, owned once per run at the launcher's std boundary. FIXME: port to Str.
     text:   String,
-    source: Source,
+    source: Origin,
 }
 
 impl ResolvedSetting {
@@ -208,7 +208,7 @@ impl ResolvedSetting {
 
     /// Which of the five places it came from.
     #[must_use]
-    pub const fn source(&self) -> Source {
+    pub const fn source(&self) -> Origin {
         self.source
     }
 }

@@ -13,9 +13,9 @@ use renki_config::{
     Either,
     Int,
     List,
+    Origin,
     Repo,
     Setting,
-    Source,
     Text,
     User,
     choices,
@@ -132,20 +132,20 @@ fn every_setting_resolves_with_its_source_over_the_two_files() {
         Some("[server]\nport = 2\n"),
     );
     let all = resolve_all(&T, &c, &t).unwrap();
-    let got: Vec<(&str, &str, Source)> = all
+    let got: Vec<(&str, &str, Origin)> = all
         .iter()
         .map(|s| (s.key, s.text.as_str(), s.source))
         .collect();
     assert_eq!(got, [
-        ("theme", "light", Source::User),
-        ("server.port", "2", Source::Repo),
-        ("strict", "true", Source::Env),
-        ("skip", "[\"a\", \"b\"]", Source::Flag),
+        ("theme", "light", Origin::User),
+        ("server.port", "2", Origin::Repo),
+        ("strict", "true", Origin::Env),
+        ("skip", "[\"a\", \"b\"]", Origin::Flag),
     ]);
     // the control: nothing anywhere is every default
     let (c, _) = cli(&[], &[]);
     let all = resolve_all(&T, &c, &texts(None, None)).unwrap();
-    assert!(all.iter().all(|s| s.source == Source::Default));
+    assert!(all.iter().all(|s| s.source == Origin::Default));
     assert_eq!(
         query::lines(&all),
         "theme=dark\nserver.port=8787\nstrict=false\nskip=[]\n"

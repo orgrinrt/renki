@@ -14,7 +14,7 @@ use core::fmt;
 
 use notko::{Maybe, Outcome};
 
-use crate::{BadValue, Declared, Literal, Source, Store};
+use crate::{BadValue, Declared, Literal, Origin, Store};
 
 /// The two answers only the caller can give: what a flag said for a key, and
 /// what the environment holds under a variable's name. The launcher reads
@@ -96,20 +96,20 @@ pub enum Value<'a> {
 /// Displays as the value's canonical text, which is what the engine reads
 /// out of its environment.
 #[derive(Debug, Clone, Copy)]
-pub struct Resolved<'a, St: Store> {
+pub struct ResolvedView<'a, St: Store> {
     row:    &'a Declared<St>,
-    source: Source,
+    source: Origin,
     value:  Value<'a>,
 }
 
-impl<'a, St: Store> Resolved<'a, St> {
+impl<'a, St: Store> ResolvedView<'a, St> {
     /// The row this resolved.
     pub const fn row(&self) -> &'a Declared<St> {
         self.row
     }
 
     /// Where the value came from.
-    pub const fn source(&self) -> Source {
+    pub const fn source(&self) -> Origin {
         self.source
     }
 
@@ -119,7 +119,7 @@ impl<'a, St: Store> Resolved<'a, St> {
     }
 }
 
-impl<St: Store> fmt::Display for Resolved<'_, St> {
+impl<St: Store> fmt::Display for ResolvedView<'_, St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.value {
             Value::Text(t) => self.row.render_text(t, f),
@@ -133,7 +133,7 @@ impl<St: Store> fmt::Display for Resolved<'_, St> {
 pub struct BadConfig<'a> {
     // lint:allow(no-bare-static-str) reason: the row's static key. FIXME: port to Str.
     key:    &'static str,
-    source: Source,
+    source: Origin,
     why:    BadValue<'a>,
 }
 
@@ -146,7 +146,7 @@ impl<'a> BadConfig<'a> {
 
     /// The place the refused value came from, so the person knows which of
     /// five files or variables to open.
-    pub const fn source(&self) -> Source {
+    pub const fn source(&self) -> Origin {
         self.source
     }
 
@@ -176,7 +176,7 @@ pub fn resolve<'a, St: Store, L: Lookup>(
     lookup: &'a L,
     repo: Maybe<&'a St::Document<'a>>,
     user: Maybe<&'a St::Document<'a>>,
-) -> impl Iterator<Item = Outcome<Resolved<'a, St>, BadConfig<'a>>> + 'a {
+) -> impl Iterator<Item = Outcome<ResolvedView<'a, St>, BadConfig<'a>>> + 'a {
     rows.iter().map(move |row| {
         let (source, value) = find(row, short, lookup, repo, user);
         let checked = match value {
@@ -185,7 +185,7 @@ pub fn resolve<'a, St: Store, L: Lookup>(
         };
         match checked {
             Outcome::Ok(()) => {
-                Outcome::Ok(Resolved {
+                Outcome::Ok(ResolvedView {
                     row,
                     source,
                     value,
@@ -209,26 +209,26 @@ fn find<'a, St: Store, L: Lookup>(
     lookup: &'a L,
     repo: Maybe<&'a St::Document<'a>>,
     user: Maybe<&'a St::Document<'a>>,
-) -> (Source, Value<'a>) {
+) -> (Origin, Value<'a>) {
     if let Maybe::Is(t) = lookup.flag(row.key()) {
-        return (Source::Flag, Value::Text(t));
+        return (Origin::Flag, Value::Text(t));
     }
     if let Maybe::Is(t) = lookup.env(EnvKey::of(short, row.key())) {
-        return (Source::Env, Value::Text(t));
+        return (Origin::Env, Value::Text(t));
     }
     if row.reads_repo()
         && let Maybe::Is(doc) = repo
         && let Maybe::Is(l) = St::get(doc, row.key())
     {
-        return (Source::Repo, Value::Stored(l));
+        return (Origin::Repo, Value::Stored(l));
     }
     if row.reads_user()
         && let Maybe::Is(doc) = user
         && let Maybe::Is(l) = St::get(doc, row.key())
     {
-        return (Source::User, Value::Stored(l));
+        return (Origin::User, Value::Stored(l));
     }
-    (Source::Default, Value::Text(row.default()))
+    (Origin::Default, Value::Text(row.default()))
 }
 
 /// The keys a document holds that no row declares, so a typo in a hand edit
