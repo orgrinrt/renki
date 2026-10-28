@@ -13,11 +13,11 @@
 //! above the item they cover, which is where rustfmt leaves them alone.
 
 mod sealed {
-    pub trait Sealed {}
+    pub trait ConfigSealed {}
 }
 
 /// A scope, sealed to the three that exist.
-pub trait Scope: sealed::Sealed + Copy + Default + 'static {
+pub trait Scope: sealed::ConfigSealed + Copy + Default + 'static {
     /// What the schema calls it.
     // lint:allow(no-bare-static-str) reason: a scope's static name. FIXME: port to Str.
     const NAME: &'static str;
@@ -39,9 +39,9 @@ pub struct Repo;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Either;
 
-impl sealed::Sealed for User {}
-impl sealed::Sealed for Repo {}
-impl sealed::Sealed for Either {}
+impl sealed::ConfigSealed for User {}
+impl sealed::ConfigSealed for Repo {}
+impl sealed::ConfigSealed for Either {}
 
 /// One scope's table row, written out once. A macro rather than three impls
 /// typed by hand, so the three cannot drift in shape.

@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use notko::{Maybe, Outcome};
-use renki_dirs::{EnvName, Host, Kind, Namespace, Root, Sources};
+use renki_dirs::{DirKind, EnvName, Host, Namespace, Root, Sources};
 
 use crate::hash::Fnv;
 use crate::pin::Resolved;
@@ -65,7 +65,7 @@ pub(crate) fn config_root(tool: &Tool) -> Result<PathBuf, String> {
 /// One kind's root, read off the environment. The table and the precedence are
 /// `renki-dirs`'s; what is this crate's is the reading and the one refusal the
 /// table cannot make, a value that is not text.
-fn root_of<K: Kind>(tool: &Tool) -> Result<PathBuf, String> {
+fn root_of<K: DirKind>(tool: &Tool) -> Result<PathBuf, String> {
     let own = std::env::var_os(EnvName::<K>::of(tool.short_typed()).to_string());
     let xdg = std::env::var_os(K::XDG_VAR);
     let home = std::env::var_os("HOME");
@@ -80,7 +80,7 @@ fn root_of<K: Kind>(tool: &Tool) -> Result<PathBuf, String> {
 /// prints a path as text, and a directory whose bytes do not decode would come
 /// back as a different directory, one that does not exist, reported under a
 /// name the operator cannot find on disk.
-fn root_from<K: Kind>(
+fn root_from<K: DirKind>(
     tool: &Tool,
     own: Option<&std::ffi::OsStr>,
     xdg: Option<&std::ffi::OsStr>,

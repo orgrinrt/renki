@@ -109,7 +109,7 @@ pub trait Store: 'static {
 
 /// Where a resolved value came from, highest precedence first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Source {
+pub enum Origin {
     /// A flag on the command line.
     Flag,
     /// The tool's own environment variable for the key.
@@ -122,21 +122,21 @@ pub enum Source {
     Default,
 }
 
-impl Source {
+impl Origin {
     /// The word `config get` prints beside the value.
     // lint:allow(no-bare-string, no-bare-static-str) reason: a static name. FIXME: port to Str.
     pub const fn name(self) -> &'static str {
         match self {
-            Source::Flag => "flag",
-            Source::Env => "env",
-            Source::Repo => "repo",
-            Source::User => "user",
-            Source::Default => "default",
+            Origin::Flag => "flag",
+            Origin::Env => "env",
+            Origin::Repo => "repo",
+            Origin::User => "user",
+            Origin::Default => "default",
         }
     }
 }
 
-impl fmt::Display for Source {
+impl fmt::Display for Origin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }

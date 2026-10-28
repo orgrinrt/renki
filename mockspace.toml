@@ -144,3 +144,12 @@ rules = [
     { scope = "renki-dirs", forbidden = "renki::*, renki_config::*", reason = "the table is the bottom; nothing above it is reachable from it" },
     { scope = "renki-config", forbidden = "renki::*", reason = "the contracts do not know the launcher; the launcher implements them" },
 ]
+
+# --- Ignored tests: each names the row that tracks its gap -------------------
+#
+# An ignore is a catalogue entry and its `tracked #<id>` resolves to a row of a
+# ledger. The ledger is the crate's own `LEDGER.md`, one row per issue. This
+# names where the rows are and leaves the severity at the pack's default.
+
+[lints.catalogue-ignore]
+ledgers = "mock/crates/*/LEDGER.md"

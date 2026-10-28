@@ -26,11 +26,11 @@ use renki_config::{
     List,
     Literal,
     Lookup,
+    Origin,
     PathText,
     Rendered,
     Repo,
     Setting,
-    Source,
     Store,
     Text,
     TextItems,
@@ -209,7 +209,7 @@ fn all<'a>(
     cli: &'a Cli<'a>,
     repo: Maybe<&'a ToyDoc<'a>>,
     user: Maybe<&'a ToyDoc<'a>>,
-) -> Vec<(&'static str, String, Source)> {
+) -> Vec<(&'static str, String, Origin)> {
     resolve(rows, "widget", cli, repo, user)
         .map(|r| {
             let r = r.unwrap();
@@ -413,12 +413,12 @@ fn every_place_wins_over_the_ones_below_it_and_the_source_says_which() {
     };
     let got = all(&rows, &cli, Maybe::Is(&repo), Maybe::Is(&user));
     assert_eq!(got, [
-        ("theme", "dark".to_string(), Source::Env),
-        ("server.port", "3".to_string(), Source::Flag),
-        ("strict", "true".to_string(), Source::Repo),
-        ("model.base", "m".to_string(), Source::User),
-        ("root", "/srv".to_string(), Source::Default),
-        ("skip", "[\"a\"]".to_string(), Source::Repo),
+        ("theme", "dark".to_string(), Origin::Env),
+        ("server.port", "3".to_string(), Origin::Flag),
+        ("strict", "true".to_string(), Origin::Repo),
+        ("model.base", "m".to_string(), Origin::User),
+        ("root", "/srv".to_string(), Origin::Default),
+        ("skip", "[\"a\"]".to_string(), Origin::Repo),
     ]);
 
     // without the flag the variable wins; without both the repo file wins for
@@ -428,11 +428,11 @@ fn every_place_wins_over_the_ones_below_it_and_the_source_says_which() {
         env:   &[],
     };
     let got = all(&rows, &cli, Maybe::Is(&repo), Maybe::Is(&user));
-    assert_eq!(got[0], ("theme", "light".to_string(), Source::User));
-    assert_eq!(got[1], ("server.port", "1".to_string(), Source::Repo));
+    assert_eq!(got[0], ("theme", "light".to_string(), Origin::User));
+    assert_eq!(got[1], ("server.port", "1".to_string(), Origin::Repo));
     // the control: no files, no flags, every row is its default
     let got = all(&rows, &cli, Maybe::Isnt, Maybe::Isnt);
-    assert!(got.iter().all(|(_, _, s)| *s == Source::Default), "{got:?}");
+    assert!(got.iter().all(|(_, _, s)| *s == Origin::Default), "{got:?}");
     assert_eq!(got[5].1, "[]");
 }
 
@@ -447,14 +447,14 @@ fn a_repo_file_cannot_set_a_persons_setting_and_a_user_file_cannot_set_the_repos
         env:   &[],
     };
     let got = all(&rows, &cli, Maybe::Is(&repo), Maybe::Isnt);
-    assert_eq!(got[0], ("theme", "dark".to_string(), Source::Default));
+    assert_eq!(got[0], ("theme", "dark".to_string(), Origin::Default));
     let misplaced: Vec<&str> = misplaced_keys(&rows, &repo).collect();
     assert_eq!(misplaced, ["theme"]);
     // and the other way: `strict` is the repo's, and a user file naming it is
     // not read for it
     let user = doc("strict = true\n");
     let got = all(&rows, &cli, Maybe::Isnt, Maybe::Is(&user));
-    assert_eq!(got[2], ("strict", "false".to_string(), Source::Default));
+    assert_eq!(got[2], ("strict", "false".to_string(), Origin::Default));
     // the control: a key the repo may hold is not misplaced
     let repo = doc("strict = true\nserver.port = 9\n");
     assert_eq!(misplaced_keys(&rows, &repo).count(), 0);
@@ -482,7 +482,7 @@ fn a_value_the_kind_refuses_is_refused_with_its_source_named() {
     let bad = resolve(&rows, "widget", &cli, Maybe::Isnt, Maybe::Is(&user))
         .find_map(erred)
         .unwrap();
-    assert_eq!((bad.key(), bad.source()), ("server.port", Source::User));
+    assert_eq!((bad.key(), bad.source()), ("server.port", Origin::User));
     assert_eq!(bad.why().got(), Got::Text("eighty"));
     assert_eq!(
         bad.to_string(),
@@ -497,7 +497,7 @@ fn a_value_the_kind_refuses_is_refused_with_its_source_named() {
     let bad = resolve(&rows, "widget", &cli, Maybe::Isnt, Maybe::Isnt)
         .find_map(erred)
         .unwrap();
-    assert_eq!((bad.key(), bad.source()), ("theme", Source::Flag));
+    assert_eq!((bad.key(), bad.source()), ("theme", Origin::Flag));
 }
 
 #[test]
@@ -517,7 +517,7 @@ fn a_resolved_value_keeps_where_it_was_found_and_prints_canonically() {
         "[\"a\", \"b\"]",
         "a list prints in its canonical form"
     );
-    assert_eq!(r.source(), Source::Flag);
+    assert_eq!(r.source(), Origin::Flag);
 }
 
 // --- the store's own halves the contract asks for ------------------------
@@ -546,10 +546,10 @@ fn a_document_that_is_not_one_is_refused_at_its_line() {
 
 #[test]
 fn the_source_names_are_the_words_config_get_prints() {
-    let names: Vec<&str> = [Source::Flag, Source::Env, Source::Repo, Source::User, Source::Default]
+    let names: Vec<&str> = [Origin::Flag, Origin::Env, Origin::Repo, Origin::User, Origin::Default]
         .iter()
         .map(|s| s.name())
         .collect();
     assert_eq!(names, ["flag", "env", "repo", "user", "default"]);
-    assert!(Source::Flag < Source::Default, "precedence is the order");
+    assert!(Origin::Flag < Origin::Default, "precedence is the order");
 }

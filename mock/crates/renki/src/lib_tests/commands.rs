@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use renki_config::{Bool, Declared, List, PathText, Setting, Source, User};
+use renki_config::{Bool, Declared, List, Origin, PathText, Setting, User};
 
 use super::*;
 use crate::config::Toml;
@@ -24,7 +24,7 @@ const SETTINGS: &[Declared<Toml>] = &[
 struct Seen {
     cwd:      PathBuf,
     root:     Option<PathBuf>,
-    settings: Vec<(&'static str, String, Source)>,
+    settings: Vec<(&'static str, String, Origin)>,
     args:     Vec<OsString>,
 }
 
@@ -94,8 +94,8 @@ fn a_command_runs_before_a_root_is_required_and_gets_the_resolved_settings() {
     // launcher's wherever it is, and the command sees neither.
     assert_eq!(seen.args, s(&["a"]));
     assert_eq!(seen.settings, vec![
-        ("strict", "true".to_string(), Source::Flag),
-        ("roots", "[\"/srv\", \"/opt\"]".to_string(), Source::Flag),
+        ("strict", "true".to_string(), Origin::Flag),
+        ("roots", "[\"/srv\", \"/opt\"]".to_string(), Origin::Flag),
     ]);
     // The root is looked for, and this test runs inside a repository, so it
     // is found: the crate's marker is `.git` and the walk up from the test's
@@ -127,7 +127,7 @@ fn a_command_may_run_where_there_is_no_repository_at_all() {
     assert_eq!(seen.args, s(&["x", "y"]));
     assert_eq!(
         seen.settings[0],
-        ("strict", "false".to_string(), Source::Default)
+        ("strict", "false".to_string(), Origin::Default)
     );
 }
 

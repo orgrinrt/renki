@@ -14,15 +14,15 @@ use renki_dirs::{
     Cache,
     Config,
     Data,
+    DirKind,
     EnvName,
     Host,
-    Kind,
     MacOs,
     Namespace,
+    PathSource,
     Platform,
     Root,
     Short,
-    Source,
     Sources,
     State,
     Xdg,
@@ -39,14 +39,14 @@ fn home() -> Maybe<&'static str> {
     Maybe::Is("/home/u")
 }
 
-fn path<K: Kind, P: Platform>(sources: Sources<'static>) -> String {
+fn path<K: DirKind, P: Platform>(sources: Sources<'static>) -> String {
     match Root::<K, P>::resolve(ns(), sources) {
         Outcome::Ok(r) => r.to_string(),
         Outcome::Err(e) => panic!("{e}"),
     }
 }
 
-fn defaults<K: Kind, P: Platform>() -> String {
+fn defaults<K: DirKind, P: Platform>() -> String {
     path::<K, P>(Sources {
         own:  Maybe::Isnt,
         xdg:  Maybe::Isnt,
@@ -148,13 +148,13 @@ fn the_source_that_decided_a_root_is_reported() {
         home: home(),
     };
     let r = Root::<Cache, Host>::resolve(ns(), own).unwrap();
-    assert_eq!(r.source(), Source::Own);
+    assert_eq!(r.source(), PathSource::Own);
     assert_eq!(r.base(), "/mnt/big");
     let r = Root::<Cache, Host>::resolve(ns(), xdg).unwrap();
-    assert_eq!(r.source(), Source::Xdg);
+    assert_eq!(r.source(), PathSource::Xdg);
     assert_eq!(r.base(), "/x");
     let r = Root::<Cache, Host>::resolve(ns(), def).unwrap();
-    assert_eq!(r.source(), Source::Default);
+    assert_eq!(r.source(), PathSource::Default);
     assert_eq!(r.base(), "/home/u");
 }
 

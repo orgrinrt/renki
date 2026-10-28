@@ -495,6 +495,20 @@ fn the_build_lock_is_exclusive_per_key_and_released_on_drop() {
     );
 }
 
+/// `ensure_built` on a second thread, which is how the tests below hold a second
+/// launcher on a lock they own while they go on running.
+///
+/// A thread rather than a child process because the call under test is in this
+/// process: the backend it builds with is a type in this module, and a child
+/// would have to be the test binary re-entering itself to reach the same call.
+fn ensure_built_on_a_thread(
+    root: PathBuf,
+    key: &'static str,
+    resolved: Resolved,
+) -> std::thread::JoinHandle<Result<PathBuf, String>> {
+    std::thread::spawn(move || ensure_built(&T, &root, key, &resolved, &root)) // lint:allow(no-runtime-spawn) reason: the second launcher the lock tests hold, in-process because the call under test is.
+}
+
 #[test]
 fn a_waiter_finds_the_binary_the_holder_built() {
     // The re-check after the lock: a launcher that waited must not build again.
@@ -516,8 +530,7 @@ fn a_waiter_finds_the_binary_the_holder_built() {
         attempts:    vec![],
         version_tag: String::new(),
     };
-    let root = dir.path().to_path_buf();
-    let waiter = std::thread::spawn(move || ensure_built(&T, &root, key, &none, &root));
+    let waiter = ensure_built_on_a_thread(dir.path().to_path_buf(), key, none);
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(
         !waiter.is_finished(),
@@ -566,8 +579,7 @@ fn builds_of_different_keys_take_turns_on_the_shared_target_dir() {
     // anything; it is put there while the target lock is held.
     std::fs::remove_dir_all(&bin).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
-    let root = dir.path().to_path_buf();
-    let waiter = std::thread::spawn(move || ensure_built(&T, &root, key, &none, &root));
+    let waiter = ensure_built_on_a_thread(dir.path().to_path_buf(), key, none);
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert!(
         !waiter.is_finished(),
