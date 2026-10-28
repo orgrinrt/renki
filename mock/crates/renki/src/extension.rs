@@ -788,14 +788,19 @@ pub struct CargoPlan {
     pub crate_name: String,
     /// Where cargo keeps its compiled intermediates, passed as `--target-dir`.
     /// Cargo's own install otherwise compiles in a temporary directory that is
-    /// gone with the process, so a killed build starts over; named, it resumes,
-    /// and a build of a new revision recompiles only what moved. Builds sharing
-    /// it take turns, which the launcher's own lock over it guarantees.
+    /// gone with the process, so a killed build starts over; named, it resumes.
+    /// One directory belongs to one build: two builds that compile into the same
+    /// one race on cargo's copy of the finished binary, and nothing here keeps
+    /// them apart, so a plan names a directory no other plan uses at the same
+    /// time.
     pub target_dir: PathBuf,
-    /// The directory cargo runs in, when it is not the process's own. A
-    /// toolchain file decides which rustc answers in a directory, so a build
-    /// has to run where the cache key's fingerprint was taken or one revision
-    /// is built under two toolchains and keyed twice.
+    /// The directory the build runs in, when it is not the process's own:
+    /// cargo is started with it as its working directory, so a relative path in
+    /// the install arguments, `--root` and `--target-dir` among them, resolves
+    /// there and not against the launcher. A toolchain file decides which rustc
+    /// answers in a directory, so the build runs where the cache key's
+    /// fingerprint was taken, the repository's root, or one revision is built
+    /// under two toolchains and keyed twice.
     pub dir:        Option<PathBuf>,
 }
 
@@ -850,6 +855,16 @@ impl Backend for Cargo {
     /// rustc is part of the compilation input, so a toolchain change re-keys and
     /// forces a coherent rebuild. A frozen binary paired with a moved toolchain
     /// is the failure this prevents.
+    ///
+    /// Read in the launcher's own directory, which is not where the build runs:
+    /// the build runs in [`CargoPlan::dir`], where a `rust-toolchain.toml` can
+    /// select another rustc. [`Backend::fingerprint`] takes no plan, and it is
+    /// held as a function pointer by [`Registered`], so the directory cannot
+    /// reach it without changing the contract every backend implements. The
+    /// launcher's own key does not use this method; it reads rustc in the
+    /// repository's root directly, the directory the build runs in, so the key
+    /// and the build agree. A host that keys a [`Cargo`] build by this method
+    /// gets the launcher's directory's toolchain and not the build's.
     fn fingerprint() -> String {
         crate::cache::rustc_fingerprint(None)
     }
@@ -883,7 +898,7 @@ impl Backend for Cargo {
     /// `cargo install --root` takes cargo's own lock on the install root and
     /// moves the binary in itself, so a scratch and a rename would stack a
     /// second, weaker mechanism on a working one. The incremental state is the
-    /// plan's `target_dir`, which lives outside the root either way.
+    /// plan's `target_dir`, which the plan names and this backend does not move.
     fn places_itself() -> bool {
         true
     }

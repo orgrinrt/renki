@@ -556,41 +556,6 @@ fn the_toolchain_is_asked_in_the_directory_it_is_given() {
 }
 
 #[test]
-fn builds_of_different_keys_take_turns_on_the_shared_target_dir() {
-    // Every key uplifts through one target directory, so a second key must not
-    // start compiling while the first holds it. The control is the same call
-    // finishing once the lock is let go.
-    let dir = tempfile::tempdir().unwrap();
-    let builds = builds_dir(dir.path());
-    let target = BuildLock::take(&builds, "target", "t").unwrap();
-    let key = "feedfeedfeedfeed";
-    let bin = builds.join(key).join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let none = Resolved {
-        pin:         Pin {
-            url:       "u".into(),
-            reference: Reference::Rev("r".into()),
-        },
-        key_rev:     "r".into(),
-        attempts:    vec![],
-        version_tag: String::new(),
-    };
-    // The binary is absent, so the call has to take the locks before it can see
-    // anything; it is put there while the target lock is held.
-    std::fs::remove_dir_all(&bin).unwrap();
-    std::fs::create_dir_all(&bin).unwrap();
-    let waiter = ensure_built_on_a_thread(dir.path().to_path_buf(), key, none);
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assert!(
-        !waiter.is_finished(),
-        "a build of another key went ahead while the shared target dir was held"
-    );
-    std::fs::write(bin.join("engine"), b"#!/bin/sh\n").unwrap();
-    drop(target);
-    assert_eq!(waiter.join().unwrap().unwrap(), bin.join("engine"));
-}
-
-#[test]
 fn a_relative_cache_root_names_one_place_for_the_build_and_the_lookup() {
     // The build runs in another directory, where a relative root would mean a
     // different path than it does here. The lookup is made absolute first, so a
@@ -633,4 +598,29 @@ fn pathdiff_from(from: &std::path::Path, to: &std::path::Path) -> std::path::Pat
         out.push(c);
     }
     out
+}
+
+#[test]
+fn a_build_compiles_into_a_target_directory_inside_its_own_key() {
+    // One directory per build is what keeps two keys from compiling into each
+    // other's, and inside the key's directory is what lets the collector take it
+    // with the key. Two keys give two directories; each sits under its own key.
+    let dir = tempfile::tempdir().unwrap();
+    let resolved = Resolved {
+        pin:         Pin {
+            url:       "u".into(),
+            reference: Reference::Rev("r".into()),
+        },
+        key_rev:     "r".into(),
+        attempts:    vec![vec!["--path".into(), "x".into()]],
+        version_tag: String::new(),
+    };
+    let builds = builds_dir(dir.path());
+    let first = build_plan(&T, &resolved, &builds.join("aaaa"), dir.path());
+    let second = build_plan(&T, &resolved, &builds.join("bbbb"), dir.path());
+    assert_eq!(first.target_dir, builds.join("aaaa").join("target"));
+    assert_eq!(second.target_dir, builds.join("bbbb").join("target"));
+    assert_ne!(first.target_dir, second.target_dir);
+    assert_eq!(first.dir.as_deref(), Some(dir.path()));
+    assert_eq!(first.attempts, resolved.attempts);
 }

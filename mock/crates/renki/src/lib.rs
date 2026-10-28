@@ -485,7 +485,7 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
             tool.short,
             source.display()
         );
-        let bin = engine::build(tool, &cache_root, &source)?;
+        let bin = engine::build(tool, &cache_root, &source, &root)?;
         let extra = tool
             .hooks
             .engine_args_local

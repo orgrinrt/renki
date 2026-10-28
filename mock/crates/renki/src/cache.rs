@@ -12,14 +12,13 @@
 //! run once per launcher; [`ensure_built`] therefore holds an advisory lock on
 //! `<cache>/builds/<key>.lock` across the whole build, and a launcher that
 //! waited on it finds the binary already there. Keys differ per url, revision
-//! and toolchain, so they have different install roots, but they take turns on
-//! the shared target directory below.
+//! and toolchain, and share nothing while they build.
 //!
 //! The toolchain in the key and the toolchain that builds are the one that
 //! answers in the repo's root, so a toolchain file there decides both. The
-//! build keeps one cargo target directory at `<cache>/target` for every key, so
-//! a killed build resumes and a new revision recompiles only what moved. It is not collected, and
-//! removing it costs a slower next build and nothing else.
+//! build keeps its cargo target directory at `<cache>/builds/<key>/target`, so a
+//! killed build of that key resumes, and the collector removes the directory
+//! together with the key.
 //!
 //! The one interleaving that is handled beside the lock is a collection pass
 //! evicting a build between the build and the exec, which the run
@@ -40,6 +39,7 @@ use std::process::Command;
 use notko::{Maybe, Outcome};
 use renki_dirs::{DirKind, EnvName, Host, Namespace, Root, Sources};
 
+use crate::extension::CargoPlan;
 use crate::hash::Fnv;
 use crate::pin::Resolved;
 use crate::tool::Tool;
@@ -254,10 +254,11 @@ pub(crate) fn compute_key(url: &str, key_rev: &str, toolchain: &str) -> String {
 /// without this two launchers resolving one key compile the engine twice. The
 /// lock is the operating system's, so it goes when its holder does and a
 /// killed build leaves nothing to detect as stale.
-struct BuildLock(std::fs::File);
+pub(crate) struct BuildLock(std::fs::File);
 
 impl BuildLock {
-    fn take(builds: &Path, key: &str, short: &str) -> Result<Self, String> {
+    /// The lock file for `key`, created if it is not there yet, and its path.
+    fn open(builds: &Path, key: &str) -> Result<(std::fs::File, PathBuf), String> {
         std::fs::create_dir_all(builds)
             .map_err(|e| format!("could not create {}: {e}", builds.display()))?;
         let path = builds.join(format!("{key}.lock"));
@@ -267,6 +268,12 @@ impl BuildLock {
             .write(true)
             .open(&path)
             .map_err(|e| format!("could not open the build lock {}: {e}", path.display()))?;
+        Ok((file, path))
+    }
+
+    /// Take the lock, waiting for its holder when there is one.
+    pub(crate) fn take(builds: &Path, key: &str, short: &str) -> Result<Self, String> {
+        let (file, path) = Self::open(builds, key)?;
         match file.try_lock() {
             Ok(()) => {},
             Err(std::fs::TryLockError::WouldBlock) => {
@@ -279,6 +286,21 @@ impl BuildLock {
             },
         }
         Ok(Self(file))
+    }
+
+    /// Take the lock if nobody holds it, and say so with `None` if somebody
+    /// does. Never waits, which is what the collector needs: a key being built
+    /// is not its to remove, and a pass that blocked on one would stop on the
+    /// longest build in the cache.
+    pub(crate) fn try_take(builds: &Path, key: &str) -> Result<Option<Self>, String> {
+        let (file, path) = Self::open(builds, key)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self(file))),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => {
+                Err(format!("could not lock {}: {e}", path.display()))
+            },
+        }
     }
 }
 
@@ -318,11 +340,6 @@ pub(crate) fn ensure_built(
     // One build per key across every launcher on the machine. Held until this
     // function returns, and released by the kernel if the process dies.
     let _held = BuildLock::take(&builds_dir(cache_root), key, tool.short)?;
-    // Every key's install uplifts through the one shared target directory and
-    // cargo copies from there after it has let go of its own lock on it, so a
-    // second key compiling in between would put its binary under this key.
-    // One lock over the whole shared directory, inside the key's.
-    let _target = BuildLock::take(&builds_dir(cache_root), "target", tool.short)?;
     // Whoever held the key may have built the engine while this waited.
     if bin.is_file() {
         return Ok(bin);
@@ -333,16 +350,26 @@ pub(crate) fn ensure_built(
         tool.short
     );
     crate::extension::materialise_once::<crate::extension::Cargo>(
-        &crate::extension::CargoPlan {
-            attempts:   resolved.attempts.clone(),
-            bin:        tool.engine_bin_name().into(),
-            crate_name: tool.engine_crate.into(),
-            target_dir: cache_root.join("target"),
-            dir:        Some(dir.to_path_buf()),
-        },
+        &build_plan(tool, resolved, &root, dir),
         &root,
     )?;
     Ok(bin)
+}
+
+/// What one key's build is told: the attempts to try, the binary to expect, and
+/// where cargo works.
+///
+/// The target directory is inside the key's own directory, so a killed build of
+/// the key resumes, nothing else compiles into it, and the collector removes it
+/// together with the key. `dir` is the directory cargo runs in.
+fn build_plan(tool: &Tool, resolved: &Resolved, root: &Path, dir: &Path) -> CargoPlan {
+    CargoPlan {
+        attempts:   resolved.attempts.clone(),
+        bin:        tool.engine_bin_name().into(),
+        crate_name: tool.engine_crate.into(),
+        target_dir: root.join("target"),
+        dir:        Some(dir.to_path_buf()),
+    }
 }
 
 /// What the operator reads when no attempt produced a binary.
