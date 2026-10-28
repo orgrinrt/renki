@@ -541,3 +541,84 @@ fn the_toolchain_is_asked_in_the_directory_it_is_given() {
     );
     assert!(rustc_fingerprint(Some(&dir.path().join("missing"))).is_empty());
 }
+
+#[test]
+fn builds_of_different_keys_take_turns_on_the_shared_target_dir() {
+    // Every key uplifts through one target directory, so a second key must not
+    // start compiling while the first holds it. The control is the same call
+    // finishing once the lock is let go.
+    let dir = tempfile::tempdir().unwrap();
+    let builds = builds_dir(dir.path());
+    let target = BuildLock::take(&builds, "target", "t").unwrap();
+    let key = "feedfeedfeedfeed";
+    let bin = builds.join(key).join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let none = Resolved {
+        pin:         Pin {
+            url:       "u".into(),
+            reference: Reference::Rev("r".into()),
+        },
+        key_rev:     "r".into(),
+        attempts:    vec![],
+        version_tag: String::new(),
+    };
+    // The binary is absent, so the call has to take the locks before it can see
+    // anything; it is put there while the target lock is held.
+    std::fs::remove_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    let root = dir.path().to_path_buf();
+    let waiter = std::thread::spawn(move || ensure_built(&T, &root, key, &none, &root));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(
+        !waiter.is_finished(),
+        "a build of another key went ahead while the shared target dir was held"
+    );
+    std::fs::write(bin.join("engine"), b"#!/bin/sh\n").unwrap();
+    drop(target);
+    assert_eq!(waiter.join().unwrap().unwrap(), bin.join("engine"));
+}
+
+#[test]
+fn a_relative_cache_root_names_one_place_for_the_build_and_the_lookup() {
+    // The build runs in another directory, where a relative root would mean a
+    // different path than it does here. The lookup is made absolute first, so a
+    // binary at the absolute spot is found from a relative spelling.
+    let dir = tempfile::tempdir().unwrap();
+    let key = "0123012301230123";
+    let bin = builds_dir(dir.path()).join(key).join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("engine"), b"#!/bin/sh\n").unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let relative = pathdiff_from(&cwd, dir.path());
+    assert!(relative.is_relative());
+    let none = Resolved {
+        pin:         Pin {
+            url:       "u".into(),
+            reference: Reference::Rev("r".into()),
+        },
+        key_rev:     "r".into(),
+        attempts:    vec![],
+        version_tag: String::new(),
+    };
+    let got = ensure_built(&T, &relative, key, &none, dir.path()).unwrap();
+    assert!(got.is_absolute(), "{}", got.display());
+    assert_eq!(
+        got.canonicalize().unwrap(),
+        bin.join("engine").canonicalize().unwrap()
+    );
+}
+
+/// `to` spelled relative to `from`, both absolute, by climbing out with `..`.
+fn pathdiff_from(from: &std::path::Path, to: &std::path::Path) -> std::path::PathBuf {
+    let from: Vec<_> = from.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let shared = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut out = std::path::PathBuf::new();
+    for _ in shared .. from.len() {
+        out.push("..");
+    }
+    for c in &to[shared ..] {
+        out.push(c);
+    }
+    out
+}

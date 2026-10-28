@@ -270,7 +270,7 @@ impl BuildLock {
         match file.try_lock() {
             Ok(()) => {},
             Err(std::fs::TryLockError::WouldBlock) => {
-                eprintln!("{short}: another launcher is building this engine, waiting for it ...");
+                eprintln!("{short}: another launcher is building ({key}), waiting for it ...");
                 file.lock()
                     .map_err(|e| format!("could not lock {}: {e}", path.display()))?;
             },
@@ -302,6 +302,11 @@ pub(crate) fn ensure_built(
     resolved: &Resolved,
     dir: &Path,
 ) -> Result<PathBuf, String> {
+    // Absolute, because the build runs in `dir` and cargo resolves `--root` and
+    // `--target-dir` there, while the lookups here resolve in this process's
+    // directory. A relative `<SHORT>_CACHE` would otherwise name two places.
+    let cache_root = &std::path::absolute(cache_root)
+        .map_err(|e| format!("could not resolve {}: {e}", cache_root.display()))?;
     let root = builds_dir(cache_root).join(key);
     let bin = root.join("bin").join(tool.engine_bin_name());
     if bin.is_file() {

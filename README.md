@@ -181,8 +181,7 @@ the destination directly or a scratch that gets renamed into place once it's
 finished, which is where they actually differ: `cargo install --root` holds
 cargo's own lock over the install root and moves the binary in itself, so a
 scratch around that would be a second, weaker mechanism over a working one.
-Everything
-fetched takes the scratch, which is what keeps a reader from seeing a
+Everything fetched takes the scratch, which is what keeps a reader from seeing a
 half-written tree.
 
 Extensions are the other half. A host reads tool descriptors out of its own
