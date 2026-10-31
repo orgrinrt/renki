@@ -38,7 +38,7 @@ renki = "#EDE6F3 | #5C2D82"
 # ---------------------------------------------------------------------------
 
 [lint-crates]
-mockspace-extra-lints = { git = "ssh://git@github.com/orgrinrt/mockspace-hilavitkutin-stack-lints.git", branch = "dev" }
+mockspace-extra-lints = { git = "ssh://git@github.com/orgrinrt/mockspace-extra-lints.git", branch = "dev" }
 
 # --- Universal quality lints (mockspace built-ins) -------------------------
 
