@@ -63,62 +63,63 @@ max_lines = "500"
 # The tables and the contracts are no_std and no alloc, and they speak notko's
 # `Outcome` and `Maybe` rather than `Result` and `Option`. A `String`, a `Vec`,
 # a `Box`, a `Result` or an `Option` in one of them does not commit. The
-# launcher crate is std by nature and is exempt from these five; it is bound
-# by the two below them.
+# launcher crate is std by nature, so these lints name it in `exempt_crates` and
+# bind every crate besides it, one made later too; it is bound by the two below
+# them.
 
 [lints.no-std]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 [lints.no-alloc]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 [lints.no-bare-result]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 [lints.no-bare-option]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 [lints.no-bare-string]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 [lints.no-bare-numeric]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 [lints.no-bare-static-str]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 [lints.arvo-types-only]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 [lints.no-public-raw-field]
 commit = "error"
 build = "error"
 push = "error"
-crates = ["renki-dirs", "renki-config"]
+exempt_crates = ["renki"]
 
 # --- Every crate: contracts before concrete types, no vtables --------------
 
