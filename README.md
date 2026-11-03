@@ -11,6 +11,7 @@
 > A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, six dependencies, three of them ours.
 
 </div>
+
 Tools that come in two halves, an engine that does the work and a launcher that finds the repo, reads the version the repo pins, builds that exact engine once into a shared cache and hands over to it, end up with the same second half every time. `renki` is that half, with everything specific to any one tool taken back out of it. A repo's tooling then cannot drift from what the repo asked for, since everyone on the project gets the version the config names, whichever machine they are on and whatever they installed last year, and a launcher installed off a git branch keeps itself current instead of going stale quietly.
 
 A `const` names the config file, the pin keys, the engine crate and a few other things, and the rest comes with it. Anything that is one tool's and nobody else's goes through a named hook, so what is left here stays the part every launcher shares.
@@ -23,7 +24,7 @@ The engine has to be a rust crate that `cargo install` can build, since that is 
 cargo add renki
 ```
 
-Or in your `Cargo.toml`:
+Or in a `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -32,15 +33,15 @@ renki = "0.0.4"
 
 Pin the exact version rather than a range. `0.0.x` releases are incompatible
 with each other by semver's own rules anyway, and `Tool` is a struct literal, so
-a new field on it breaks the build unless it spreads `..Tool::CONVENTIONS` and lets the
-base answer the ones there is no opinion about.
+a new field on it breaks the build unless the literal spreads `..Tool::CONVENTIONS` and lets the
+base answer the ones it has no opinion about.
 
 `renki` itself is not installed as a command. It is a library, and what goes on
 `PATH` is the launcher built with it.
 
 ## Example
 
-Here's the whole of it, and it really is about this much:
+A launcher for a tool called `widget` comes to about this much:
 
 ```rust,no_run
 use renki::{pin_keys, Tool};
@@ -50,7 +51,7 @@ const TOOL: Tool = Tool {
     config_file:     "widget.toml",
     pin_keys:        pin_keys!("widget"),   // widget_version, _rev, _branch, _tag, _git
     engine_crate:    "widget-engine",
-    cache_namespace: "widget",     // ~/.cache/widget/, yours alone
+    cache_namespace: "widget",     // ~/.cache/widget/, the tool's alone
     default_url:     "https://github.com/o/widget.git",
     launcher_crate:  "widget",     // how it finds itself in cargo's install ledger
     ..Tool::CONVENTIONS            // .git anchor, --dir, --engine, a `locate` query,
@@ -88,7 +89,7 @@ next time they're wanted, since the compiler really is part of the compilation
 input.
 
 The config is TOML and only those few top-level keys get read out of it. The
-rest of the file is yours and the launcher never so much as looks at it.
+rest of the file belongs to the repo and the launcher never so much as looks at it.
 
 ## Motivation
 
@@ -101,13 +102,14 @@ A pin in the repo is the only thing that keeps a tool's version the same for eve
 Under active development, so the api hasn't settled and breaking changes should
 be expected. It works and I use it for two tools daily, but I'd hold off putting
 anything load-bearing on it just yet. `Tool::CONVENTIONS` is there so that at
-least a new field doesn't break you, and I'll do my best to document the
+least a new field doesn't break a launcher, and I'll do my best to document the
 migrations properly when the shape does move.
 
 Unix only for now, and it's a build error elsewhere rather than a runtime
 surprise. The handover is `exec` and there's no portable version of that, so
 windows would want a different design and not a different import, and that work
 I haven't done.
+
 ### What is in it
 
 `Tool` is the const that describes one launcher, and `Tool::CONVENTIONS` is a
@@ -119,9 +121,8 @@ for the config key and the answer keys, `Cli` for the two flag spellings, and
 the seven optional places a tool does something no other tool needs, with
 `Check` naming the shape two of them take, and `SelfUpdate` decides whether the
 launcher chases its own branch at all. Then `Pin` and `Reference` for what a
-repo pinned, `Resolved` for what that turned into, and `package_name` for when
-you're writing the hook that has to tell whether some directory really is a
-checkout of your engine. A `main` is `run` or `run_without_sanitizing` and not
+repo pinned, `Resolved` for what that turned into, and `package_name` for the hook that has to tell whether some directory really is a
+checkout of the engine. A `main` is `run` or `run_without_sanitizing` and not
 much besides.
 
 The full surface with working links is over on [docs.rs](https://docs.rs/renki),
@@ -135,19 +136,19 @@ The anchor, since it's the one thing that really does differ between tools.
 and suits a config living inside a repository. `Anchor::ConfigFile` walks up to
 the nearest directory holding the config itself, and suits a config sitting
 above a whole pile of repositories, where a marker anchor would stop at the
-first repo on the way up and never get to it. If I picked one for you, the other
+first repo on the way up and never get to it. If I picked one for every tool, the other
 kind of tool would just end up working around it, so it stays a parameter.
 
 And `version_source`, which says where a `version` pin may look. A rev, a tag or
-a branch all name something inside the url you pinned. A version could mean that
-same repo's tag of the same name, or it could mean a crates.io release of your
+a branch all name something inside the pinned url. A version could mean that
+same repo's tag of the same name, or it could mean a crates.io release of the tool's
 `engine_crate`, and `cargo install` resolves that one by name with nothing at
-all tying the name to your url. So the default is `VersionSource::GitTag`, the
-tag and nothing else. If the name isn't yours on crates.io, and it isn't while
-you're starting out, then whoever ends up taking it decides what your engine is.
-Switch over to `RegistryThenGitTag` once you own the name and want the faster
-cold build. Do note that it's a promise you're making about that name, and not
-something anyone can check on your behalf.
+all tying the name to the pinned url. So the default is `VersionSource::GitTag`, the
+tag and nothing else. If the name isn't the tool's on crates.io, and it isn't while
+a tool is starting out, then whoever ends up taking it decides what the engine is.
+`RegistryThenGitTag` is for once the name is owned and the faster
+cold build is wanted, and it is a promise made about that name, not
+something anyone can check on the owner's behalf.
 
 ### Backends and extensions
 
@@ -155,7 +156,7 @@ Fetching and building is a contract. `Backend` is a trait of associated
 functions with no `self`, since a backend is a policy and not a value, and
 `Registered::of::<B>()` is its const fn-pointer form, so a host holds a
 `&'static [Registered]` of several with no allocation and no dynamic dispatch.
-`Cargo`, `Local` and `Git` ship, and yours goes beside them.
+`Cargo`, `Local` and `Git` ship, and a tool's own goes beside them.
 
 A backend says three things about itself. `fingerprint` is whatever about its
 own environment belongs in the cache key, so a compiler that moved re-keys and
@@ -197,7 +198,7 @@ which lets a host print what a tool offers without fetching it, and means the
 list can't drift from what dispatches, since this is what dispatches. `run` is a
 path and not a shell string, so a command is a file with a shebang and a test on
 it, where shell inside a toml value is unquotable and invisible to every lint
-you own.
+a repo has.
 
 A descriptor can arrive from a git ref, so `Descriptor::check` refuses values
 that would read as something other than data: a `rev` that's a flag to git, a
@@ -209,11 +210,11 @@ without having been parsed at all.
 ### What the launcher answers on its own
 
 `widget locate` prints the repo root, the config and the working directory, one
-`key=value` per line, in the paths' own bytes. If a shell script of yours needs
-to know any of those, read it from here instead of walking the tree a second
-time yourself; two walks of the same tree agree right until the day they don't,
-and then somebody gets to work out which of the two is lying. Split on the first
-`=`, and do quote the values, a path is allowed to have spaces in it. A key with
+`key=value` per line, in the paths' own bytes. A shell script that needs
+to know any of those reads it from here instead of walking the tree a second
+time; two walks of the same tree agree right until the day they don't,
+and then somebody gets to work out which of the two is lying. Splitting is on the first
+`=`, and the values want quoting, since a path is allowed to have spaces in it. A key with
 nothing after it means there isn't one, so no config, or no working directory.
 The one thing the format can't carry is a newline inside a path, which is legal
 on unix and would read as two records, so a path with one in it gets refused by
@@ -221,9 +222,8 @@ name rather than answered wrongly.
 
 `--engine <path>` builds from a checkout on disk instead of the pin, always
 rebuilding, recording nothing in the registry, and swept a day after its last
-use. It's the flag for working on the engine itself. Without it you're pushing a
-commit and waiting on a build just to find out whether a one-liner took, and
-that gets old fast.
+use. It's the flag for working on the engine itself. Without it the way to find out whether a one-liner took is to push a
+commit and wait on a build, which gets old fast.
 
 `--dir` is the launcher's own, and a user-supplied one gets stripped before the
 engine sees anything at all, so the engine never has two answers to pick
@@ -264,8 +264,7 @@ interrupted build resumes. The collector removes that directory together with
 the engine it belongs to. The state holds the one
 thing the launcher writes for itself and would behave differently without, a
 small TOML registry, plus the self-update marker. A cleanup that empties the
-cache costs you a rebuild and nothing else, which is the whole point of keeping
-the two apart.
+cache costs a rebuild, which is why the two are kept apart.
 
 Where they are is the platform's call, through `renki-dirs`, which is the same
 table every tool of ours reads. On linux and the BSDs that's
@@ -276,14 +275,14 @@ since that's where the platform's own cleanup looks and `~/.cache` there is
 nobody's cache; an exported XDG variable still wins on a mac, on the reasoning
 that somebody who set one has said where they want their files.
 
-An earlier launcher kept the lot under `~/.cache/<namespace>` on every
-platform, registry included. The first run of this one carries that over: the
-registry and the self-update marker move into the state directory, and on a
-mac the builds move under `~/Library/Caches` with them, so nothing is rebuilt
-and nothing is left behind where the collector can no longer see it.
+A launcher that finds the lot under `~/.cache/<namespace>`, registry included,
+carries it over on its first run: the registry and the self-update marker move
+into the state directory, and on a mac the builds move under `~/Library/Caches`
+with them, so nothing is rebuilt and nothing is left behind where the collector
+can no longer see it.
 
 The registry is the one worth knowing about, since it's the only thing here that
-records something about you rather than about a build. One row per repo that has
+records something about the person rather than about a build. One row per repo that has
 run the tool on this machine, and the row holds the lot of it: the repo root,
 its directory name, whether that root survived being written down as text
 without anything in it getting replaced, the working directory the engine gets
@@ -291,7 +290,7 @@ pointed at, the engine's source url, what was pinned and in which form, the
 build key that resolved to, and when it last ran. That's what lets the collector
 tell a build nothing points at any more from one that's still wanted. Nothing
 but the launcher writes it and nothing sends it anywhere. It's plain TOML in
-your own state directory, so go and read it if you like, and deleting the whole
+the person's own state directory, readable as it is, and deleting the whole
 cache directory is always safe.
 
 Builds get collected two ways. One that nothing points at any more goes on the
@@ -309,7 +308,7 @@ who wants a tool, and the same `cache_retention` applies. One with no mark yet
 gets stamped instead of taken. A scratch left by a fetch that died goes after an
 hour.
 
-Nine environment variables, all named after your `short`:
+Nine environment variables, all named after the tool's `short`:
 
 | Variable | What |
 |---|---|
@@ -330,14 +329,14 @@ workspace it's on because it was told.
 
 `WIDGET_NO_SELF_UPDATE` is the way out of the self-update, which otherwise
 checks at most once an hour. A version, tag or rev install is immutable so
-that one is left alone anyway, and `SelfUpdate::Never` in your `Tool` turns
+that one is left alone anyway, and `SelfUpdate::Never` in a `Tool` turns
 it off for everybody if it isn't wanted at all.
 
 ### Limitations
 
 A version manager this is not. There is some
 overlap, but the proper ones do a lot that this does not: toolchains, shims,
-opinions about what your engine even is. This one is narrow on purpose. The repo
+opinions about what a tool's engine even is. This one is narrow on purpose. The repo
 names a version, the tool that runs is that version, and that's about it.
 
 The dependencies are `serde`, `toml`, `toml_edit`, `notko` and our own `renki-dirs` and `renki-config`, all with default features off where they allow it. The pin
@@ -345,6 +344,7 @@ header gets read by hand since it's a handful of top-level keys, and the cache
 key uses a small vendored FNV rather than a hashing crate. That likely means
 edge cases in the header reading I haven't hit yet, but also that a
 `cargo install` of somebody's launcher doesn't drag in a whole tree for it.
+
 ## Support
 
 Feel free to contribute! If unsure about wasting work, the best practice is to throw in an issue describing what you'd do, and only then commit to writing a big PR, because chances are, it might not be something that belongs here. However, forks are always a valid choice and we'd encourage everyone to experiment and have their own takes on this. When doing this, do mind the license(s) though!
