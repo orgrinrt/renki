@@ -128,6 +128,7 @@ pub use crate::command::{Command, Invocation};
 pub use crate::env::{GIT_REPO_ENV, sanitize_git_env};
 pub use crate::manifest::{Header, Pin, Reference, package_name};
 pub use crate::pin::Resolved;
+use crate::retry::BuildError;
 pub use crate::tool::{
     Anchor,
     Check,
@@ -496,10 +497,12 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
     }
 
     let (pin, source) = resolve_pin(tool, located.as_ref(), &root, &workdir)?;
-    let resolved = pin::resolve(tool, &pin, &cache_root)?;
-    let toolchain = cache::rustc_fingerprint(Some(&root));
-    let key = cache::compute_key(&pin.url, &resolved.key_rev, &toolchain);
-    let bin = cache::ensure_built(tool, &cache_root, &key, &resolved, &root)?;
+    let Built {
+        resolved,
+        toolchain,
+        key,
+        bin,
+    } = resolved_and_built(tool, &pin, &cache_root, &root, cache::ensure_built)?;
 
     // Record this repo and build in the registry, then at most once a day
     // collect engine builds nothing pins anymore. Best-effort throughout: the
@@ -533,7 +536,10 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
         if bin.is_file() {
             break;
         }
-        bin = cache::ensure_built(tool, &cache_root, &key, &resolved, &root)?;
+        // A rebuild that is refused here is a revision that built before and no longer does, so
+        // the toolchain or the machine moved and the resolution is not what to forget.
+        bin = cache::ensure_built(tool, &cache_root, &key, &resolved, &root)
+            .map_err(BuildError::into_message)?;
     }
     if !bin.is_file() {
         return Err(eviction_exhausted(&bin));
@@ -545,6 +551,49 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
         .map(|f| f(&resolved))
         .unwrap_or_default();
     cache::exec_engine(tool, &bin, &workdir, &extra, args, &envs).map(|_never| ())
+}
+
+/// The pin resolved, the toolchain and key it is cached under, and the engine binary built for it.
+struct Built {
+    resolved:  pin::Resolved,
+    toolchain: String,
+    key:       String,
+    bin:       PathBuf,
+}
+
+/// Resolve `pin`, key it, and build the engine for it, `build` being the build
+/// (`cache::ensure_built`; a test hands in one that fails).
+///
+/// A build that was refused forgets the branch resolution it was built from, so that the next
+/// run asks the remote for the branch's tip and does not build the same revision again for as
+/// long as the resolution would have lasted (`pin::forget_resolution`). A build that could not
+/// start says nothing about the revision and forgets nothing.
+fn resolved_and_built(
+    tool: &Tool,
+    pin: &pin::Pin,
+    cache_root: &Path,
+    root: &Path,
+    build: impl FnOnce(&Tool, &Path, &str, &pin::Resolved, &Path) -> Result<PathBuf, BuildError>,
+) -> Result<Built, String> {
+    let resolved = pin::resolve(tool, pin, cache_root)?;
+    let toolchain = cache::rustc_fingerprint(Some(root));
+    let key = cache::compute_key(&pin.url, &resolved.key_rev, &toolchain);
+    match build(tool, cache_root, &key, &resolved, root) {
+        Ok(bin) => {
+            Ok(Built {
+                resolved,
+                toolchain,
+                key,
+                bin,
+            })
+        },
+        Err(e) => {
+            if e.is_refused() {
+                pin::forget_resolution(pin, cache_root);
+            }
+            Err(e.into_message())
+        },
+    }
 }
 
 /// Unix seconds now, or 0 if the clock is before the epoch, which is impossible

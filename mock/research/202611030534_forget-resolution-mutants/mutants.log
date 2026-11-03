@@ -1,0 +1,15 @@
+killed    forgetting removes nothing
+killed    forgetting removes another branch's resolution
+killed    forgetting removes another remote's resolution
+killed    a refusal is never a refusal
+killed    everything is a refusal
+killed    the message is dropped from the error
+killed    a bare message is a refusal
+killed    every attempt failing is not a refusal
+killed    nothing to try is a refusal
+killed    a refused build forgets nothing
+killed    a build that could not start forgets too
+killed    a build that worked forgets
+killed    the key leaves the toolchain out
+killed    the failure message is lost on the way out
+killed=14 survived=0 other=0

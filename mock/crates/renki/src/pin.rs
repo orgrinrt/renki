@@ -231,6 +231,22 @@ fn fresh_resolution(path: &Path) -> Option<String> {
     (unix_now().saturating_sub(ts) <= BRANCH_TTL.as_secs()).then_some(sha)
 }
 
+/// Forget the recorded resolution of a branch pin, so the next run asks the remote
+/// for the branch's tip again. A pin that names no branch has none to forget, and no
+/// other branch of the remote loses its own.
+///
+/// Called when the build of the resolved revision was refused: the resolution was the
+/// tip as of up to an hour ago, a refused build says nothing about the tip now, and
+/// keeping it held every run of that hour to a revision that did not build, after the
+/// branch had been fixed. With the remote out of reach there is no last known revision
+/// to fall back to either, which is right, since that revision is the one that did not
+/// build and the cache holds nothing for it.
+pub(crate) fn forget_resolution(pin: &Pin, cache_root: &Path) {
+    if let Reference::Branch(b) = &pin.reference {
+        let _ = std::fs::remove_file(branch_resolution_path(cache_root, &pin.url, b));
+    }
+}
+
 /// The recorded resolution whatever its age, for the case where asking the
 /// remote is not possible.
 fn any_resolution(path: &Path) -> Option<String> {
@@ -336,7 +352,11 @@ pub(crate) fn sweep_branch_resolutions(cache_root: &Path, retention: Duration) {
     }
 }
 
-fn branch_resolution_path(cache_root: &Path, url: &str, branch: &str) -> std::path::PathBuf {
+pub(crate) fn branch_resolution_path(
+    cache_root: &Path,
+    url: &str,
+    branch: &str,
+) -> std::path::PathBuf {
     let mut h = Fnv::new();
     h.write_field(url);
     h.write_field(branch);
