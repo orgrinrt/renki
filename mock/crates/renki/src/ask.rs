@@ -161,15 +161,21 @@ impl SshSources for ThisProcess {
     }
 }
 
-/// `git` that never asks for a credential, with ssh in `BatchMode` only where
-/// none of `sources` says how ssh is to run, so a key or agent somebody chose
-/// there is kept. A configured ssh may still ask on the terminal, and the
-/// caller's deadline is what holds it.
+/// `git` with its own terminal prompt off and a credential helper told not to
+/// open a window, which Git Credential Manager honours and a helper ignoring
+/// `credential.interactive` does not. A stored credential is still used. ssh
+/// runs in `BatchMode` only where none of `sources` says how ssh is to run, so
+/// a key or agent somebody chose there is kept. A configured ssh may still ask
+/// on the terminal: the caller's deadline gives up on the answer, and the
+/// prompt can stay up after it, since only git is killed.
 ///
 /// The sources are read in rank order and stop at the first that answers, so
 /// the configuration is only asked when the environment says nothing.
 pub(crate) fn quiet_git(sources: &impl SshSources, deadline: Duration) -> Command {
     let mut git = Command::new("git");
+    // A global option, so it goes ahead of whatever the caller adds, and it
+    // holds for this one call without writing any configuration.
+    git.args(["-c", "credential.interactive=never"]);
     git.env("GIT_TERMINAL_PROMPT", "0");
     let unconfigured = sources.ssh_command().is_none()
         && sources.ssh().is_none()
