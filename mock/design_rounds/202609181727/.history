@@ -1,0 +1,40 @@
+1396d57 chore: lock src changelist for 202609181729_changelist.src.lock.md
+df28bb7 fix: tell a credential helper not to ask, and test what the launcher runs
+988d52a chore: lock doc changelist for 202609181727_changelist.doc.lock.md
+dcfef2e docs: say what a credential helper does and what the deadline leaves up
+b874895 chore: close design round 202609181119
+a6a11d1 chore: lock src changelist for 202609181509_changelist.src.lock.md
+1ab1fae fix: ask a remote for a branch head within one deadline
+d820649 chore: lock doc changelist for 202609181119_changelist.doc.lock.md
+d962eed docs: give the branch-head ask one deadline and say where ssh may ask
+15f9670 Merge pull request #27 from orgrinrt/chore/consolidate-the-two-trunks
+36141e7 chore: merge main into dev so the two trunks stop diverging
+9ad28a2 Merge pull request #26 from orgrinrt/dev
+53b35a4 chore: release 0.0.3
+bf4c1dd docs: the rendered documents name no round
+ae90c87 feat: a tool declares the subcommands its launcher answers itself
+2df62b7 feat: `renki-config`, the contracts a tool's settings are read through
+3855709 feat: `renki-dirs`, the typed table of where a tool's files go
+d7f9a70 fix: install an engine and the launcher under the source's own lockfile
+a7b431b Merge pull request #19 from orgrinrt/dev
+298e12a chore: adopt the shared rustfmt config and format to it
+2e88ff2 feat: name a near-miss pin key, and let a hook be tested offline
+b8a552f feat: add the extension model
+032ad0b docs: rewrite the readme, and pin what it claims to the code
+e833003 fix: renki says it is a library and its checks read what they claim
+73d5640 fix: restore the continuation a reflow ate, and guard every literal
+3e52d0e fix!: a version pin resolves where you pinned it, not by name
+731f6e2 fix!: argv is bytes, and two more enums close before they are somebody's
+4a78543 docs: fix the tagline, the section order and the second person in the readme
+22d9836 fix: dead doc link, self-prefixed eviction error, vacuous gc assertions
+23b9b71 fix: the descriptor surface, before it is a published one
+b9cde68 fix: what a full read of the crate found before publishing it
+987a648 fix: the names the launcher hands over, and a readme that compiles
+22272ce fix: two fields the launcher documented and never read
+903b6bd chore: adopt the shared deny config
+4e7b6c8 fix: the locate answer uses the tool's own key names
+acf9c09 fix: close the holes the full read found
+45fa806 fix: close a guessable delete, an untrue refusal and a phantom parameter
+2a563e9 fix: close a guessable delete, an untrue refusal and a phantom parameter
+4aa9e97 feat: sever the launcher from mockspace, onto a Tool descriptor
+8bedc4f chore: the launcher machinery, copied and not yet severed
