@@ -11,47 +11,13 @@
 > A library for building the launcher half of a two-part command line tool. Repo discovery, the version pin, a shared cache, a backend contract and the handover. Unix only, six dependencies, three of them ours.
 
 </div>
+Tools that come in two halves, an engine that does the work and a launcher that finds the repo, reads the version the repo pins, builds that exact engine once into a shared cache and hands over to it, end up with the same second half every time. `renki` is that half, with everything specific to any one tool taken back out of it. A repo's tooling then cannot drift from what the repo asked for, since everyone on the project gets the version the config names, whichever machine they are on and whatever they installed last year, and a launcher installed off a git branch keeps itself current instead of going stale quietly.
 
-I keep writing tools that come in two halves, and got tired of writing the same
-half twice over. The engine does the actual work and each repo pins the version
-of it that it wants; the launcher is the small thing on `PATH` that finds the
-repo, reads the pin, builds that exact engine once into a shared cache and hands
-over to it. This crate is that second half, with everything specific to any one
-tool taken back out of it.
+A `const` names the config file, the pin keys, the engine crate and a few other things, and the rest comes with it. Anything that is one tool's and nobody else's goes through a named hook, so what is left here stays the part every launcher shares.
 
-The reason to split it up this way is that a repo's tooling then can't drift off
-from what the repo actually asked for. Everyone on the project gets the version
-the config names, whichever machine they're on and whatever they happened to
-install last year. A launcher installed off a git branch also keeps itself
-current, which is the bit that otherwise gets you: a hand-installed binary just
-goes stale quietly, and usually nobody notices until something starts behaving
-oddly.
+The engine has to be a rust crate that `cargo install` can build, since that is what the build path shells out to. Past that it owes one thing, a flag taking an absolute path, because the launcher always puts that flag and the working directory in front of whatever the user typed, and the engine has to accept both.
 
-Name the config file, the pin keys, the engine crate and a few other things in a
-`const`, and the rest comes with it. Anything that's genuinely one tool's and
-nobody else's goes through a named hook instead of into the crate, so what's
-left here stays the part every launcher shares.
-
-The engine has to be a rust crate that `cargo install` can build, since that's
-what the build path shells out to. Past that it owes one thing, a flag taking an
-absolute path, because the launcher always puts that flag and the working
-directory in front of whatever the user typed, and the engine has to accept
-both. The rest of it is the tool's own business.
-
-## Status
-
-Under active development, so the api hasn't settled and breaking changes should
-be expected. It works and I use it for two tools daily, but I'd hold off putting
-anything load-bearing on it just yet. `Tool::CONVENTIONS` is there so that at
-least a new field doesn't break you, and I'll do my best to document the
-migrations properly when the shape does move.
-
-Unix only for now, and it's a build error elsewhere rather than a runtime
-surprise. The handover is `exec` and there's no portable version of that, so
-windows would want a different design and not a different import, and that work
-I haven't done.
-
-## Installation
+## Usage
 
 ```bash
 cargo add renki
@@ -64,15 +30,15 @@ Or in your `Cargo.toml`:
 renki = "0.0.4"
 ```
 
-Do pin the exact version rather than a range. `0.0.x` releases are incompatible
+Pin the exact version rather than a range. `0.0.x` releases are incompatible
 with each other by semver's own rules anyway, and `Tool` is a struct literal, so
-a new field on it breaks you unless you spread `..Tool::CONVENTIONS` and let the
-base answer the ones you've got no opinion about.
+a new field on it breaks the build unless it spreads `..Tool::CONVENTIONS` and lets the
+base answer the ones there is no opinion about.
 
-You don't install `renki` itself as a command. It's a library, and what goes on
-`PATH` is your own launcher built with it.
+`renki` itself is not installed as a command. It is a library, and what goes on
+`PATH` is the launcher built with it.
 
-## Usage
+## Example
 
 Here's the whole of it, and it really is about this much:
 
@@ -106,7 +72,7 @@ environment before anything else happens, and removing an environment variable
 is process-global. It's sound as the first statement of `main` and nowhere else,
 so that's where it goes. If a `main` genuinely has to do something first, then
 `run_without_sanitizing` is the same launcher without that step, and keeping
-those variables from confusing the engine is yours to deal with instead.
+those variables from confusing the engine is left to the caller.
 
 A repo using it then carries:
 
@@ -124,7 +90,25 @@ input.
 The config is TOML and only those few top-level keys get read out of it. The
 rest of the file is yours and the launcher never so much as looks at it.
 
-## What's in it
+## Motivation
+
+A pin in the repo is the only thing that keeps a tool's version the same for everyone, and a launcher that is installed by hand goes stale without anybody noticing, usually until something starts behaving oddly. Writing the launcher once, with the tool-specific parts as a const and a few hooks, means the next tool starts from the same half instead of a copy of it.
+
+## Extras
+
+### Status
+
+Under active development, so the api hasn't settled and breaking changes should
+be expected. It works and I use it for two tools daily, but I'd hold off putting
+anything load-bearing on it just yet. `Tool::CONVENTIONS` is there so that at
+least a new field doesn't break you, and I'll do my best to document the
+migrations properly when the shape does move.
+
+Unix only for now, and it's a build error elsewhere rather than a runtime
+surprise. The handover is `exec` and there's no portable version of that, so
+windows would want a different design and not a different import, and that work
+I haven't done.
+### What is in it
 
 `Tool` is the const that describes one launcher, and `Tool::CONVENTIONS` is a
 base to spread with `..` so that only the fields which actually differ get
@@ -165,7 +149,7 @@ Switch over to `RegistryThenGitTag` once you own the name and want the faster
 cold build. Do note that it's a promise you're making about that name, and not
 something anyone can check on your behalf.
 
-## Backends and extensions
+### Backends and extensions
 
 Fetching and building is a contract. `Backend` is a trait of associated
 functions with no `self`, since a backend is a policy and not a value, and
@@ -222,7 +206,7 @@ runs at parse and again at `locate` and `command`, since the fields are public
 and a descriptor deserialises straight out of toml, so one reaches either
 without having been parsed at all.
 
-## What the launcher answers on its own
+### What the launcher answers on its own
 
 `widget locate` prints the repo root, the config and the working directory, one
 `key=value` per line, in the paths' own bytes. If a shell script of yours needs
@@ -270,7 +254,7 @@ yet, which is exactly the place the engine can't run. It's not a hook, it runs
 only when named, and it can't reach the engine at all; a subcommand that needs
 the engine belongs in the engine.
 
-## What it keeps on disk
+### What it keeps on disk
 
 Two directories, and which one a file goes in is decided by what losing it
 costs. The cache holds what gets rebuilt without anybody asking: built engines,
@@ -349,20 +333,21 @@ checks at most once an hour. A version, tag or rev install is immutable so
 that one is left alone anyway, and `SelfUpdate::Never` in your `Tool` turns
 it off for everybody if it isn't wanted at all.
 
-## What this isn't
+### Limitations
 
-If you're after a version manager, this probably isn't it. Not that there's no
-overlap, but the proper ones do a lot that this doesn't: toolchains, shims,
+A version manager this is not. There is some
+overlap, but the proper ones do a lot that this does not: toolchains, shims,
 opinions about what your engine even is. This one is narrow on purpose. The repo
 names a version, the tool that runs is that version, and that's about it.
 
-Two dependencies, `serde` and `toml`, both with default features off. The pin
+The dependencies are `serde`, `toml`, `toml_edit`, `notko` and our own `renki-dirs` and `renki-config`, all with default features off where they allow it. The pin
 header gets read by hand since it's a handful of top-level keys, and the cache
 key uses a small vendored FNV rather than a hashing crate. That likely means
 edge cases in the header reading I haven't hit yet, but also that a
 `cargo install` of somebody's launcher doesn't drag in a whole tree for it.
-
 ## Support
+
+Feel free to contribute! If unsure about wasting work, the best practice is to throw in an issue describing what you'd do, and only then commit to writing a big PR, because chances are, it might not be something that belongs here. However, forks are always a valid choice and we'd encourage everyone to experiment and have their own takes on this. When doing this, do mind the license(s) though!
 
 Whether you use this project, have learned something from it, or just like it, please consider supporting it by buying me a coffee, so I can dedicate more time on open-source projects like this :)
 
