@@ -1,39 +1,12 @@
 # `renki-dirs`
 
-<div align="center" style="text-align: center;">
-
-[![GitHub Stars](https://img.shields.io/github/stars/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/stargazers)
-[![Crates.io](https://img.shields.io/crates/v/renki-dirs)](https://crates.io/crates/renki-dirs)
-[![docs.rs](https://img.shields.io/docsrs/renki-dirs)](https://docs.rs/renki-dirs)
-[![GitHub Issues](https://img.shields.io/github/issues/orgrinrt/renki.svg)](https://github.com/orgrinrt/renki/issues)
-![License](https://img.shields.io/github/license/orgrinrt/renki?color=%23009689)
+[![Crates.io](https://img.shields.io/crates/v/renki-dirs)](https://crates.io/crates/renki-dirs) [![docs.rs](https://img.shields.io/docsrs/renki-dirs)](https://docs.rs/renki-dirs)
 
 > Where a tool's files go, typed. Cache, state, config and data roots per platform, as marker types. no_std, no alloc, one dependency.
 
-</div>
+A command line tool keeps four kinds of file, told apart by what losing each one costs. A cache is rebuilt without anybody asking, state is what the tool wrote for itself, config is what the person wrote, and data is what the tool made for the person and cannot make again. Every platform has its own directory for each of the four, and this crate is that table, with the kinds and the platforms as types. A root is a `Root<Cache, Host>` or a `Root<State, MacOs>`, so a function that wants the cache root says so in its signature and can't be handed the state root by mistake.
 
-A command line tool keeps four kinds of file, and they are told apart by what
-losing each one costs rather than by what they contain. A cache is rebuilt
-without anybody asking, so a cleanup may empty it whenever it likes. State is
-what the tool wrote for itself and would behave differently without. Config is
-what the person wrote. Data is what the tool made for the person and cannot
-make again. Every platform has its own directory for each of the four, and
-they are not where a tool written on one platform assumes: `~/.cache` on a mac
-is nobody's cache, and a cleanup there looks under `~/Library/Caches`.
-
-This crate is that table, with the kinds and the platforms as types rather than
-values. A root is a `Root<Cache, Host>` or a `Root<State, MacOs>`, so a
-function that wants the cache root says so in its signature and cannot be
-handed the state root by mistake. It is what `renki` uses for its own cache
-and state, and it is a crate of its own so a tool renki does not launch, or
-that is not rust at all, follows the same table and lands its files beside
-everybody else's.
-
-It reads nothing. The caller reads the three environment variables a root
-depends on and hands them in; the crate answers with the path's parts, which
-of the three decided it, and a `Display` that prints the path. That is the
-whole no-alloc surface, and it is enough: a `std` caller formats it into a
-`PathBuf`, a no-std one writes it into a buffer of its own.
+It reads nothing. The caller reads the three environment variables a root depends on and hands them in, and the crate answers with the path's parts, which of the three decided it, and a `Display` that prints the path, so it works with no allocator.
 
 ## Usage
 
@@ -65,51 +38,9 @@ let root = Root::<Cache, Host>::resolve(ns, Sources {
 let cache = std::path::PathBuf::from(root.unwrap().to_string());
 ```
 
-Precedence is the same for every kind: the tool's own variable, named
-`<SHORT>_<KIND>` and holding the whole path, then the XDG variable for the
-kind, then the platform's directory under the home directory. The XDG
-variables are honoured on macOS too, since somebody who exported one has said
-where their files go and the platform default is for the person who has said
-nothing. An empty value is not a setting at any level, and no home and no
-variable is an error naming the kind.
+Precedence is the same for every kind: the tool's own variable, named `<SHORT>_<KIND>` and holding the whole path, then the XDG variable for the kind, then the platform's directory under the home directory. An exported XDG variable is honoured on macOS too, and an empty value is not a setting at any level. On Linux and the BSDs the cache is `~/.cache/<namespace>` and on macOS it is `~/Library/Caches/<namespace>`, with state, config and data following the same split. `Host` is `MacOs` when built for macOS and `Xdg` otherwise.
 
-The defaults, with `ns` the tool's namespace:
-
-| Kind | `Xdg` | `MacOs` |
-|---|---|---|
-| `Cache` | `~/.cache/ns` | `~/Library/Caches/ns` |
-| `State` | `~/.local/state/ns` | `~/Library/Application Support/ns/state` |
-| `Config` | `~/.config/ns` | `~/Library/Application Support/ns` |
-| `Data` | `~/.local/share/ns` | `~/Library/Application Support/ns/data` |
-
-`Host` is `MacOs` when built for macOS and `Xdg` otherwise, on the operating
-system rather than the family, since the BSDs are unix and XDG.
-
-## Motivation
-
-A tool in shell, one in TypeScript and one in rust each need the table above, and a copy per language drifts on the mac column first, since that is the one a linux developer never runs. One table with the kinds and the platforms as types is read by all of them, and a root that is a type cannot be handed to the function that wanted another kind.
-
-## Extras
-
-### Status
-
-Pre-1.0, and the surface is small on purpose. Builds on the stable floor renki
-promises its installers, `rust-version = "1.88"`, with notko's default
-features off; nothing here needs nightly.
-
-### Limitations
-
-Paths are `&str`. A home directory whose bytes are not text is refused by the
-caller rather than printed wrongly by this crate, which is the same line renki
-draws for a repository root. Windows has no column, since renki is unix only.
-
-## Support
-
-Feel free to contribute! If unsure about wasting work, the best practice is to throw in an issue describing what you'd do, and only then commit to writing a big PR, because chances are, it might not be something that belongs here. However, forks are always a valid choice and we'd encourage everyone to experiment and have their own takes on this. When doing this, do mind the license(s) though!
-
-Whether you use this project, have learned something from it, or just like it, please consider supporting it by buying me a coffee, so I can dedicate more time on open-source projects like this :)
-
-<a href="https://buymeacoffee.com/orgrinrt" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" style="height: auto !important;width: auto !important;" ></a>
+It builds on stable with notko's default features off, and it's pre-1.0, with no Windows column since renki is unix only.
 
 ## License
 
