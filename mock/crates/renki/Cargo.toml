@@ -14,7 +14,7 @@ repository = "https://github.com/orgrinrt/renki"
 # repository is about, and the two smaller crates carry their own beside them.
 # Cargo copies whatever `readme` names into the package whether or not
 # `include` lists it.
-readme = "../../../README.md"
+readme = "README.md"
 # The floor. 1.89 is where `File::lock` is stable, which the engine build lock
 # takes; below it, 1.87 also refuses the let-chains this uses throughout, with
 # `let expressions in this position are unstable` at every one of them.
