@@ -69,18 +69,20 @@ name, something answering flags and variables, and the two documents.
 
 Strings are borrowed `&str` and integers are `i64`. Both are marked at every
 site for the port to the stack's own string and numeric types, which is a
-later unit. Windows has no column, since renki is unix only.
+later unit. Windows is not covered, since renki is unix only.
 
 ## Support
 
+Feel free to contribute! If unsure about wasting work, the best practice is to throw in an issue describing what you'd do, and only then commit to writing a big PR, because chances are, it might not be something that belongs here. However, forks are always a valid choice and we'd encourage everyone to experiment and have their own takes on this. When doing this, do mind the license(s) though!
+
 Whether you use this project, have learned something from it, or just like it, please consider supporting it by buying me a coffee, so I can dedicate more time on open-source projects like this :)
 
-<a href="https://buymeacoffee.com/orgrinrt" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+<a href="https://buymeacoffee.com/orgrinrt" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" style="height: auto !important;width: auto !important;" ></a>
 
 ## License
 
-> You can check out the full license [here](https://github.com/orgrinrt/renki/blob/main/LICENSE)
-
-This project is licensed under the terms of the **Mozilla Public License 2.0**.
+> The project is licensed under the **Mozilla Public License 2.0**.
 
 `SPDX-License-Identifier: MPL-2.0`
+
+> You can check out the full license [here](https://github.com/orgrinrt/renki/blob/main/LICENSE)
