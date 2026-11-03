@@ -87,13 +87,7 @@ system rather than the family, since the BSDs are unix and XDG.
 
 ## Motivation
 
-The table above had been written four times across one workspace, in shell, in
-TypeScript and twice in rust, and no two copies agreed on the mac column. The
-one that put the cache under `~/.cache` on a mac was found the day a cleanup
-emptied the real cache directory and took a build with it, because the tool's
-own directory was not the cache but sat beside it. A table nobody has to copy
-is one that cannot be copied wrong, and a root that is a type is one that
-cannot be handed to the wrong function.
+A tool in shell, one in TypeScript and one in rust each need the table above, and a copy per language drifts on the mac column first, since that is the one a linux developer never runs. One table with the kinds and the platforms as types is read by all of them, and a root that is a type cannot be handed to the function that wanted another kind.
 
 ## Extras
 
@@ -110,6 +104,8 @@ caller rather than printed wrongly by this crate, which is the same line renki
 draws for a repository root. Windows has no column, since renki is unix only.
 
 ## Support
+
+Feel free to contribute! If unsure about wasting work, the best practice is to throw in an issue describing what you'd do, and only then commit to writing a big PR, because chances are, it might not be something that belongs here. However, forks are always a valid choice and we'd encourage everyone to experiment and have their own takes on this. When doing this, do mind the license(s) though!
 
 Whether you use this project, have learned something from it, or just like it, please consider supporting it by buying me a coffee, so I can dedicate more time on open-source projects like this :)
 
