@@ -209,7 +209,7 @@ fn locate_and_the_launcher_place_through_one_body() {
     // Checked by adding one here rather than by reading: `place` is the only
     // thing that refuses a root with no parent, so if either route stopped going
     // through it, that route would stop refusing.
-    let places_itself = |_: &Path| Ok(());
+    let places_itself = |_: &Path| Ok::<(), String>(());
     assert!(place(Path::new("/"), false, places_itself).is_err());
 
     // And the two routes agree on what a backend that places itself gets.

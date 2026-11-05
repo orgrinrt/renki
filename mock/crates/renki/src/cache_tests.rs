@@ -505,7 +505,7 @@ fn ensure_built_on_a_thread(
     root: PathBuf,
     key: &'static str,
     resolved: Resolved,
-) -> std::thread::JoinHandle<Result<PathBuf, String>> {
+) -> std::thread::JoinHandle<Result<PathBuf, crate::retry::BuildError>> {
     std::thread::spawn(move || ensure_built(&T, &root, key, &resolved, &root)) // lint:allow(no-runtime-spawn) reason: the second launcher the lock tests hold, in-process because the call under test is.
 }
 
@@ -624,3 +624,7 @@ fn a_build_compiles_into_a_target_directory_inside_its_own_key() {
     assert_eq!(first.dir.as_deref(), Some(dir.path()));
     assert_eq!(first.attempts, resolved.attempts);
 }
+
+// What `ensure_built` answers when a build fails.
+#[path = "cache_tests/typed_failure.rs"]
+mod typed_failure;
