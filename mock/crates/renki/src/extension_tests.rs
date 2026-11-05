@@ -388,6 +388,26 @@ fn a_backend_that_places_itself_is_handed_the_destination() {
 }
 
 #[test]
+fn a_refusal_keeps_its_type_on_the_scratch_route() {
+    // The route used to read the error as text and give it back through `From<String>`, so a
+    // refused build came out as one that never started. The control is a failure that is not
+    // a refusal, which must come out as it went in.
+    use crate::retry::BuildError;
+    let root = scratch("typed-via-scratch").join("dest");
+    let refused = place(&root, false, |_| {
+        Err(BuildError::Refused("the build broke".into()))
+    })
+    .unwrap_err();
+    assert!(refused.is_refused(), "{refused:?}");
+
+    let not_started = place(&root, false, |_| {
+        Err(BuildError::NotStarted("cargo is not on PATH".into()))
+    })
+    .unwrap_err();
+    assert!(!not_started.is_refused(), "{not_started:?}");
+}
+
+#[test]
 fn a_backend_that_does_not_is_handed_a_scratch_and_renamed_into_place() {
     // The control for the test above, and the default. The backend never sees
     // the destination, so a reader cannot observe a half-written tree.

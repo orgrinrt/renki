@@ -1,0 +1,50 @@
+08aa12b chore: record the forget mutants as the script's own output
+0bf136a chore: close design round 202611051425
+5c42f26 chore: lock src changelist for 202611051426_changelist.src.lock.md
+caf5abb fix: forget a refused rebuild only while the record names its revision
+2036a17 chore: lock doc changelist for 202611051425_changelist.doc.lock.md
+ff899c9 docs: say a refused rebuild forgets and a forget names its revision
+d3efa09 chore: merge `dev` into the refused build branch
+95d8b16 docs: give `renki` its own `README.md` and cut the others down
+a181abc docs: shape the readmes of `renki-config` and `renki-dirs`
+037c6d9 docs: take the second person out of the readme
+1eed3b3 docs: rewrite the readme to the shape
+fffca49 chore: close design round 202611030534
+3fc61af chore: lock src changelist for 202611030535_changelist.src.lock.md
+ca52a5e fix: forget a branch resolution only when its build was refused
+07202aa chore: lock doc changelist for 202611030534_changelist.doc.lock.md
+69149ab docs: say a refused build forgets its branch resolution
+7aa308c docs: open a round on forgetting a refused build's resolution
+7fe1982 fix: give a remote branch lookup a deadline
+932d3c0 chore: close design round 202609181727
+c366cd6 chore: lock src changelist for 202609181729_changelist.src.lock.md
+17631c0 fix: tell a credential helper not to ask and test the launcher as run
+0578adf chore: lock doc changelist for 202609181727_changelist.doc.lock.md
+c21d597 docs: say what a credential helper does and what the deadline leaves up
+9650a95 chore: close design round 202609181119
+09163ef chore: lock src changelist for 202609181509_changelist.src.lock.md
+d7b291e fix: ask a remote for a branch head within one deadline
+428c49b chore: lock doc changelist for 202609181119_changelist.doc.lock.md
+45997a1 docs: give the branch-head ask one deadline and say where ssh may ask
+9f09183 chore: exempt the launcher by name and not list the tables
+d4c5050 chore: name the lint pack by its current repository
+b8d5bc2 chore: release 0.0.4
+ca7ac6d fix: build one engine install at a time in a target dir per key
+15f9670 Merge pull request #27 from orgrinrt/chore/consolidate-the-two-trunks
+36141e7 chore: merge main into dev so the two trunks stop diverging
+9ad28a2 Merge pull request #26 from orgrinrt/dev
+53b35a4 chore: release 0.0.3
+bf4c1dd docs: the rendered documents name no round
+ae90c87 feat: a tool declares the subcommands its launcher answers itself
+2df62b7 feat: `renki-config`, the contracts a tool's settings are read through
+3855709 feat: `renki-dirs`, the typed table of where a tool's files go
+d7f9a70 fix: install an engine and the launcher under the source's own lockfile
+a7b431b Merge pull request #19 from orgrinrt/dev
+298e12a chore: adopt the shared rustfmt config and format to it
+2e88ff2 feat: name a near-miss pin key, and let a hook be tested offline
+b8a552f feat: add the extension model
+032ad0b docs: rewrite the readme, and pin what it claims to the code
+e833003 fix: renki says it is a library and its checks read what they claim
+73d5640 fix: restore the continuation a reflow ate, and guard every literal
+3e52d0e fix!: a version pin resolves where you pinned it, not by name
+731f6e2 fix!: argv is bytes, and two more enums close before they are somebody's

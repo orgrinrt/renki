@@ -12,6 +12,51 @@
 
 use std::process::Command;
 
+/// How a build of an engine came to nothing, told apart by whether the revision it was
+/// building can be blamed. The launcher forgets a branch pin's recorded resolution on one
+/// of the two and keeps it on the other (`pin::forget_resolution`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BuildError {
+    /// The build could not start: cargo is not on `PATH` or does not run, cargo could not be
+    /// spawned, the key's lock was not taken, a directory was not made. This says nothing
+    /// about the revision. Anything that is only a message becomes this one, through `From`.
+    NotStarted(String),
+    /// The build started and every attempt came to nothing: cargo failed each, or
+    /// succeeded and left no binary. This is what the revision is blamed for, though cargo
+    /// fails the same way when the network drops under a download and from here the two
+    /// cannot be told apart.
+    Refused(String),
+}
+
+impl BuildError {
+    /// Whether the build ran and was refused, which is the one failure that forgets the
+    /// branch resolution it was built from.
+    pub(crate) const fn is_refused(&self) -> bool {
+        matches!(self, Self::Refused(_))
+    }
+
+    /// What the operator reads, the same text whichever it is.
+    pub(crate) fn into_message(self) -> String {
+        match self {
+            Self::NotStarted(message) | Self::Refused(message) => message,
+        }
+    }
+}
+
+impl From<String> for BuildError {
+    fn from(message: String) -> Self {
+        Self::NotStarted(message)
+    }
+}
+
+/// The text alone, for the one route that carries text whatever failed: the scratch placement of a
+/// backend that does not place itself.
+impl From<BuildError> for String {
+    fn from(error: BuildError) -> Self {
+        error.into_message()
+    }
+}
+
 /// How long the second attempt waits for the first's failure to clear. A
 /// moment is what a registry's redownload needs to have started.
 pub(crate) const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
@@ -38,13 +83,15 @@ pub(crate) fn cargo_is_on_path() -> Result<(), String> {
 
 /// Every attempt in order, each tried twice: a second time after `pause`
 /// when the first failed. The first success wins; the failure message names
-/// the retry, or the binary that never appeared.
+/// the retry, or the binary that never appeared. Every attempt failing is
+/// [`BuildError::Refused`]; a run that could not start cargo, or an empty list of
+/// attempts, is [`BuildError::NotStarted`].
 pub(crate) fn install_with_retry(
     attempts: &[Vec<String>],
     crate_name: &str,
     mut run: impl FnMut(&[String]) -> Result<Attempt, String>,
     mut pause: impl FnMut(),
-) -> Result<(), String> {
+) -> Result<(), BuildError> {
     let mut failures = Vec::new();
     for attempt in attempts {
         let first = run(attempt)?;
@@ -63,7 +110,13 @@ pub(crate) fn install_with_retry(
             _ => format!("{attempt:?} failed, and failed again when retried"),
         });
     }
-    Err(crate::cache::build_failure(crate_name, &failures))
+    let message = crate::cache::build_failure(crate_name, &failures);
+    // With nothing to try nothing ran, and the revision was not refused by anything.
+    Err(if failures.is_empty() {
+        BuildError::NotStarted(message)
+    } else {
+        BuildError::Refused(message)
+    })
 }
 
 /// What one install attempt came to.
@@ -121,6 +174,11 @@ mod tests {
             || {},
         )
         .unwrap_err();
+        assert!(
+            err.is_refused(),
+            "every attempt failing is a refusal: {err:?}"
+        );
+        let err = err.into_message();
         assert_eq!(calls, ["a", "a", "b", "b"]);
         assert!(err.contains("failed again when retried"), "{err}");
         assert!(err.contains("x"), "{err}");
@@ -130,6 +188,8 @@ mod tests {
     fn a_missing_binary_is_named_as_that_rather_than_as_a_failure() {
         let err = install_with_retry(&attempts()[.. 1], "x", |_| Ok(Attempt::NoBinary), || {})
             .unwrap_err();
+        assert!(err.is_refused(), "{err:?}");
+        let err = err.into_message();
         assert!(err.contains("produced no binary"), "{err}");
         assert!(!err.contains("retried"), "{err}");
     }
@@ -143,7 +203,38 @@ mod tests {
         assert_eq!(pauses, 0);
         let err = install_with_retry(&attempts(), "x", |_| Err("no cargo".to_string()), || {})
             .unwrap_err();
-        assert_eq!(err, "no cargo");
+        assert_eq!(
+            err,
+            BuildError::NotStarted("no cargo".to_string()),
+            "a run that could not start cargo stops everything and is not a refusal"
+        );
+    }
+
+    #[test]
+    fn nothing_to_try_is_a_build_that_never_started_and_not_a_refusal() {
+        let mut ran = 0;
+        let err = install_with_retry(
+            &[],
+            "x",
+            |_| {
+                ran += 1;
+                Ok(Attempt::Built)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(ran, 0);
+        assert!(!err.is_refused(), "{err:?}");
+    }
+
+    #[test]
+    fn a_message_alone_is_a_build_that_never_started_and_reads_the_same_either_way() {
+        let from_text = BuildError::from("no lock".to_string());
+        assert_eq!(from_text, BuildError::NotStarted("no lock".to_string()));
+        assert!(!from_text.is_refused());
+        assert!(BuildError::Refused("no".to_string()).is_refused());
+        assert_eq!(from_text.into_message(), "no lock");
+        assert_eq!(BuildError::Refused("no".to_string()).into_message(), "no");
     }
 
     #[test]

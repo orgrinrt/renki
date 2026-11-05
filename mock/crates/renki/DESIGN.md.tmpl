@@ -176,8 +176,10 @@ or not at all. The five seconds are one deadline over the whole ask, reading
 how ssh is configured included, so the listing gets what the read left. Past
 the deadline the child is killed and the call returns an error naming the
 deadline, which both callers already take as a remote that
-could not be reached: a branch pin falls back to its last resolution, the
-self-update leaves the installed launcher alone. Waiting for git to give up
+could not be reached: a branch pin falls back to its last resolution, unless
+that was forgotten because its build was refused, which "A refused build forgets
+its resolution" below describes, and the self-update leaves the installed
+launcher alone. Waiting for git to give up
 instead meant a network dropping packets stalled every launch for as long as
 git took, and the fallback that exists for that network only started after.
 
@@ -203,3 +205,43 @@ that is only waiting for it to exit. The answer is what the child had written
 when it exited: something it leaves running with its output still open, an ssh
 control master say, is not waited for at all. Only the child is killed at the
 deadline; what it started finishes on its own.
+
+## A refused build forgets its resolution
+
+A branch pin's resolution is kept for `BRANCH_TTL`, an hour, so that the remote
+is not asked on every launch. A build of the resolved revision that failed would
+otherwise hold every launch of that hour to a revision that does not build,
+after the branch had been fixed. `resolved_and_built` pairs the resolution with
+its build and returns a `Built`: the resolution, the toolchain, the key and the
+binary. When the build was refused, `forget_resolution` removes the recorded
+resolution of that url and branch, and the next launch asks the remote for the
+tip.
+
+Only a refusal forgets. A `BuildError` tells the two failures apart by its type
+and not by its message. `Refused` is a build that started and came to nothing,
+cargo having failed every attempt or having succeeded without leaving the
+binary. `NotStarted` is one that could not start: cargo missing from the path,
+the key's lock not taken, the directory not made. The second says nothing about
+the revision and keeps the resolution, so that an operator without cargo is told
+so and not that the remote is out of reach.
+
+A refusal is not always a broken revision. Cargo fails the same way when the
+network drops under a dependency's download, and from here that looks like one.
+Forgetting then costs one `git ls-remote` on the next run, inside its deadline,
+and loses no fallback, because the revision that was refused has no build in the
+cache for the fallback to find.
+
+The forget names the revision that was refused and removes the record only while
+it still names that revision. A launcher that resolved the branch again while
+this one built has recorded a tip of its own, and that record stays. A build
+refused on the rebuild after an eviction forgets in the same way as the first
+build, with no exception: the key holds the toolchain, so a moved toolchain is a
+new key and not a refusal of the old one.
+
+Other branches of the same remote keep their resolutions, a pin that names no
+branch has none to forget, and a build that worked keeps its own. The
+`Backend::materialise` contract keeps its text error, since it is public and
+waits for the stack's string type. `Cargo` turns a `BuildError` into its message
+there, and the launcher's own build reaches the typed function through `place`,
+which is generic over its error so that `materialise_once` still answers with
+text.

@@ -186,7 +186,7 @@ pub(crate) fn reinstall_args(url: &str, branch: &str, launcher_crate: &str) -> V
     .collect()
 }
 
-use crate::retry::{Attempt, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
+use crate::retry::{Attempt, BuildError, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
 
 /// The launcher's own reinstall goes through the same retry as the engine's
 /// build, after the same check: a registry deleted under it is as likely here
@@ -206,6 +206,7 @@ fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
     install_with_retry(&attempts, tool.launcher_crate, run, || {
         std::thread::sleep(RETRY_PAUSE);
     })
+    .map_err(BuildError::into_message)
 }
 
 /// Replace this process with `exe`, forwarding the original argv (minus the

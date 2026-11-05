@@ -42,6 +42,7 @@ use renki_dirs::{DirKind, EnvName, Host, Namespace, Root, Sources};
 use crate::extension::CargoPlan;
 use crate::hash::Fnv;
 use crate::pin::Resolved;
+use crate::retry::BuildError;
 use crate::tool::Tool;
 
 /// The cache root on this machine: `<SHORT>_CACHE`, else the XDG cache
@@ -317,13 +318,17 @@ impl Drop for BuildLock {
 /// `cargo install --root` locks the install root and moves the finished binary
 /// into place, so a second launcher on the same key either blocks on that lock
 /// or finds the binary already there.
+///
+/// A failure is a [`BuildError`]: [`BuildError::Refused`] when the build ran and came to
+/// nothing, [`BuildError::NotStarted`] for everything before that, which says nothing about
+/// the revision being built.
 pub(crate) fn ensure_built(
     tool: &Tool,
     cache_root: &Path,
     key: &str,
     resolved: &Resolved,
     dir: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, BuildError> {
     // Absolute, because the build runs in `dir` and cargo resolves `--root` and
     // `--target-dir` there, while the lookups here resolve in this process's
     // directory. A relative `<SHORT>_CACHE` would otherwise name two places.
@@ -349,10 +354,7 @@ pub(crate) fn ensure_built(
         "{}: building the engine for this pin (once per version) ...",
         tool.short
     );
-    crate::extension::materialise_once::<crate::extension::Cargo>(
-        &build_plan(tool, resolved, &root, dir),
-        &root,
-    )?;
+    crate::extension::build_with_cargo(&build_plan(tool, resolved, &root, dir), &root)?;
     Ok(bin)
 }
 
