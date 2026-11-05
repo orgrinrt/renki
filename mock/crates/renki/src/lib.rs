@@ -536,10 +536,8 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
         if bin.is_file() {
             break;
         }
-        // A rebuild that is refused here is a revision that built before and no longer does, so
-        // the toolchain or the machine moved and the resolution is not what to forget.
         bin = cache::ensure_built(tool, &cache_root, &key, &resolved, &root)
-            .map_err(BuildError::into_message)?;
+            .map_err(|e| message_forgetting_a_refusal(e, &pin, &cache_root, &resolved))?;
     }
     if !bin.is_file() {
         return Err(eviction_exhausted(&bin));
@@ -587,13 +585,23 @@ fn resolved_and_built(
                 bin,
             })
         },
-        Err(e) => {
-            if e.is_refused() {
-                pin::forget_resolution(pin, cache_root);
-            }
-            Err(e.into_message())
-        },
+        Err(e) => Err(message_forgetting_a_refusal(e, pin, cache_root, &resolved)),
     }
+}
+
+/// The text of a failed build, after a refused one has forgotten the resolution it was built
+/// from. The one path both the first build and the rebuild after an eviction take, so neither
+/// is an exception to the other.
+fn message_forgetting_a_refusal(
+    e: BuildError,
+    pin: &pin::Pin,
+    cache_root: &Path,
+    resolved: &pin::Resolved,
+) -> String {
+    if e.is_refused() {
+        pin::forget_resolution(pin, cache_root, &resolved.key_rev);
+    }
+    e.into_message()
 }
 
 /// Unix seconds now, or 0 if the clock is before the epoch, which is impossible

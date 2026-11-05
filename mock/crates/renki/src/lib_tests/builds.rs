@@ -71,6 +71,69 @@ fn a_refused_build_drops_its_branch_resolution_and_no_other_so_the_next_run_asks
 }
 
 #[test]
+fn a_refused_build_keeps_a_resolution_another_launcher_recorded_while_it_built() {
+    // The record names the tip this launcher resolved when the build starts, and another
+    // launcher resolves the branch again before the refusal comes back. What is forgotten is
+    // the refused revision, so the newer record stays.
+    let cache = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let path = recorded(cache.path(), "dev", "feedface99c0ffee");
+
+    let err = resolved_and_built(
+        &T,
+        &dev(),
+        cache.path(),
+        root.path(),
+        |_, cache_root, _, _, _| {
+            recorded(cache_root, "dev", "0123456789abcdef");
+            Err(BuildError::Refused("the build broke".into()))
+        },
+    )
+    .err()
+    .unwrap();
+    assert_eq!(err, "the build broke");
+    let kept = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        kept.contains("0123456789abcdef"),
+        "the newer record went with the refused one: {kept}"
+    );
+}
+
+#[test]
+fn the_message_of_a_refused_rebuild_forgets_the_resolution_like_the_first_build_does() {
+    // `dispatch` rebuilds after an eviction through this, so it has no exception of its own.
+    let cache = tempfile::tempdir().unwrap();
+    let path = recorded(cache.path(), "dev", "feedface99c0ffee");
+    let resolved = Resolved {
+        pin:         dev(),
+        key_rev:     "feedface99c0ffee".into(),
+        attempts:    vec![],
+        version_tag: String::new(),
+    };
+
+    let kept = message_forgetting_a_refusal(
+        BuildError::NotStarted("cargo is not on PATH".into()),
+        &dev(),
+        cache.path(),
+        &resolved,
+    );
+    assert_eq!(kept, "cargo is not on PATH");
+    assert!(
+        path.exists(),
+        "a rebuild that never started cost the resolution"
+    );
+
+    let forgot = message_forgetting_a_refusal(
+        BuildError::Refused("the build broke".into()),
+        &dev(),
+        cache.path(),
+        &resolved,
+    );
+    assert_eq!(forgot, "the build broke");
+    assert!(!path.exists(), "a refused rebuild kept the resolution");
+}
+
+#[test]
 fn a_build_that_could_not_start_keeps_the_resolution_it_says_nothing_about() {
     // The control of the test above: it passes against a launcher that forgot on any error.
     let cache = tempfile::tempdir().unwrap();
@@ -107,6 +170,8 @@ fn a_build_that_succeeds_keeps_the_resolution_and_hands_back_what_it_built() {
     .unwrap();
     assert_eq!(built.resolved.key_rev, "feedface99c0ffee");
     assert_eq!(built.bin, PathBuf::from("bin"));
+    // Only that the resolution and the toolchain reached the key; what the key is made of is
+    // `cache_tests`' to say.
     assert_eq!(
         built.key,
         crate::cache::compute_key("u", "feedface99c0ffee", &built.toolchain),

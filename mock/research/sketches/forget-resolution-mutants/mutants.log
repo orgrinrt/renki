@@ -13,3 +13,10 @@ killed    a build that worked forgets
 killed    the key leaves the toolchain out
 killed    the failure message is lost on the way out
 killed=14 survived=0 other=0
+
+# 5 November, review fixes (round 202611051424)
+
+M1 `From<String> for BuildError` gives `Refused`: killed by `a_cache_directory_that_cannot_be_made_is_a_build_that_never_started` and `a_build_lock_that_cannot_be_taken_is_a_build_that_never_started`.
+M2 `forget_resolution` without the check of the revision: killed by `a_refused_build_keeps_a_resolution_another_launcher_recorded_while_it_built`.
+M3 `message_forgetting_a_refusal` never forgets: killed by `the_message_of_a_refused_rebuild_forgets_the_resolution_like_the_first_build_does` and `a_refused_build_drops_its_branch_resolution_and_no_other_so_the_next_run_asks_the_remote`.
+(The call in `dispatch` goes through the same function; the wiring there is read, not run, since `dispatch` needs a real engine.)

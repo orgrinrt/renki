@@ -352,7 +352,7 @@ pub(crate) fn build_with_cargo(plan: &CargoPlan, root: &Path) -> Result<(), Buil
 /// than about the caller. So this takes the answer as a plain argument and is
 /// crate-only: public, a host could hand it one the backend contradicts, which
 /// is the sentence above stopped being true.
-pub(crate) fn place<E: From<String> + Into<String>>(
+pub(crate) fn place<E: From<String>>(
     root: &Path,
     places_itself: bool,
     materialise: impl FnOnce(&Path) -> Result<(), E>,
@@ -367,10 +367,7 @@ pub(crate) fn place<E: From<String> + Into<String>>(
         .ok_or_else(|| format!("{} has no parent", root.display()))?;
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
-    // The scratch route is one body for every backend and answers text, so a failure of the
-    // closure is read as its message and comes back as `E` from it.
-    place_via_scratch(root, parent, |into| materialise(into).map_err(Into::into))?;
-    Ok(())
+    place_via_scratch(root, parent, materialise)
 }
 
 /// Build into a scratch beside `root` and rename the finished tree into place.
@@ -383,11 +380,11 @@ pub(crate) fn place<E: From<String> + Into<String>>(
 /// takes shared references and is `pub`, so several threads reach one key at
 /// once. That is also what lets the cleanup paths remove a directory without
 /// touching another caller's.
-fn place_via_scratch(
+fn place_via_scratch<E: From<String>>(
     root: &Path,
     parent: &Path,
-    materialise: impl FnOnce(&Path) -> Result<(), String>,
-) -> Result<(), String> {
+    materialise: impl FnOnce(&Path) -> Result<(), E>,
+) -> Result<(), E> {
     static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nth = NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let leaf = root.file_name().unwrap_or_default().to_string_lossy();
@@ -410,10 +407,10 @@ fn place_via_scratch(
         },
         Err(e) => {
             let _ = std::fs::remove_dir_all(&scratch);
-            Err(format!(
+            Err(E::from(format!(
                 "could not place the tool at {}: {e}",
                 root.display()
-            ))
+            )))
         },
     }
 }

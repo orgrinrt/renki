@@ -241,9 +241,16 @@ fn fresh_resolution(path: &Path) -> Option<String> {
 /// branch had been fixed. With the remote out of reach there is no last known revision
 /// to fall back to either, which is right, since that revision is the one that did not
 /// build and the cache holds nothing for it.
-pub(crate) fn forget_resolution(pin: &Pin, cache_root: &Path) {
+///
+/// Only while the record still names `refused`, the revision that was refused: another
+/// launcher that resolved the branch again while this one built has recorded a tip of its
+/// own, and that one stays.
+pub(crate) fn forget_resolution(pin: &Pin, cache_root: &Path, refused: &str) {
     if let Reference::Branch(b) = &pin.reference {
-        let _ = std::fs::remove_file(branch_resolution_path(cache_root, &pin.url, b));
+        let path = branch_resolution_path(cache_root, &pin.url, b);
+        if any_resolution(&path).is_some_and(|sha| sha == refused) {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
