@@ -155,7 +155,7 @@ impl Descriptor {
     /// machine and the tool root the descriptor was materialised into is not
     /// consulted at all.
     ///
-    /// **This is public and is called again by [`locate`] and [`command`].**
+    /// This is public and is called again by [`locate`] and [`command`].
     /// The fields are public and `Deserialize` is derived, so a descriptor can
     /// reach either of those without passing through [`Descriptor::parse`], and
     /// a check that only runs at construction guards nothing about a value that
@@ -831,7 +831,7 @@ fn touch(root: &Path) {
 /// under it. It fails rather than publishing a partial tool, and it is a real
 /// cost of the bound rather than something the bound avoids.
 ///
-/// **A scratch belonging to this process is never taken.** That is the one case
+/// A scratch belonging to this process is never taken. That is the one case
 /// liveness can be settled cheaply, since the pid is in the name, and it is also
 /// the case that would otherwise bite: a launcher collects on the same run that
 /// fetches, so a slow fetch could be collected by its own process.

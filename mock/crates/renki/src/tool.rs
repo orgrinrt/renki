@@ -177,8 +177,8 @@ pub enum VersionSource {
     GitTag,
     /// The registry release first, falling back to the matching tag.
     ///
-    /// Faster on a cold build, and correct **only when the tool owns
-    /// [`Tool::engine_crate`] on crates.io**. Choosing this is a statement that
+    /// Faster on a cold build, and correct only when the tool owns
+    /// [`Tool::engine_crate`] on crates.io. Choosing this is a statement that
     /// the name is yours and will stay yours. It is not checked and cannot be:
     /// a name is claimed or not at the moment somebody runs the launcher, not
     /// at the moment the descriptor is written.
@@ -419,7 +419,7 @@ impl Workdir {
 /// Every field is optional and defaults to doing nothing, so a tool that needs
 /// none of this writes `Hooks::NONE`.
 ///
-/// **Spread [`Hooks::NONE`] rather than naming every field.** This is a struct
+/// Spread [`Hooks::NONE`] rather than naming every field. This is a struct
 /// literal, so a hook added later breaks a tool that wrote all seven out, and
 /// one is expected: the cache key hashes the engine url, the resolved rev and
 /// the toolchain, and a tool whose engine build depends on an input of its own

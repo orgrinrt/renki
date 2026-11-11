@@ -324,7 +324,7 @@ pub(crate) fn ls_remote_head_from(
 /// One file per url and branch, seventy bytes each, and nothing removed them:
 /// a repo that once tracked a branch left one behind for good.
 ///
-/// **The window is the build cache's, not [`BRANCH_TTL`].** Those are two
+/// The window is the build cache's, not [`BRANCH_TTL`]. Those are two
 /// different questions and this swept on the wrong one. `BRANCH_TTL` says when
 /// a resolution stops being taken as the branch's current tip, which is an
 /// hour. It does not say when the file stops being read, because
