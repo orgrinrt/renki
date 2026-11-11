@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.0.5-rc.1, 2026-11-11
+
+A release candidate. The launcher's self-update reinstalls into a target
+directory under the cache, so it stops leaving `cargo install` scratch
+directories behind in `/tmp`. `renki-dirs` and `renki-config` stay at `0.0.2`.
+
+### fix
+
+- reinstall the launcher into the cache target dir
+- forget a refused rebuild only while the record names its revision
+- give a remote branch lookup a deadline
+
+### docs
+
+- give `renki` its own `README.md` and shape the readmes of `renki-config` and `renki-dirs`
+- take the second person out of the readme
+- take the bold out of the `renki` rustdoc
+
 ## 0.0.4, 2026-10-28
 
 Two launchers asking for the same engine install no longer build it twice.
