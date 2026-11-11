@@ -14,7 +14,12 @@ const CRATES_TOML: &str = "\
 #[test]
 fn a_reinstall_is_locked_to_the_launcher_s_own_lockfile() {
     assert_eq!(
-        reinstall_args("ssh://git@github.com/o/r.git", "dev", "r-launcher"),
+        reinstall_args(
+            "ssh://git@github.com/o/r.git",
+            "dev",
+            "r-launcher",
+            Path::new("/cache/launcher/target"),
+        ),
         vec![
             "install",
             "--git",
@@ -24,8 +29,22 @@ fn a_reinstall_is_locked_to_the_launcher_s_own_lockfile() {
             "r-launcher",
             "--locked",
             "--force",
+            "--target-dir",
+            "/cache/launcher/target",
         ]
     );
+}
+
+#[test]
+fn a_reinstall_builds_in_the_cache_and_not_in_a_temporary_directory() {
+    let cache = Path::new("/cache");
+    let target = crate::cache::launcher_target_dir(cache);
+    assert!(target.starts_with(cache), "{}", target.display());
+    assert_eq!(target, cache.join("launcher").join("target"));
+    // Stable across calls, so a repeat update compiles incrementally in one place.
+    assert_eq!(target, crate::cache::launcher_target_dir(cache));
+    // Not under the engine builds, which the collector removes key by key.
+    assert!(!target.starts_with(cache.join("builds")));
 }
 
 #[test]
