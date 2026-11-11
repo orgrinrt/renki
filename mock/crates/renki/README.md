@@ -16,7 +16,7 @@ cargo add renki
 
 ```toml
 [dependencies]
-renki = "0.0.4"
+renki = "0.0.5-rc.1"
 ```
 
 Pin the exact version rather than a range, since `0.0.x` releases are incompatible with each other anyway, and a new field on `Tool` breaks the build unless the literal spreads `Tool::CONVENTIONS` and lets the base answer the ones it has no opinion about. `renki` is a library and not installed as a command. What goes on `PATH` is the launcher built with it.
