@@ -205,6 +205,16 @@ fn builds_dir(root: &Path) -> PathBuf {
     root.join("builds")
 }
 
+/// Where the launcher's own reinstall compiles: one directory in the cache,
+/// kept between updates so the next one builds incrementally.
+///
+/// Beside `builds` rather than under it, because the collector removes a key's
+/// directory with its target, and this one belongs to no key. Without it cargo
+/// builds in a fresh temporary directory each time and leaves it behind.
+pub(crate) fn launcher_target_dir(root: &Path) -> PathBuf {
+    root.join("launcher").join("target")
+}
+
 /// The toolchain identity to fold into the cache key: `rustc -vV`, which
 /// carries the version, the commit hash, the host triple and the LLVM version.
 ///
