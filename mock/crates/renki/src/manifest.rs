@@ -168,7 +168,7 @@ pub(crate) fn syntax_error(text: &str) -> Option<String> {
 /// The config belongs to the tool and carries whatever keys it likes, so an
 /// unknown one cannot be refused and is not refused. What this catches is the
 /// narrower case where the reader is about to be told to add a pin to a file
-/// that, to them, already has one: `mockspace_ref` sits there looking like a
+/// that, to them, already has one: `widget_ref` sits there looking like a
 /// pin, matches none of the five, and reads as no pin at all.
 ///
 /// The test is the prefix the five share. A tool's keys are conventionally one

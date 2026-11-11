@@ -81,8 +81,8 @@ fn repo_root_with(
 ///
 /// The config sits either at the repo root or in a single immediate
 /// subdirectory. There is no merging, no precedence and no nearest-wins: those
-/// semantics were never specified, so rather than pick one silently, **more
-/// than one config anywhere in scope is a hard error** that blocks every run
+/// semantics were never specified, so rather than pick one silently, more
+/// than one config anywhere in scope is a hard error that blocks every run
 /// until exactly one remains. Zero is `Ok(None)`, which lets the caller fall
 /// back to whatever legacy pin the tool still honours.
 ///
