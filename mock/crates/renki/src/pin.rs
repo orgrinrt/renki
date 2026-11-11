@@ -231,6 +231,29 @@ fn fresh_resolution(path: &Path) -> Option<String> {
     (unix_now().saturating_sub(ts) <= BRANCH_TTL.as_secs()).then_some(sha)
 }
 
+/// Forget the recorded resolution of a branch pin, so the next run asks the remote
+/// for the branch's tip again. A pin that names no branch has none to forget, and no
+/// other branch of the remote loses its own.
+///
+/// Called when the build of the resolved revision was refused: the resolution was the
+/// tip as of up to an hour ago, a refused build says nothing about the tip now, and
+/// keeping it held every run of that hour to a revision that did not build, after the
+/// branch had been fixed. With the remote out of reach there is no last known revision
+/// to fall back to either, which is right, since that revision is the one that did not
+/// build and the cache holds nothing for it.
+///
+/// Only while the record still names `refused`, the revision that was refused: another
+/// launcher that resolved the branch again while this one built has recorded a tip of its
+/// own, and that one stays.
+pub(crate) fn forget_resolution(pin: &Pin, cache_root: &Path, refused: &str) {
+    if let Reference::Branch(b) = &pin.reference {
+        let path = branch_resolution_path(cache_root, &pin.url, b);
+        if any_resolution(&path).is_some_and(|sha| sha == refused) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// The recorded resolution whatever its age, for the case where asking the
 /// remote is not possible.
 fn any_resolution(path: &Path) -> Option<String> {
@@ -249,18 +272,35 @@ fn read_resolution(path: &Path) -> Option<(u64, String)> {
 }
 
 pub(crate) fn ls_remote_head(url: &str, branch: &str) -> Result<String, String> {
+    ls_remote_head_from(
+        &crate::ask::ThisProcess,
+        url,
+        branch,
+        crate::ask::ASK_DEADLINE,
+    )
+}
+
+/// The head of `branch` on `url`, with one `deadline` over reading how ssh is
+/// configured and the listing both, so the listing gets what the read left.
+pub(crate) fn ls_remote_head_from(
+    sources: &impl crate::ask::SshSources,
+    url: &str,
+    branch: &str,
+    deadline: std::time::Duration,
+) -> Result<String, String> {
+    let started = std::time::Instant::now();
     // The full ref, because a bare name also matches `refs/tags/<name>` and
     // which one wins is then down to the order the remote lists them. Built
     // once and used for both the argument and the message, so the message
     // cannot describe a different question than the one that was asked.
     let refspec = format!("refs/heads/{branch}");
-    let out = std::process::Command::new("git")
-        .args(["ls-remote", url, &refspec])
-        .output()
-        .map_err(|e| format!("could not run git ls-remote: {e}"))?;
+    let what = format!("git ls-remote {url} {refspec}");
+    let mut git = crate::ask::quiet_git(sources, deadline);
+    git.args(["ls-remote", url, &refspec]);
+    let out = crate::ask::run_within(git, deadline.saturating_sub(started.elapsed()), &what)?;
     if !out.status.success() {
         return Err(format!(
-            "git ls-remote {url} {refspec} failed: {}",
+            "{what} failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
@@ -284,7 +324,7 @@ pub(crate) fn ls_remote_head(url: &str, branch: &str) -> Result<String, String> 
 /// One file per url and branch, seventy bytes each, and nothing removed them:
 /// a repo that once tracked a branch left one behind for good.
 ///
-/// **The window is the build cache's, not [`BRANCH_TTL`].** Those are two
+/// The window is the build cache's, not [`BRANCH_TTL`]. Those are two
 /// different questions and this swept on the wrong one. `BRANCH_TTL` says when
 /// a resolution stops being taken as the branch's current tip, which is an
 /// hour. It does not say when the file stops being read, because
@@ -319,7 +359,11 @@ pub(crate) fn sweep_branch_resolutions(cache_root: &Path, retention: Duration) {
     }
 }
 
-fn branch_resolution_path(cache_root: &Path, url: &str, branch: &str) -> std::path::PathBuf {
+pub(crate) fn branch_resolution_path(
+    cache_root: &Path,
+    url: &str,
+    branch: &str,
+) -> std::path::PathBuf {
     let mut h = Fnv::new();
     h.write_field(url);
     h.write_field(branch);

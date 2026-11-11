@@ -167,11 +167,17 @@ fn mark_checked(marker: &Path, now: u64) {
 }
 
 /// The whole argument list of a launcher reinstall: the branch it was
-/// installed from, the launcher crate, and `--locked`, for the reason
-/// `extension::install_args` gives.
+/// installed from, the launcher crate, `--locked` for the reason
+/// `extension::install_args` gives, and `--target-dir`, which keeps the build in
+/// the cache instead of a temporary directory cargo would leave behind.
 // lint:allow(trait-first-signatures) reason: an argument list handed to `Command::args`, at the launcher's std boundary. FIXME: an iterator once the callers take one.
-pub(crate) fn reinstall_args(url: &str, branch: &str, launcher_crate: &str) -> Vec<String> {
-    [
+pub(crate) fn reinstall_args(
+    url: &str,
+    branch: &str,
+    launcher_crate: &str,
+    target_dir: &Path,
+) -> Vec<String> {
+    let mut args: Vec<String> = [
         "install",
         "--git",
         url,
@@ -180,13 +186,16 @@ pub(crate) fn reinstall_args(url: &str, branch: &str, launcher_crate: &str) -> V
         launcher_crate,
         "--locked",
         "--force",
+        "--target-dir",
     ]
     .iter()
     .map(|s| s.to_string())
-    .collect()
+    .collect();
+    args.push(target_dir.display().to_string());
+    args
 }
 
-use crate::retry::{Attempt, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
+use crate::retry::{Attempt, BuildError, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
 
 /// The launcher's own reinstall goes through the same retry as the engine's
 /// build, after the same check: a registry deleted under it is as likely here
@@ -195,7 +204,12 @@ use crate::retry::{Attempt, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
 /// so cargo's own exit status is the whole answer.
 fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
     cargo_is_on_path()?;
-    let attempts = [reinstall_args(url, branch, tool.launcher_crate)];
+    // Absolute, as `ensure_built` makes it: cargo resolves it in its own directory.
+    let cache = crate::cache::cache_root(tool)?;
+    let cache = std::path::absolute(&cache)
+        .map_err(|e| format!("could not resolve {}: {e}", cache.display()))?;
+    let target = crate::cache::launcher_target_dir(&cache);
+    let attempts = [reinstall_args(url, branch, tool.launcher_crate, &target)];
     let run = |attempt: &[String]| -> Result<Attempt, String> {
         let status = std::process::Command::new("cargo")
             .args(attempt)
@@ -206,6 +220,7 @@ fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
     install_with_retry(&attempts, tool.launcher_crate, run, || {
         std::thread::sleep(RETRY_PAUSE);
     })
+    .map_err(BuildError::into_message)
 }
 
 /// Replace this process with `exe`, forwarding the original argv (minus the

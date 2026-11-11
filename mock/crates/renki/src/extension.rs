@@ -44,6 +44,7 @@ use std::time::SystemTime;
 use serde::Deserialize;
 
 use crate::hash::Fnv;
+use crate::retry::BuildError;
 
 /// Where a tool's material comes from.
 ///
@@ -154,7 +155,7 @@ impl Descriptor {
     /// machine and the tool root the descriptor was materialised into is not
     /// consulted at all.
     ///
-    /// **This is public and is called again by [`locate`] and [`command`].**
+    /// This is public and is called again by [`locate`] and [`command`].
     /// The fields are public and `Deserialize` is derived, so a descriptor can
     /// reach either of those without passing through [`Descriptor::parse`], and
     /// a check that only runs at construction guards nothing about a value that
@@ -325,11 +326,24 @@ pub fn materialise_once<B: Backend>(plan: &B::Plan, root: &Path) -> Result<(), S
     place(root, B::places_itself(), |into| B::materialise(plan, into))
 }
 
+/// [`materialise_once`] for the launcher's own [`Cargo`] build, answering a [`BuildError`] where the
+/// contract can only answer text, so that the caller can tell a build that was refused from one
+/// that never started. The same `place`, so the same preconditions.
+pub(crate) fn build_with_cargo(plan: &CargoPlan, root: &Path) -> Result<(), BuildError> {
+    place(root, Cargo::places_itself(), |into| {
+        Cargo::build(plan, into)
+    })
+}
+
 /// Put material at `root`, once, by whichever of the two routes the backend
 /// takes.
 ///
-/// Not generic, so both halves of the crate share one body rather than one
-/// shape. `materialise_once` is this with the backend named at compile time;
+/// Not generic over the backend, so both halves of the crate share one body
+/// rather than one shape. It is generic over the error alone, text for
+/// `materialise_once` and `locate`, and a [`BuildError`] for the launcher's own
+/// build, so that a build refused and a build that could not start stay two
+/// things on the way out. `materialise_once` is this with the backend named at
+/// compile time;
 /// [`locate`] is this with the backend found in a registry, and the duplicate
 /// dispatch the two used to carry is what this removes.
 ///
@@ -338,11 +352,11 @@ pub fn materialise_once<B: Backend>(plan: &B::Plan, root: &Path) -> Result<(), S
 /// than about the caller. So this takes the answer as a plain argument and is
 /// crate-only: public, a host could hand it one the backend contradicts, which
 /// is the sentence above stopped being true.
-pub(crate) fn place(
+pub(crate) fn place<E: From<String>>(
     root: &Path,
     places_itself: bool,
-    materialise: impl FnOnce(&Path) -> Result<(), String>,
-) -> Result<(), String> {
+    materialise: impl FnOnce(&Path) -> Result<(), E>,
+) -> Result<(), E> {
     if places_itself {
         std::fs::create_dir_all(root)
             .map_err(|e| format!("could not create {}: {e}", root.display()))?;
@@ -366,11 +380,11 @@ pub(crate) fn place(
 /// takes shared references and is `pub`, so several threads reach one key at
 /// once. That is also what lets the cleanup paths remove a directory without
 /// touching another caller's.
-fn place_via_scratch(
+fn place_via_scratch<E: From<String>>(
     root: &Path,
     parent: &Path,
-    materialise: impl FnOnce(&Path) -> Result<(), String>,
-) -> Result<(), String> {
+    materialise: impl FnOnce(&Path) -> Result<(), E>,
+) -> Result<(), E> {
     static NTH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nth = NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let leaf = root.file_name().unwrap_or_default().to_string_lossy();
@@ -393,10 +407,10 @@ fn place_via_scratch(
         },
         Err(e) => {
             let _ = std::fs::remove_dir_all(&scratch);
-            Err(format!(
+            Err(E::from(format!(
                 "could not place the tool at {}: {e}",
                 root.display()
-            ))
+            )))
         },
     }
 }
@@ -770,139 +784,10 @@ pub static BUILTIN: &[Registered] = &[Registered::of::<Local>(), Registered::of:
 #[path = "extension_tests.rs"]
 mod tests;
 
-/// What a [`Cargo`] build is told to install.
-///
-/// `attempts` are argument lists tried in order until one succeeds, source
-/// selector and package name included; `--root` and `--force` are added here.
-/// A version pin has two, the registry and then the matching git tag.
-#[derive(Debug, Clone)]
-pub struct CargoPlan {
-    /// The argument lists, tried in order.
-    pub attempts:   Vec<Vec<String>>,
-    /// The binary the install must produce under `<root>/bin`, checked because
-    /// cargo reporting success is not the same as cargo having built the thing
-    /// that was wanted.
-    pub bin:        String,
-    /// Named in the failure message, so an operator reads the crate that did
-    /// not build rather than the launcher that asked for it.
-    pub crate_name: String,
-    /// Where cargo keeps its compiled intermediates, passed as `--target-dir`.
-    /// Cargo's own install otherwise compiles in a temporary directory that is
-    /// gone with the process, so a killed build starts over; named, it resumes.
-    /// One directory belongs to one build: two builds that compile into the same
-    /// one race on cargo's copy of the finished binary, and nothing here keeps
-    /// them apart, so a plan names a directory no other plan uses at the same
-    /// time.
-    pub target_dir: PathBuf,
-    /// The directory the build runs in, when it is not the process's own:
-    /// cargo is started with it as its working directory, so a relative path in
-    /// the install arguments, `--root` and `--target-dir` among them, resolves
-    /// there and not against the launcher. A toolchain file decides which rustc
-    /// answers in a directory, so the build runs where the cache key's
-    /// fingerprint was taken, the repository's root, or one revision is built
-    /// under two toolchains and keyed twice.
-    pub dir:        Option<PathBuf>,
-}
-
-/// Building something with cargo.
-///
-/// The launcher half's backend, and the reason [`Backend`] is a contract rather
-/// than the one thing this crate happens to do. It is picked at compile time by
-/// the launcher, so it goes through [`materialise_once`] directly and is not in
-/// any [`Registry`]: its [`Plan`](Backend::Plan) is a [`CargoPlan`] rather than
-/// a [`Descriptor`], and a table dispatched by a descriptor's `backend =` field
-/// has nothing to hand it.
-pub struct Cargo;
-
-/// The whole argument list of one install: the attempt's own source selector
-/// and package, then `--locked`, the root and `--force`.
-///
-/// `--locked` because the source's lockfile is what its author built and
-/// tested, and an install that resolves afresh takes whatever the registry
-/// published since. One such crate, released the same morning, did not build
-/// on the toolchain the source pins, and every launcher on the machine stopped
-/// until the engine was installed by hand. A pin names a revision so the build
-/// is the same one every time; a fresh resolution is a different build wearing
-/// the revision's name.
-///
-/// Holds where the source commits a lockfile. A source without one gets a
-/// warning from cargo and the fresh resolution anyway, which is cargo's rule
-/// and not this crate's to change; `build_failure` names it as a cause.
-// lint:allow(trait-first-signatures) reason: an argument list handed to `Command::args`, at the launcher's std boundary. FIXME: an iterator once the callers take one.
-pub(crate) fn install_args(attempt: &[String], into: &Path, target_dir: &Path) -> Vec<String> {
-    let mut args = Vec::with_capacity(attempt.len() + 7);
-    args.push("install".into());
-    args.extend(attempt.iter().cloned());
-    args.push("--locked".into());
-    args.push("--root".into());
-    args.push(into.display().to_string());
-    args.push("--force".into());
-    args.push("--target-dir".into());
-    args.push(target_dir.display().to_string());
-    args
-}
-
-use crate::retry::{Attempt, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
-
-impl Backend for Cargo {
-    type Plan = CargoPlan;
-
-    const NAME: &'static str = "cargo";
-
-    /// `rustc -vV`, which carries the version, the commit hash, the host triple
-    /// and the LLVM version.
-    ///
-    /// rustc is part of the compilation input, so a toolchain change re-keys and
-    /// forces a coherent rebuild. A frozen binary paired with a moved toolchain
-    /// is the failure this prevents.
-    ///
-    /// Read in the launcher's own directory, which is not where the build runs:
-    /// the build runs in [`CargoPlan::dir`], where a `rust-toolchain.toml` can
-    /// select another rustc. [`Backend::fingerprint`] takes no plan, and it is
-    /// held as a function pointer by [`Registered`], so the directory cannot
-    /// reach it without changing the contract every backend implements. The
-    /// launcher's own key does not use this method; it reads rustc in the
-    /// repository's root directly, the directory the build runs in, so the key
-    /// and the build agree. A host that keys a [`Cargo`] build by this method
-    /// gets the launcher's directory's toolchain and not the build's.
-    fn fingerprint() -> String {
-        crate::cache::rustc_fingerprint(None)
-    }
-
-    /// `cargo install <attempt> --locked --root <into> --force`, per attempt,
-    /// first success wins.
-    fn materialise(plan: &Self::Plan, into: &Path) -> Result<(), String> {
-        cargo_is_on_path()?;
-        let run = |attempt: &[String]| -> Result<Attempt, String> {
-            let mut cmd = Command::new("cargo");
-            cmd.args(install_args(attempt, into, &plan.target_dir));
-            if let Some(dir) = &plan.dir {
-                cmd.current_dir(dir);
-            }
-            let status = cmd
-                .status()
-                .map_err(|e| format!("could not run cargo install: {e}"))?;
-            Ok(if !status.success() {
-                Attempt::Failed
-            } else if into.join("bin").join(&plan.bin).is_file() {
-                Attempt::Built
-            } else {
-                Attempt::NoBinary
-            })
-        };
-        install_with_retry(&plan.attempts, &plan.crate_name, run, || {
-            std::thread::sleep(RETRY_PAUSE);
-        })
-    }
-
-    /// `cargo install --root` takes cargo's own lock on the install root and
-    /// moves the binary in itself, so a scratch and a rename would stack a
-    /// second, weaker mechanism on a working one. The incremental state is the
-    /// plan's `target_dir`, which the plan names and this backend does not move.
-    fn places_itself() -> bool {
-        true
-    }
-}
+mod cargo;
+#[cfg(test)]
+pub(crate) use cargo::install_args;
+pub use cargo::{Cargo, CargoPlan};
 
 /// The file whose timestamp says when a materialised tool was last used.
 ///
@@ -946,7 +831,7 @@ fn touch(root: &Path) {
 /// under it. It fails rather than publishing a partial tool, and it is a real
 /// cost of the bound rather than something the bound avoids.
 ///
-/// **A scratch belonging to this process is never taken.** That is the one case
+/// A scratch belonging to this process is never taken. That is the one case
 /// liveness can be settled cheaply, since the pid is in the name, and it is also
 /// the case that would otherwise bite: a launcher collects on the same run that
 /// fetches, so a slow fetch could be collected by its own process.
