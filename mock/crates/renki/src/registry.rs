@@ -292,6 +292,34 @@ impl Registry {
             .retain(|c| !c.root_exact || Path::new(&c.root).is_dir());
         self.last_gc = now;
 
+        self.evict(cache_root, protect, |pinners| {
+            pinners
+                .iter()
+                .any(|c| now.saturating_sub(c.last_seen) < retention.as_secs())
+        })
+    }
+
+    /// Remove every build no consumer resolves to, at once rather than on the daily pass.
+    ///
+    /// A repository re-resolving to a new key leaves its old key with no consumer the moment
+    /// it is recorded, so running this after every recording keeps one build per pin in use.
+    /// A key some consumer still resolves to stays, however idle, for [`Registry::gc`]'s
+    /// retention window. `protect` and a key being built stay as they do there.
+    /// Answers how many went, for the run to say so.
+    pub(crate) fn drop_unresolved(&mut self, cache_root: &Path, protect: &str) -> usize {
+        self.evict(cache_root, protect, |pinners| !pinners.is_empty())
+            .len()
+    }
+
+    /// Remove each build but `protect` that `keep` refuses, given the consumers resolving to it,
+    /// with its directory and its row. The one body [`Registry::gc`] and
+    /// [`Registry::drop_unresolved`] decide through.
+    fn evict(
+        &mut self,
+        cache_root: &Path,
+        protect: &str,
+        keep: impl Fn(&[&Consumer]) -> bool,
+    ) -> Vec<String> {
         let builds_dir = cache_root.join("builds");
         let mut removed = Vec::new();
         let consumers = self.consumers.clone();
@@ -300,10 +328,7 @@ impl Registry {
                 return true;
             }
             let pinners: Vec<&Consumer> = consumers.iter().filter(|c| c.key == b.key).collect();
-            let live = pinners
-                .iter()
-                .any(|c| now.saturating_sub(c.last_seen) < retention.as_secs());
-            if live {
+            if keep(&pinners) {
                 return true;
             }
             // orphan (no pinners) or all pinners stale: evict.
@@ -442,6 +467,15 @@ pub(crate) fn record_and_collect(
         toolchain,
         now,
     });
+    // Every run: a build this or any repository moved off goes now, so a pin that
+    // moved three times in a day does not hold three engines until the daily pass.
+    let superseded = reg.drop_unresolved(cache_root, key);
+    if superseded > 0 {
+        eprintln!(
+            "{}: removed {} superseded engine build(s)",
+            tool.short, superseded
+        );
+    }
     if reg.gc_due(now) {
         let removed = reg.gc(cache_root, key, tool.cache_retention, now);
         if !removed.is_empty() {

@@ -785,6 +785,7 @@ pub static BUILTIN: &[Registered] = &[Registered::of::<Local>(), Registered::of:
 mod tests;
 
 mod cargo;
+pub(crate) use cargo::drop_target;
 #[cfg(test)]
 pub(crate) use cargo::install_args;
 pub use cargo::{Cargo, CargoPlan};

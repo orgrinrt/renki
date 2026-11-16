@@ -205,8 +205,9 @@ fn builds_dir(root: &Path) -> PathBuf {
     root.join("builds")
 }
 
-/// Where the launcher's own reinstall compiles: one directory in the cache,
-/// kept between updates so the next one builds incrementally.
+/// Where the launcher's own reinstall puts its target: one directory in the
+/// cache, removed once the reinstall is done, the intermediates going to the
+/// build directory of where the launcher runs.
 ///
 /// Beside `builds` rather than under it, because the collector removes a key's
 /// directory with its target, and this one belongs to no key. Without it cargo
@@ -347,6 +348,7 @@ pub(crate) fn ensure_built(
     let root = builds_dir(cache_root).join(key);
     let bin = root.join("bin").join(tool.engine_bin_name());
     if bin.is_file() {
+        drop_leftover_target(cache_root, key, &root);
         return Ok(bin);
     }
     std::fs::create_dir_all(&root)
@@ -368,18 +370,34 @@ pub(crate) fn ensure_built(
     Ok(bin)
 }
 
+/// The target a launcher before the build directory left beside a built key's binary.
+///
+/// Removed only while the key's lock is free, so a build of the key in progress keeps it.
+/// Best-effort: a lock that cannot be tried or a removal that fails leaves it for the next run.
+fn drop_leftover_target(cache_root: &Path, key: &str, root: &Path) {
+    let target = root.join("target");
+    if !target.is_dir() {
+        return;
+    }
+    if let Ok(Some(_held)) = BuildLock::try_take(&builds_dir(cache_root), key) {
+        crate::extension::drop_target(&target);
+    }
+}
+
 /// What one key's build is told: the attempts to try, the binary to expect, and
 /// where cargo works.
 ///
 /// The target directory is inside the key's own directory, so a killed build of
 /// the key resumes, nothing else compiles into it, and the collector removes it
-/// together with the key. `dir` is the directory cargo runs in.
+/// together with the key. `dir` is the directory cargo runs in, and the build
+/// directory is the one cargo would use there.
 fn build_plan(tool: &Tool, resolved: &Resolved, root: &Path, dir: &Path) -> CargoPlan {
     CargoPlan {
         attempts:   resolved.attempts.clone(),
         bin:        tool.engine_bin_name().into(),
         crate_name: tool.engine_crate.into(),
         target_dir: root.join("target"),
+        build_dir:  crate::build_dir::build_dir(dir),
         dir:        Some(dir.to_path_buf()),
     }
 }

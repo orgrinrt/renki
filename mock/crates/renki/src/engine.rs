@@ -32,9 +32,8 @@ use crate::tool::Tool;
 
 /// How long a scratch build survives without being used.
 ///
-/// Short because the flag is for one-off questions. Long enough that iterating
-/// on one change through an afternoon does not pay a full rebuild each time, since
-/// the target directory is what makes the rebuild cheap and it lives here too.
+/// Short because the flag is for one-off questions. What it holds after a build
+/// is the binary, since the intermediates are the repository's build directory's.
 const SCRATCH_TTL_SECS: u64 = 24 * 60 * 60;
 
 /// The file whose timestamp says when a scratch build was last used.
@@ -218,8 +217,8 @@ pub(crate) fn scratch_key(source: &Path) -> String {
 /// Always, rather than when something looks stale: the reason to pass this flag
 /// is that the source changed a moment ago, and any staleness check cheap enough
 /// to run here would be a worse version of what cargo already does. cargo skips
-/// what genuinely did not change, and the target directory is kept between runs
-/// so it can.
+/// what genuinely did not change where the repository has a build directory, the
+/// one it keeps its own builds in.
 ///
 /// The build runs in `repo_root`, the directory the pinned builds run in, so the
 /// toolchain the repository selects is the one that builds the engine under test.
@@ -248,14 +247,16 @@ pub(crate) fn build(
         source.display()
     );
     // The same backend the pinned build uses, with a one-attempt plan. The
-    // target directory is named so it lands inside the scratch root and is kept
-    // between runs, which is what makes an unchanged rebuild cheap.
+    // intermediates go to the repository's build directory, which is what makes
+    // an unchanged rebuild cheap, and the target inside the scratch root goes
+    // once the binary is in place.
     crate::extension::materialise_once::<crate::extension::Cargo>(
         &crate::extension::CargoPlan {
             attempts:   vec![vec!["--path".into(), source.display().to_string()]],
             bin:        tool.engine_bin_name().into(),
             crate_name: tool.engine_crate.into(),
             target_dir: root.join("target"),
+            build_dir:  crate::build_dir::build_dir(repo_root),
             dir:        Some(repo_root.to_path_buf()),
         },
         &root,

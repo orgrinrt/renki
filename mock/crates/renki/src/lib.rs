@@ -102,6 +102,7 @@ compile_error!(
 
 mod args;
 mod ask;
+mod build_dir;
 mod cache;
 mod command;
 pub mod config;

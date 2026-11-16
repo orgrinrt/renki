@@ -210,9 +210,17 @@ fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
         .map_err(|e| format!("could not resolve {}: {e}", cache.display()))?;
     let target = crate::cache::launcher_target_dir(&cache);
     let attempts = [reinstall_args(url, branch, tool.launcher_crate, &target)];
+    // The build directory of the directory the launcher runs in, as for the engine.
+    let build_dir = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| crate::build_dir::build_dir(&cwd));
     let run = |attempt: &[String]| -> Result<Attempt, String> {
-        let status = std::process::Command::new("cargo")
-            .args(attempt)
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.args(attempt);
+        if let Some(build_dir) = &build_dir {
+            cmd.env("CARGO_BUILD_BUILD_DIR", build_dir);
+        }
+        let status = cmd
             .status()
             .map_err(|e| format!("could not run cargo install: {e}"))?;
         Ok(if status.success() { Attempt::Built } else { Attempt::Failed })
@@ -220,7 +228,9 @@ fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
     install_with_retry(&attempts, tool.launcher_crate, run, || {
         std::thread::sleep(RETRY_PAUSE);
     })
-    .map_err(BuildError::into_message)
+    .map_err(BuildError::into_message)?;
+    crate::extension::drop_target(&target);
+    Ok(())
 }
 
 /// Replace this process with `exe`, forwarding the original argv (minus the
