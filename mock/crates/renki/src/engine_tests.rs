@@ -341,3 +341,22 @@ fn the_scratch_key_is_the_path_bytes_and_not_a_lossy_rendering() {
     assert_ne!(key(b"/tmp/one"), key(b"/tmp/two"));
     assert_eq!(key(b"/tmp/one"), key(b"/tmp/one"));
 }
+
+#[test]
+fn a_scratch_build_leaves_its_binary_and_no_target() {
+    // A real install of a fixture crate: the scratch root keeps the binary, and the
+    // target the install compiled in goes once the binary is in place.
+    let tmp = tempfile::tempdir().unwrap();
+    let source = crate::test_fixtures::fixture_engine(tmp.path());
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let cache = tmp.path().join("cache");
+
+    let bin = build(&PLAIN, &cache, &source, &repo).unwrap();
+
+    assert!(bin.is_file(), "no binary at {}", bin.display());
+    assert_eq!(
+        crate::test_fixtures::targets_under(&cache).collect::<Vec<_>>(),
+        Vec::<PathBuf>::new()
+    );
+}

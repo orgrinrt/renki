@@ -616,8 +616,8 @@ fn a_build_compiles_into_a_target_directory_inside_its_own_key() {
         version_tag: String::new(),
     };
     let builds = builds_dir(dir.path());
-    let first = build_plan(&T, &resolved, &builds.join("aaaa"), dir.path());
-    let second = build_plan(&T, &resolved, &builds.join("bbbb"), dir.path());
+    let first = build_plan(&T, &resolved, &builds.join("aaaa"), dir.path()).unwrap();
+    let second = build_plan(&T, &resolved, &builds.join("bbbb"), dir.path()).unwrap();
     assert_eq!(first.target_dir, builds.join("aaaa").join("target"));
     assert_eq!(second.target_dir, builds.join("bbbb").join("target"));
     assert_ne!(first.target_dir, second.target_dir);
@@ -628,3 +628,7 @@ fn a_build_compiles_into_a_target_directory_inside_its_own_key() {
 // What `ensure_built` answers when a build fails.
 #[path = "cache_tests/typed_failure.rs"]
 mod typed_failure;
+
+// What an install leaves in the cache.
+#[path = "cache_tests/one_copy.rs"]
+mod one_copy;

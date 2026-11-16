@@ -118,3 +118,134 @@ fn a_garbled_marker_does_not_suppress_the_check() {
         assert!(!recently_checked(&marker, 10_000), "{bad:?}");
     }
 }
+
+/// The fixture crate as a git repository with a `main` branch, as a reinstall fetches it.
+fn fixture_repository(at: &std::path::Path) -> String {
+    let src = crate::test_fixtures::fixture_engine(at);
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(&src)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "fixture"]);
+    format!("file://{}", src.display())
+}
+
+/// `cargo`, installing into `root` rather than the person's own bin directory.
+fn cargo_into(root: &std::path::Path) -> impl Fn() -> std::process::Command + '_ {
+    move || {
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.env("CARGO_INSTALL_ROOT", root);
+        cmd.env("CARGO_NET_GIT_FETCH_WITH_CLI", "true");
+        cmd
+    }
+}
+
+#[test]
+fn a_reinstall_leaves_the_launcher_and_no_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = fixture_repository(tmp.path());
+    let cache = tmp.path().join("cache");
+    let root = tmp.path().join("installed");
+    let reinstall = Reinstall {
+        url:            &url,
+        branch:         "main",
+        launcher_crate: "engine",
+        cache:          &cache,
+        build_dir:      None,
+    };
+
+    assert!(
+        reinstall.run(cargo_into(&root)).unwrap(),
+        "the reinstall did not run"
+    );
+
+    assert!(root.join("bin/engine").is_file());
+    assert_eq!(
+        crate::test_fixtures::targets_under(&cache).collect::<Vec<_>>(),
+        Vec::<std::path::PathBuf>::new()
+    );
+}
+
+#[test]
+fn a_reinstall_another_launcher_holds_is_skipped_without_waiting() {
+    // The target is one directory for every reinstall on the machine. One held by
+    // another launcher is left to it: this run neither waits nor installs.
+    let tmp = tempfile::tempdir().unwrap();
+    let url = fixture_repository(tmp.path());
+    let cache = tmp.path().join("cache");
+    let root = tmp.path().join("installed");
+    let _other = crate::cache::BuildLock::hold(&cache, "launcher").unwrap();
+
+    let ran = Reinstall {
+        url:            &url,
+        branch:         "main",
+        launcher_crate: "engine",
+        cache:          &cache,
+        build_dir:      None,
+    }
+    .run(cargo_into(&root))
+    .unwrap();
+
+    assert!(!ran, "the reinstall ran under another's lock");
+    assert!(!root.join("bin/engine").exists());
+}
+
+/// A reinstall whose `cargo` carries `name=value` and a cargo home of its own at `home`.
+fn reinstall_with(tmp: &std::path::Path, var: Option<(&str, String)>) {
+    let url = fixture_repository(tmp);
+    let cache = tmp.join("cache");
+    let root = tmp.join("installed");
+    let home = tmp.join("home");
+    let ran = Reinstall {
+        url:            &url,
+        branch:         "main",
+        launcher_crate: "engine",
+        cache:          &cache,
+        build_dir:      None,
+    }
+    .run(|| {
+        let mut cmd = cargo_into(&root)();
+        cmd.env("CARGO_HOME", &home);
+        if let Some((name, value)) = &var {
+            cmd.env(name, value);
+        }
+        cmd
+    })
+    .unwrap();
+    assert!(ran);
+    assert!(root.join("bin/engine").is_file());
+}
+
+#[test]
+fn a_path_hash_in_the_cargo_homes_config_does_not_reach_the_reinstall() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let hashed = tmp.path().join("hashed");
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[build]\nbuild-dir = \"{}/{{workspace-path-hash}}\"\n",
+            hashed.display()
+        ),
+    )
+    .unwrap();
+    reinstall_with(tmp.path(), None);
+    assert!(!hashed.exists(), "cargo built into {}", hashed.display());
+}
+
+#[test]
+fn a_path_hash_in_an_inherited_variable_does_not_reach_the_reinstall() {
+    let tmp = tempfile::tempdir().unwrap();
+    let hashed = tmp.path().join("hashed");
+    let value = format!("{}/{{workspace-path-hash}}", hashed.display());
+    reinstall_with(tmp.path(), Some(("CARGO_BUILD_BUILD_DIR", value)));
+    assert!(!hashed.exists(), "cargo built into {}", hashed.display());
+}

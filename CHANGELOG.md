@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.5-rc.2 (2026-11-16)
+
+### fix
+
+- fix: build engines in the shared build dir and keep one per pin `bef7c41`
+
 ## 0.0.5-rc.1, 2026-11-11
 
 A release candidate. The launcher's self-update reinstalls into a target
