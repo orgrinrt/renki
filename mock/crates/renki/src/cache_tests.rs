@@ -628,3 +628,7 @@ fn a_build_compiles_into_a_target_directory_inside_its_own_key() {
 // What `ensure_built` answers when a build fails.
 #[path = "cache_tests/typed_failure.rs"]
 mod typed_failure;
+
+// What an install leaves in the cache.
+#[path = "cache_tests/one_copy.rs"]
+mod one_copy;
