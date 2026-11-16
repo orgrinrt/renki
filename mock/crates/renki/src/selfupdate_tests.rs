@@ -161,7 +161,10 @@ fn a_reinstall_leaves_the_launcher_and_no_target() {
         build_dir:      None,
     };
 
-    reinstall.run(cargo_into(&root)).unwrap();
+    assert!(
+        reinstall.run(cargo_into(&root)).unwrap(),
+        "the reinstall did not run"
+    );
 
     assert!(root.join("bin/engine").is_file());
     assert_eq!(
@@ -171,36 +174,78 @@ fn a_reinstall_leaves_the_launcher_and_no_target() {
 }
 
 #[test]
-fn a_reinstall_waits_for_another_to_finish_with_the_shared_target() {
+fn a_reinstall_another_launcher_holds_is_skipped_without_waiting() {
     // The target is one directory for every reinstall on the machine. One held by
-    // another launcher keeps this one from starting, so neither removes the
-    // directory the other is compiling into.
+    // another launcher is left to it: this run neither waits nor installs.
     let tmp = tempfile::tempdir().unwrap();
     let url = fixture_repository(tmp.path());
     let cache = tmp.path().join("cache");
     let root = tmp.path().join("installed");
-    let other = crate::cache::BuildLock::hold(&cache, "launcher").unwrap();
+    let _other = crate::cache::BuildLock::hold(&cache, "launcher").unwrap();
 
-    let (cache_t, root_t, url_t) = (cache.clone(), root.clone(), url.clone());
-    let waiting = std::thread::spawn(move || {
-        // lint:allow(no-runtime-spawn) reason: the second launcher the lock test holds, in-process because the call under test is.
-        Reinstall {
-            url:            &url_t,
-            branch:         "main",
-            launcher_crate: "engine",
-            cache:          &cache_t,
-            build_dir:      None,
-        }
-        .run(cargo_into(&root_t))
-    });
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    assert!(
-        !waiting.is_finished(),
-        "the reinstall ran under another's lock"
-    );
+    let ran = Reinstall {
+        url:            &url,
+        branch:         "main",
+        launcher_crate: "engine",
+        cache:          &cache,
+        build_dir:      None,
+    }
+    .run(cargo_into(&root))
+    .unwrap();
+
+    assert!(!ran, "the reinstall ran under another's lock");
     assert!(!root.join("bin/engine").exists());
+}
 
-    drop(other);
-    waiting.join().unwrap().unwrap();
+/// A reinstall whose `cargo` carries `name=value` and a cargo home of its own at `home`.
+fn reinstall_with(tmp: &std::path::Path, var: Option<(&str, String)>) {
+    let url = fixture_repository(tmp);
+    let cache = tmp.join("cache");
+    let root = tmp.join("installed");
+    let home = tmp.join("home");
+    let ran = Reinstall {
+        url:            &url,
+        branch:         "main",
+        launcher_crate: "engine",
+        cache:          &cache,
+        build_dir:      None,
+    }
+    .run(|| {
+        let mut cmd = cargo_into(&root)();
+        cmd.env("CARGO_HOME", &home);
+        if let Some((name, value)) = &var {
+            cmd.env(name, value);
+        }
+        cmd
+    })
+    .unwrap();
+    assert!(ran);
     assert!(root.join("bin/engine").is_file());
+}
+
+#[test]
+fn a_path_hash_in_the_cargo_homes_config_does_not_reach_the_reinstall() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let hashed = tmp.path().join("hashed");
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[build]\nbuild-dir = \"{}/{{workspace-path-hash}}\"\n",
+            hashed.display()
+        ),
+    )
+    .unwrap();
+    reinstall_with(tmp.path(), None);
+    assert!(!hashed.exists(), "cargo built into {}", hashed.display());
+}
+
+#[test]
+fn a_path_hash_in_an_inherited_variable_does_not_reach_the_reinstall() {
+    let tmp = tempfile::tempdir().unwrap();
+    let hashed = tmp.path().join("hashed");
+    let value = format!("{}/{{workspace-path-hash}}", hashed.display());
+    reinstall_with(tmp.path(), Some(("CARGO_BUILD_BUILD_DIR", value)));
+    assert!(!hashed.exists(), "cargo built into {}", hashed.display());
 }

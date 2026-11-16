@@ -83,7 +83,7 @@ pub(crate) fn maybe_self_update(tool: &Tool, state_root: &Path) {
         "{}: newer launcher on {}, updating ...",
         tool.short, src.branch
     );
-    if reinstall(tool, &src.url, &src.branch).is_ok() {
+    if let Ok(true) = reinstall(tool, &src.url, &src.branch) {
         // Replace this process with the freshly-installed binary, same argv. On
         // success this never returns; on failure it falls through and the
         // current launcher carries on (the new binary is installed for next time).
@@ -202,7 +202,7 @@ use crate::retry::{Attempt, BuildError, RETRY_PAUSE, cargo_is_on_path, install_w
 /// as there, and the second attempt is what mends it. There is no install root
 /// to look in afterwards, since cargo places the launcher where it always did,
 /// so cargo's own exit status is the whole answer.
-fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
+fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<bool, String> {
     cargo_is_on_path()?;
     // Absolute, as `ensure_built` makes it: cargo resolves it in its own directory.
     let cache = crate::cache::cache_root(tool)?;
@@ -236,18 +236,21 @@ impl Reinstall<'_> {
     ///
     /// The target is one directory for every reinstall on the machine, so the whole of it is
     /// held under `<cache>/launcher.lock`: without it the first reinstall to finish removed the
-    /// directory the second was compiling into.
-    pub(crate) fn run(&self, cargo: impl Fn() -> std::process::Command) -> Result<(), String> {
-        let _held = crate::cache::BuildLock::hold(self.cache, "launcher")?;
+    /// directory the second was compiling into. The lock is not waited on, since the command
+    /// the person ran would sit silent behind a whole reinstall: a held lock is another
+    /// launcher updating, and this run skips its own and answers `Ok(false)`. `Ok(true)` is a
+    /// reinstall done.
+    pub(crate) fn run(&self, cargo: impl Fn() -> std::process::Command) -> Result<bool, String> {
+        let Some(_held) = crate::cache::BuildLock::try_take(self.cache, "launcher")? else {
+            return Ok(false);
+        };
         let target = crate::cache::launcher_target_dir(self.cache);
         let attempts = [reinstall_args(self.url, self.branch, self.launcher_crate, &target)];
         let build_dir = self.build_dir;
         let run = |attempt: &[String]| -> Result<Attempt, String> {
             let mut cmd = cargo();
             cmd.args(attempt);
-            if let Some(build_dir) = build_dir {
-                cmd.env("CARGO_BUILD_BUILD_DIR", build_dir);
-            }
+            crate::extension::set_build_dir(&mut cmd, build_dir, &target);
             let status = cmd
                 .status()
                 .map_err(|e| format!("could not run cargo install: {e}"))?;
@@ -258,7 +261,7 @@ impl Reinstall<'_> {
         })
         .map_err(BuildError::into_message)?;
         crate::extension::drop_target(&target);
-        Ok(())
+        Ok(true)
     }
 }
 

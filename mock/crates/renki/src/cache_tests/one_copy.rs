@@ -95,3 +95,62 @@ fn a_built_key_loses_the_target_an_earlier_launcher_left() {
         "the leftover target stayed"
     );
 }
+
+/// An install of the fixture through the backend, its `cargo` carrying a cargo home of its own
+/// and `var` where one is given, with no build directory read for the repository.
+fn install_with(tmp: &Path, var: Option<(&str, String)>) {
+    let src = fixture_engine(tmp);
+    let repo = tmp.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let into = tmp.join("cache/builds").join(KEY);
+    let home = tmp.join("home");
+    let plan = crate::extension::CargoPlan {
+        attempts:   path_pin(&src).attempts,
+        bin:        "engine".into(),
+        crate_name: "engine".into(),
+        target_dir: into.join("target"),
+        build_dir:  None,
+        dir:        Some(repo),
+    };
+    crate::extension::Cargo::build_with(&plan, &into, || {
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.env("CARGO_HOME", &home);
+        if let Some((name, value)) = &var {
+            cmd.env(name, value);
+        }
+        cmd
+    })
+    .unwrap();
+    assert!(into.join("bin/engine").is_file());
+    assert_eq!(
+        targets_under(&tmp.join("cache")).collect::<Vec<_>>(),
+        Vec::<PathBuf>::new()
+    );
+}
+
+#[test]
+fn a_path_hash_in_the_cargo_homes_config_does_not_reach_the_install() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let hashed = tmp.path().join("hashed");
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[build]\nbuild-dir = \"{}/{{workspace-path-hash}}\"\n",
+            hashed.display()
+        ),
+    )
+    .unwrap();
+    install_with(tmp.path(), None);
+    assert!(!hashed.exists(), "cargo built into {}", hashed.display());
+}
+
+#[test]
+fn a_path_hash_in_an_inherited_variable_does_not_reach_the_install() {
+    let tmp = tempfile::tempdir().unwrap();
+    let hashed = tmp.path().join("hashed");
+    let value = format!("{}/{{workspace-path-hash}}", hashed.display());
+    install_with(tmp.path(), Some(("CARGO_BUILD_BUILD_DIR", value)));
+    assert!(!hashed.exists(), "cargo built into {}", hashed.display());
+}

@@ -785,10 +785,10 @@ pub static BUILTIN: &[Registered] = &[Registered::of::<Local>(), Registered::of:
 mod tests;
 
 mod cargo;
-pub(crate) use cargo::drop_target;
 #[cfg(test)]
 pub(crate) use cargo::install_args;
 pub use cargo::{Cargo, CargoPlan};
+pub(crate) use cargo::{drop_target, set_build_dir};
 
 /// The file whose timestamp says when a materialised tool was last used.
 ///

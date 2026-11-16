@@ -98,16 +98,24 @@ impl Cargo {
     /// wins, answering whether a failure is a build that was refused or one that never started.
     /// [`Backend::materialise`] is this with the answer read as its message.
     pub(crate) fn build(plan: &CargoPlan, into: &Path) -> Result<(), BuildError> {
+        Self::build_with(plan, into, || Command::new("cargo"))
+    }
+
+    /// [`Cargo::build`] with `cargo` the command each attempt starts from, so a test can hand
+    /// the install an environment of its own.
+    pub(crate) fn build_with(
+        plan: &CargoPlan,
+        into: &Path,
+        cargo: impl Fn() -> Command,
+    ) -> Result<(), BuildError> {
         cargo_is_on_path()?;
         let run = |attempt: &[String]| -> Result<Attempt, String> {
-            let mut cmd = Command::new("cargo");
+            let mut cmd = cargo();
             cmd.args(install_args(attempt, into, &plan.target_dir));
             if let Some(dir) = &plan.dir {
                 cmd.current_dir(dir);
             }
-            if let Some(build_dir) = &plan.build_dir {
-                cmd.env("CARGO_BUILD_BUILD_DIR", build_dir);
-            }
+            set_build_dir(&mut cmd, plan.build_dir.as_deref(), &plan.target_dir);
             let status = cmd
                 .status()
                 .map_err(|e| format!("could not run cargo install: {e}"))?;
@@ -125,6 +133,17 @@ impl Cargo {
         drop_target(&plan.target_dir);
         Ok(())
     }
+}
+
+/// Give an install its build directory, always: `build_dir` where one was read for the
+/// repository, and the install's own `target_dir` where none was.
+///
+/// Never left to cargo, because `cargo install` still reads `$CARGO_HOME`'s configuration and
+/// an inherited `CARGO_BUILD_BUILD_DIR`, and a `{workspace-path-hash}` in either is expanded
+/// against the installed package's checkout, a build directory per revision kept for good.
+/// The target directory is removed with the install's other leavings once the binary is in.
+pub(crate) fn set_build_dir(cmd: &mut Command, build_dir: Option<&Path>, target_dir: &Path) {
+    cmd.env("CARGO_BUILD_BUILD_DIR", build_dir.unwrap_or(target_dir));
 }
 
 /// Remove an install's own target directory once the binary is in place.
