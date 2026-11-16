@@ -120,13 +120,32 @@ collection pass evicting the build does not remove what a waiting launcher
 holds.
 
 Each key installs through a cargo target directory of its own, at
-`<cache>/builds/<key>/target`, so a killed build resumes and a new revision of
-the same key's engine recompiles only what moved. Two keys share nothing while
-they build, which is why the key's lock is the only lock: a launcher waits only
-on a build of its own key, and a build that hangs holds up only the launchers
-that asked for that engine. The directory lives inside the key's own, so the
-collector removes it together with the build it belongs to and nothing else
-has to track it.
+`<cache>/builds/<key>/target`, so a killed build resumes. Two keys never
+install through one target directory, which is why the key's lock is the only
+lock renki takes: a launcher waits only on a build of its own key.
+
+What stays in the cache is the binary and nothing else. The intermediates go
+where the consuming repository's cargo puts its own: `build_dir` reads cargo's
+configuration from the repository's root as a `cargo build` there would, the
+variables first, then each `.cargo/config.toml` from the root upward, then
+`$CARGO_HOME`'s, and takes `build.build-dir`, or else the target directory.
+`cargo install` reads no project configuration itself, so the plan carries the
+answer as `CargoPlan::build_dir` and the install gets it as
+`CARGO_BUILD_BUILD_DIR`. The key's target directory then holds only the final
+artifacts, and the install compiles nothing the repository already built. With
+nothing configured the install compiles in the key's target as before. Either
+way a finished install removes the key's target, so no second copy of the
+binary or of a dependency stays behind; a killed build keeps it and resumes. A
+key whose binary is already there and whose target an earlier launcher left
+has the target removed by the next run, under the key's lock. The `--engine`
+scratch build and the launcher's own reinstall follow the same rule.
+
+A build no repository resolves to any more is removed the moment the registry
+records the run that left it, not on the daily pass: a repository re-resolving
+to a new key leaves its old key with no consumer, and keeping it would hold one
+engine per revision the pin moved through that day. So there is one binary per
+pin in use. A key still resolved by some repository stays until the retention
+window, on the daily pass.
 
 The collector tries the key's lock before it removes a key, without waiting. A
 key whose lock is held is being built, so it is left in place with its row, and
