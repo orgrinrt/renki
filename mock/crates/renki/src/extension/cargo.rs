@@ -40,8 +40,10 @@ pub struct CargoPlan {
     pub target_dir: PathBuf,
     /// Where the intermediates go, the consuming repository's build directory,
     /// given to cargo as `CARGO_BUILD_BUILD_DIR`. With one, `target_dir` holds
-    /// only the final artifacts and the install compiles nothing the repository
-    /// already built. `None` compiles everything in `target_dir`.
+    /// only the final artifacts, and the install reuses every unit that comes out
+    /// the same as the repository's own. The install does not read the
+    /// repository's `[patch]`, its flags or its profile overrides, so a unit those
+    /// change is compiled again. `None` compiles everything in `target_dir`.
     pub build_dir:  Option<PathBuf>,
     /// The directory the build runs in, when it is not the process's own:
     /// cargo is started with it as its working directory, so a relative path in

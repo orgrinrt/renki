@@ -208,29 +208,58 @@ fn reinstall(tool: &Tool, url: &str, branch: &str) -> Result<(), String> {
     let cache = crate::cache::cache_root(tool)?;
     let cache = std::path::absolute(&cache)
         .map_err(|e| format!("could not resolve {}: {e}", cache.display()))?;
-    let target = crate::cache::launcher_target_dir(&cache);
-    let attempts = [reinstall_args(url, branch, tool.launcher_crate, &target)];
     // The build directory of the directory the launcher runs in, as for the engine.
-    let build_dir = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| crate::build_dir::build_dir(&cwd));
-    let run = |attempt: &[String]| -> Result<Attempt, String> {
-        let mut cmd = std::process::Command::new("cargo");
-        cmd.args(attempt);
-        if let Some(build_dir) = &build_dir {
-            cmd.env("CARGO_BUILD_BUILD_DIR", build_dir);
-        }
-        let status = cmd
-            .status()
-            .map_err(|e| format!("could not run cargo install: {e}"))?;
-        Ok(if status.success() { Attempt::Built } else { Attempt::Failed })
+    let cwd = std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
+    let build_dir = crate::build_dir::build_dir(&cwd)?;
+    let reinstall = Reinstall {
+        url,
+        branch,
+        launcher_crate: tool.launcher_crate,
+        cache: &cache,
+        build_dir: build_dir.as_deref(),
     };
-    install_with_retry(&attempts, tool.launcher_crate, run, || {
-        std::thread::sleep(RETRY_PAUSE);
-    })
-    .map_err(BuildError::into_message)?;
-    crate::extension::drop_target(&target);
-    Ok(())
+    reinstall.run(|| std::process::Command::new("cargo"))
+}
+
+/// One reinstall of the launcher: what it installs, the cache its target is in, and the build
+/// directory its intermediates go to.
+pub(crate) struct Reinstall<'a> {
+    pub url:            &'a str,
+    pub branch:         &'a str,
+    pub launcher_crate: &'a str,
+    pub cache:          &'a Path,
+    pub build_dir:      Option<&'a Path>,
+}
+
+impl Reinstall<'_> {
+    /// Install, with `cargo` the command each attempt starts from, then remove the target.
+    ///
+    /// The target is one directory for every reinstall on the machine, so the whole of it is
+    /// held under `<cache>/launcher.lock`: without it the first reinstall to finish removed the
+    /// directory the second was compiling into.
+    pub(crate) fn run(&self, cargo: impl Fn() -> std::process::Command) -> Result<(), String> {
+        let _held = crate::cache::BuildLock::hold(self.cache, "launcher")?;
+        let target = crate::cache::launcher_target_dir(self.cache);
+        let attempts = [reinstall_args(self.url, self.branch, self.launcher_crate, &target)];
+        let build_dir = self.build_dir;
+        let run = |attempt: &[String]| -> Result<Attempt, String> {
+            let mut cmd = cargo();
+            cmd.args(attempt);
+            if let Some(build_dir) = build_dir {
+                cmd.env("CARGO_BUILD_BUILD_DIR", build_dir);
+            }
+            let status = cmd
+                .status()
+                .map_err(|e| format!("could not run cargo install: {e}"))?;
+            Ok(if status.success() { Attempt::Built } else { Attempt::Failed })
+        };
+        install_with_retry(&attempts, self.launcher_crate, run, || {
+            std::thread::sleep(RETRY_PAUSE);
+        })
+        .map_err(BuildError::into_message)?;
+        crate::extension::drop_target(&target);
+        Ok(())
+    }
 }
 
 /// Replace this process with `exe`, forwarding the original argv (minus the

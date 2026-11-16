@@ -107,3 +107,81 @@ fn a_build_another_repository_still_resolves_to_is_kept() {
     assert!(first.is_file(), "a key another repository resolves to went");
     assert!(second.is_file());
 }
+
+#[test]
+fn a_superseded_key_whose_build_lock_is_held_stays_with_its_row() {
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    Registry {
+        last_gc: crate::now_secs(),
+        ..Registry::default()
+    }
+    .save(&registry_path(state.path()));
+
+    let first = installed(cache.path(), FIRST);
+    run(cache.path(), state.path(), repo.path(), "r1", FIRST);
+    let building = crate::cache::BuildLock::try_take(&cache.path().join("builds"), FIRST).unwrap();
+    assert!(building.is_some());
+    installed(cache.path(), SECOND);
+    run(cache.path(), state.path(), repo.path(), "r2", SECOND);
+
+    assert!(first.is_file(), "a key being built was removed");
+    let reg = Registry::load(&registry_path(state.path()));
+    assert!(reg.builds.iter().any(|b| b.key == FIRST), "its row went");
+}
+
+#[test]
+fn a_recording_waits_for_the_registry_lock() {
+    // Another launcher between its load and its save holds the lock; this one
+    // does not load, record or remove anything until it is let go.
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let other = crate::cache::BuildLock::hold(state.path(), "registry").unwrap();
+
+    installed(cache.path(), FIRST);
+    let (c, s, r) = (
+        cache.path().to_path_buf(),
+        state.path().to_path_buf(),
+        repo.path().to_path_buf(),
+    );
+    let waiting = std::thread::spawn(move || run(&c, &s, &r, "r1", FIRST)); // lint:allow(no-runtime-spawn) reason: the second launcher the lock test holds, in-process because the call under test is.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(
+        !waiting.is_finished(),
+        "the recording ran under another's lock"
+    );
+    assert!(!registry_path(state.path()).exists());
+
+    drop(other);
+    waiting.join().unwrap();
+    let reg = Registry::load(&registry_path(state.path()));
+    assert_eq!(reg.consumers.len(), 1);
+}
+
+#[test]
+fn recordings_from_many_launchers_at_once_keep_every_row_and_every_build() {
+    // Each launcher its own repository and key; a lost update would drop a row,
+    // and a removal working from a stale load would take a build just recorded.
+    const N: usize = 16;
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let repos: Vec<_> = (0 .. N).map(|_| tempfile::tempdir().unwrap()).collect();
+    let keys: Vec<String> = (0 .. N).map(|i| format!("{i:016x}")).collect();
+    let bins: Vec<_> = keys.iter().map(|k| installed(cache.path(), k)).collect();
+
+    std::thread::scope(|s| {
+        for (repo, key) in repos.iter().zip(&keys) {
+            let (c, st) = (cache.path(), state.path());
+            s.spawn(move || run(c, st, repo.path(), "r", key));
+        }
+    });
+
+    let reg = Registry::load(&registry_path(state.path()));
+    assert_eq!(reg.consumers.len(), N);
+    assert_eq!(reg.builds.len(), N);
+    for bin in &bins {
+        assert!(bin.is_file(), "{} went", bin.display());
+    }
+}

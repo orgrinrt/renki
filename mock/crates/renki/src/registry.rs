@@ -446,6 +446,13 @@ pub(crate) fn record_and_collect(
     key: &str,
 ) {
     let path = registry_path(state_root);
+    // From the load to the save, one launcher at a time: two that interleave
+    // would save over each other's rows, and the removal below would delete a
+    // build the other has just recorded. Best-effort like the rest, so a lock
+    // that cannot be taken skips the bookkeeping rather than racing it.
+    let Ok(_held) = crate::cache::BuildLock::hold(state_root, "registry") else {
+        return;
+    };
     let mut reg = Registry::load(&path);
     let now = crate::now_secs();
     let name = root

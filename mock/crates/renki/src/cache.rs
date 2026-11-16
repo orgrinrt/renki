@@ -300,6 +300,17 @@ impl BuildLock {
         Ok(Self(file))
     }
 
+    /// Take the lock on `<dir>/<name>.lock`, waiting for its holder without a word.
+    ///
+    /// For what is held briefly or rarely and has nothing to tell the person while it
+    /// waits: the registry between its load and its save, and the launcher's reinstall.
+    pub(crate) fn hold(dir: &Path, name: &str) -> Result<Self, String> {
+        let (file, path) = Self::open(dir, name)?;
+        file.lock()
+            .map_err(|e| format!("could not lock {}: {e}", path.display()))?;
+        Ok(Self(file))
+    }
+
     /// Take the lock if nobody holds it, and say so with `None` if somebody
     /// does. Never waits, which is what the collector needs: a key being built
     /// is not its to remove, and a pass that blocked on one would stop on the
@@ -366,7 +377,7 @@ pub(crate) fn ensure_built(
         "{}: building the engine for this pin (once per version) ...",
         tool.short
     );
-    crate::extension::build_with_cargo(&build_plan(tool, resolved, &root, dir), &root)?;
+    crate::extension::build_with_cargo(&build_plan(tool, resolved, &root, dir)?, &root)?;
     Ok(bin)
 }
 
@@ -391,15 +402,20 @@ fn drop_leftover_target(cache_root: &Path, key: &str, root: &Path) {
 /// the key resumes, nothing else compiles into it, and the collector removes it
 /// together with the key. `dir` is the directory cargo runs in, and the build
 /// directory is the one cargo would use there.
-fn build_plan(tool: &Tool, resolved: &Resolved, root: &Path, dir: &Path) -> CargoPlan {
-    CargoPlan {
+fn build_plan(
+    tool: &Tool,
+    resolved: &Resolved,
+    root: &Path,
+    dir: &Path,
+) -> Result<CargoPlan, String> {
+    Ok(CargoPlan {
         attempts:   resolved.attempts.clone(),
         bin:        tool.engine_bin_name().into(),
         crate_name: tool.engine_crate.into(),
         target_dir: root.join("target"),
-        build_dir:  crate::build_dir::build_dir(dir),
+        build_dir:  crate::build_dir::build_dir(dir)?,
         dir:        Some(dir.to_path_buf()),
-    }
+    })
 }
 
 /// What the operator reads when no attempt produced a binary.

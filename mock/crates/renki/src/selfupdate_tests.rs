@@ -118,3 +118,89 @@ fn a_garbled_marker_does_not_suppress_the_check() {
         assert!(!recently_checked(&marker, 10_000), "{bad:?}");
     }
 }
+
+/// The fixture crate as a git repository with a `main` branch, as a reinstall fetches it.
+fn fixture_repository(at: &std::path::Path) -> String {
+    let src = crate::test_fixtures::fixture_engine(at);
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(&src)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "fixture"]);
+    format!("file://{}", src.display())
+}
+
+/// `cargo`, installing into `root` rather than the person's own bin directory.
+fn cargo_into(root: &std::path::Path) -> impl Fn() -> std::process::Command + '_ {
+    move || {
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.env("CARGO_INSTALL_ROOT", root);
+        cmd.env("CARGO_NET_GIT_FETCH_WITH_CLI", "true");
+        cmd
+    }
+}
+
+#[test]
+fn a_reinstall_leaves_the_launcher_and_no_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = fixture_repository(tmp.path());
+    let cache = tmp.path().join("cache");
+    let root = tmp.path().join("installed");
+    let reinstall = Reinstall {
+        url:            &url,
+        branch:         "main",
+        launcher_crate: "engine",
+        cache:          &cache,
+        build_dir:      None,
+    };
+
+    reinstall.run(cargo_into(&root)).unwrap();
+
+    assert!(root.join("bin/engine").is_file());
+    assert_eq!(
+        crate::test_fixtures::targets_under(&cache).collect::<Vec<_>>(),
+        Vec::<std::path::PathBuf>::new()
+    );
+}
+
+#[test]
+fn a_reinstall_waits_for_another_to_finish_with_the_shared_target() {
+    // The target is one directory for every reinstall on the machine. One held by
+    // another launcher keeps this one from starting, so neither removes the
+    // directory the other is compiling into.
+    let tmp = tempfile::tempdir().unwrap();
+    let url = fixture_repository(tmp.path());
+    let cache = tmp.path().join("cache");
+    let root = tmp.path().join("installed");
+    let other = crate::cache::BuildLock::hold(&cache, "launcher").unwrap();
+
+    let (cache_t, root_t, url_t) = (cache.clone(), root.clone(), url.clone());
+    let waiting = std::thread::spawn(move || {
+        // lint:allow(no-runtime-spawn) reason: the second launcher the lock test holds, in-process because the call under test is.
+        Reinstall {
+            url:            &url_t,
+            branch:         "main",
+            launcher_crate: "engine",
+            cache:          &cache_t,
+            build_dir:      None,
+        }
+        .run(cargo_into(&root_t))
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(
+        !waiting.is_finished(),
+        "the reinstall ran under another's lock"
+    );
+    assert!(!root.join("bin/engine").exists());
+
+    drop(other);
+    waiting.join().unwrap().unwrap();
+    assert!(root.join("bin/engine").is_file());
+}

@@ -256,7 +256,7 @@ pub(crate) fn build(
             bin:        tool.engine_bin_name().into(),
             crate_name: tool.engine_crate.into(),
             target_dir: root.join("target"),
-            build_dir:  crate::build_dir::build_dir(repo_root),
+            build_dir:  crate::build_dir::build_dir(repo_root)?,
             dir:        Some(repo_root.to_path_buf()),
         },
         &root,

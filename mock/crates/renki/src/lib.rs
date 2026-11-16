@@ -116,6 +116,8 @@ mod pin;
 mod registry;
 mod retry;
 mod selfupdate;
+#[cfg(test)]
+mod test_fixtures;
 mod tool;
 
 use std::ffi::OsString;
@@ -505,9 +507,10 @@ fn dispatch(tool: &Tool, args: &[OsString]) -> Result<(), String> {
         bin,
     } = resolved_and_built(tool, &pin, &cache_root, &root, cache::ensure_built)?;
 
-    // Record this repo and build in the registry, then at most once a day
-    // collect engine builds nothing pins anymore. Best-effort throughout: the
-    // registry is a cache, never a reason to fail a run.
+    // Record this repo and build in the registry, remove on every run the builds
+    // no repository resolves to any more, and at most once a day those every
+    // repository resolving to has left idle past the retention. Best-effort
+    // throughout: the registry is a cache, never a reason to fail a run.
     registry::record_and_collect(
         tool,
         &cache_root,
