@@ -112,9 +112,7 @@ impl Cargo {
         let run = |attempt: &[String]| -> Result<Attempt, String> {
             let mut cmd = cargo();
             cmd.args(install_args(attempt, into, &plan.target_dir));
-            if let Some(dir) = &plan.dir {
-                cmd.current_dir(dir);
-            }
+            crate::cache::in_selected_toolchain(&mut cmd, plan.dir.as_deref());
             set_build_dir(&mut cmd, plan.build_dir.as_deref(), &plan.target_dir);
             let status = cmd
                 .status()
