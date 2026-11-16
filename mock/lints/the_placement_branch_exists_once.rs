@@ -177,7 +177,7 @@ impl CrateLint for ThePlacementBranchExistsOnce {
             return Vec::new();
         }
         let Some(file) = ctx
-            .all_sources
+            .all_sources()
             .iter()
             .find(|f| f.rel_path.to_string_lossy().replace('\\', "/") == FILE)
         else {

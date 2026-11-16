@@ -470,6 +470,7 @@ fn the_cargo_backend_reports_every_attempt_that_failed() {
             bin:        "nothing".into(),
             crate_name: "the-engine".into(),
             target_dir: into.join("target"),
+            build_dir:  None,
             dir:        None,
         },
         &into,
@@ -527,6 +528,7 @@ fn a_cargo_install_that_succeeds_without_the_binary_is_a_failure() {
             bin:        bin.into(),
             crate_name: "alpha".into(),
             target_dir: into.join("target"),
+            build_dir:  None,
             dir:        None,
         }
     };
@@ -571,6 +573,7 @@ fn a_cargo_build_runs_in_the_directory_its_plan_names() {
             bin:        "nothing".into(),
             crate_name: "the-engine".into(),
             target_dir: into.join("target"),
+            build_dir:  None,
             dir:        Some(into.join("missing")),
         },
         &into,

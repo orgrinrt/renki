@@ -530,3 +530,7 @@ fn a_legacy_pin_registers_as_legacy_whatever_its_reference_is() {
         (PinForm::Legacy, "abc".to_string())
     );
 }
+
+// A superseded build goes when the run that left it is recorded.
+#[path = "registry_tests/superseded.rs"]
+mod superseded;

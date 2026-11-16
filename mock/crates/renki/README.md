@@ -16,7 +16,7 @@ cargo add renki
 
 ```toml
 [dependencies]
-renki = "0.0.5-rc.1"
+renki = "0.0.5-rc.2"
 ```
 
 Pin the exact version rather than a range, since `0.0.x` releases are incompatible with each other anyway, and a new field on `Tool` breaks the build unless the literal spreads `Tool::CONVENTIONS` and lets the base answer the ones it has no opinion about. `renki` is a library and not installed as a command. What goes on `PATH` is the launcher built with it.
@@ -58,7 +58,7 @@ The launcher answers `widget locate` itself, printing the repo root, the config 
 
 ## Where it keeps things
 
-Builds, materialised tools and the resolved head of any branch pin go in the cache, and the one small registry of which repos have run the tool goes in the state directory, both placed by `renki-dirs`. Emptying the cache only costs a rebuild, so deleting it is always safe. A build nothing points at any more is collected on the next pass, and one still pinned that nobody has wanted for `Tool::cache_retention`, thirty days by default, goes the same way.
+Builds, materialised tools and the resolved head of any branch pin go in the cache, and the one small registry of which repos have run the tool goes in the state directory, both placed by `renki-dirs`. Emptying the cache only costs a rebuild, so deleting it is always safe. An engine compiles its dependencies where the repository's own cargo builds them, so only its binary stays in the cache. A build nothing points at any more is removed by the next run, and one still pinned that nobody has wanted for `Tool::cache_retention`, thirty days by default, goes the same way.
 
 The environment variables are all named after the tool's short name. `WIDGET_ROOT` replaces the walk up for the anchor, and `WIDGET_CACHE` and `WIDGET_STATE` put the cache and the registry at a whole path, not a parent. `WIDGET_CONFIG` does the same for the person's config directory, and `WIDGET_NO_SELF_UPDATE` skips the check on whether the launcher itself has moved on, which is otherwise done at most once an hour. A tool command is handed `WIDGET_WORKSPACE` and `WIDGET_TOOL_ROOT`, and the engine reads one variable per setting, like `WIDGET_CFG_MODEL_BASE` for `model.base`, and `WIDGET_CONFIG_FILE` naming the settings file.
 
