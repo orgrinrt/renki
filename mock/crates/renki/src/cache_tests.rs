@@ -636,3 +636,7 @@ mod one_copy;
 // A launcher a build script started.
 #[path = "cache_tests/under_a_build_script.rs"]
 mod under_a_build_script;
+
+// A revision installed from git over a build directory another revision compiled in.
+#[path = "cache_tests/a_new_revision.rs"]
+mod a_new_revision;
