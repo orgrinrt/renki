@@ -112,14 +112,19 @@ fn install_with(tmp: &Path, var: Option<(&str, String)>) {
         build_dir:  None,
         dir:        Some(repo),
     };
-    crate::extension::Cargo::build_with(&plan, &into, || {
-        let mut cmd = std::process::Command::new("cargo");
-        cmd.env("CARGO_HOME", &home);
-        if let Some((name, value)) = &var {
-            cmd.env(name, value);
-        }
-        cmd
-    })
+    crate::extension::Cargo::build_with(
+        &plan,
+        &into,
+        || {
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.env("CARGO_HOME", &home);
+            if let Some((name, value)) = &var {
+                cmd.env(name, value);
+            }
+            cmd
+        },
+        |_| None,
+    )
     .unwrap();
     assert!(into.join("bin/engine").is_file());
     assert_eq!(
@@ -153,4 +158,33 @@ fn a_path_hash_in_an_inherited_variable_does_not_reach_the_install() {
     let value = format!("{}/{{workspace-path-hash}}", hashed.display());
     install_with(tmp.path(), Some(("CARGO_BUILD_BUILD_DIR", value)));
     assert!(!hashed.exists(), "cargo built into {}", hashed.display());
+}
+
+/// A toolchain no rustup has, standing in for the one a caller's cargo pinned.
+const CALLERS_TOOLCHAIN: &str = "renki-no-such-toolchain";
+
+/// Two launchers of one pin, one started under a cargo pinned to another toolchain and one
+/// from a plain shell, key it the same, so the pin is built once.
+#[test]
+fn the_key_reads_the_same_toolchain_whatever_toolchain_the_caller_picked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plain = fingerprint_of(std::process::Command::new("rustc"), Some(tmp.path()));
+    let mut pinned = std::process::Command::new("rustc");
+    pinned.env("RUSTUP_TOOLCHAIN", CALLERS_TOOLCHAIN);
+    assert!(
+        !plain.is_empty(),
+        "no rustc answered in {}",
+        tmp.path().display()
+    );
+    assert_eq!(fingerprint_of(pinned, Some(tmp.path())), plain);
+}
+
+/// The build follows the same toolchain the key read, not the one the caller's cargo pinned.
+#[test]
+fn an_install_under_a_callers_toolchain_builds_with_the_one_the_key_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    install_with(
+        tmp.path(),
+        Some(("RUSTUP_TOOLCHAIN", CALLERS_TOOLCHAIN.into())),
+    );
 }

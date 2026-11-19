@@ -16,12 +16,6 @@ use crate::hash::Fnv;
 pub(crate) use crate::manifest::{Pin, Reference};
 use crate::tool::{Tool, VersionSource};
 
-/// A branch pin re-resolves to a concrete rev at most this often; a fresh
-/// resolution within the window is reused without a network round-trip. Kept
-/// short so a repo tracking a branch picks up new heads within the hour,
-/// matching the launcher's own self-update cadence.
-pub(crate) const BRANCH_TTL: Duration = Duration::from_secs(60 * 60);
-
 /// A pin resolved to concrete build attempts.
 ///
 /// Produced by parsing, never by a consumer, so it is closed for the same
@@ -190,15 +184,15 @@ fn build(
 }
 
 fn resolve_branch(pin: &Pin, branch: &str, cache_root: &Path) -> Result<String, String> {
+    // The remote is asked on every run: one `git ls-remote`, inside its deadline, and a
+    // moved branch is built on the run after it moved. A head that did not move keys the
+    // same build, which is already in the cache, so asking costs no cargo call.
     let cache = branch_resolution_path(cache_root, &pin.url, branch);
-    if let Some(sha) = fresh_resolution(&cache) {
-        return Ok(sha);
-    }
     let sha = match ls_remote_head(&pin.url, branch) {
         Ok(sha) => sha,
         Err(e) => {
-            // Offline, or the remote is down. A stale resolution names a
-            // revision that was the branch's tip an hour ago and is very
+            // Offline, or the remote is down. The last resolution names a
+            // revision that was the branch's tip when it was last asked and is very
             // probably still built and sitting in the cache, so running from it
             // beats refusing to run at all. The self-update path already takes
             // this posture; the engine path used to be the one that stopped.
@@ -223,12 +217,6 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-/// The recorded resolution if present and younger than the TTL.
-fn fresh_resolution(path: &Path) -> Option<String> {
-    let (ts, sha) = read_resolution(path)?;
-    (unix_now().saturating_sub(ts) <= BRANCH_TTL.as_secs()).then_some(sha)
 }
 
 /// Forget the recorded resolution of a branch pin, so the next run asks the remote
@@ -324,17 +312,11 @@ pub(crate) fn ls_remote_head_from(
 /// One file per url and branch, seventy bytes each, and nothing removed them:
 /// a repo that once tracked a branch left one behind for good.
 ///
-/// The window is the build cache's, not [`BRANCH_TTL`]. Those are two
-/// different questions and this swept on the wrong one. `BRANCH_TTL` says when
-/// a resolution stops being taken as the branch's current tip, which is an
-/// hour. It does not say when the file stops being read, because
-/// [`resolve_branch`]'s offline arm reads it at any age on purpose: a revision
-/// that was the tip yesterday is very probably still built and sitting in the
-/// cache, and running from it beats refusing to run.
-///
-/// So sweeping on `BRANCH_TTL` deleted the fallback an hour after it was
-/// written, leaving it to work only in the gap before the next collection pass.
-/// `retention` is the honest bound: past it the collector has taken the build
+/// The window is the build cache's. A resolution is never taken as the branch's
+/// current tip, since the remote is asked on every run, and [`resolve_branch`]'s
+/// offline arm reads it at any age on purpose: a revision that was the tip
+/// yesterday is very probably still built and sitting in the cache, and running
+/// from it beats refusing to run. `retention` is the honest bound: past it the collector has taken the build
 /// the resolution names, so falling back to it would name a revision that has
 /// to be fetched and rebuilt anyway, which is what asking the remote already
 /// does, and does better.

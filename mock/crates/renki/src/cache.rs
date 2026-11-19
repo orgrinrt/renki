@@ -15,7 +15,8 @@
 //! and toolchain, and share nothing while they build.
 //!
 //! The toolchain in the key and the toolchain that builds are the one that
-//! answers in the repo's root, so a toolchain file there decides both. The
+//! answers in the repo's root, so a toolchain file there decides both and a
+//! caller's `RUSTUP_TOOLCHAIN` decides neither ([`in_selected_toolchain`]). The
 //! build keeps its cargo target directory at `<cache>/builds/<key>/target`, so a
 //! killed build of that key resumes, and the collector removes the directory
 //! together with the key.
@@ -229,11 +230,32 @@ pub(crate) fn launcher_target_dir(root: &Path) -> PathBuf {
 /// The empty string when rustc cannot be run at all. The key then omits it, and
 /// the build that follows would fail for the same reason anyway.
 pub(crate) fn rustc_fingerprint(dir: Option<&Path>) -> String {
-    let mut cmd = Command::new("rustc");
-    cmd.arg("-vV");
+    fingerprint_of(Command::new("rustc"), dir)
+}
+
+/// The variables through which a caller's environment picks a toolchain over the one the
+/// directory selects. A launcher started under a cargo pinned to another toolchain inherits
+/// `RUSTUP_TOOLCHAIN` from rustup's proxy, so without this the key and the build follow
+/// whoever started the launcher, and one pin is built once per caller's toolchain.
+pub(crate) const CALLER_TOOLCHAIN_VARS: [&str; 4] =
+    ["RUSTUP_TOOLCHAIN", "RUSTUP_TOOLCHAIN_SOURCE", "RUSTC", "CARGO_BUILD_RUSTC"];
+
+/// Run `cmd` under the toolchain `dir` selects and none the caller's environment picks:
+/// the key's `rustc -vV` and the build's `cargo install` both go through this, so they
+/// agree with each other and with every other caller on the machine.
+pub(crate) fn in_selected_toolchain(cmd: &mut Command, dir: Option<&Path>) {
+    for var in CALLER_TOOLCHAIN_VARS {
+        cmd.env_remove(var);
+    }
     if let Some(dir) = dir {
         cmd.current_dir(dir);
     }
+}
+
+/// [`rustc_fingerprint`] from `cmd`, so a test can hand it a caller's environment.
+pub(crate) fn fingerprint_of(mut cmd: Command, dir: Option<&Path>) -> String {
+    cmd.arg("-vV");
+    in_selected_toolchain(&mut cmd, dir);
     cmd.output()
         .ok()
         .filter(|o| o.status.success())
@@ -351,6 +373,25 @@ pub(crate) fn ensure_built(
     resolved: &Resolved,
     dir: &Path,
 ) -> Result<PathBuf, BuildError> {
+    ensure_built_in(
+        tool,
+        cache_root,
+        key,
+        resolved,
+        dir,
+        crate::nested::process_var,
+    )
+}
+
+/// [`ensure_built`] with `var` the environment it reads, so a test hands in a build script's.
+pub(crate) fn ensure_built_in(
+    tool: &Tool,
+    cache_root: &Path,
+    key: &str,
+    resolved: &Resolved,
+    dir: &Path,
+    var: impl Fn(&str) -> Option<OsString>,
+) -> Result<PathBuf, BuildError> {
     // Absolute, because the build runs in `dir` and cargo resolves `--root` and
     // `--target-dir` there, while the lookups here resolve in this process's
     // directory. A relative `<SHORT>_CACHE` would otherwise name two places.
@@ -362,6 +403,10 @@ pub(crate) fn ensure_built(
         drop_leftover_target(cache_root, key, &root);
         return Ok(bin);
     }
+    // Before the key's directory and its lock: a launcher outside the build holding the lock
+    // can itself be waiting on the build directory's, which the build that started this
+    // build script holds until the script returns.
+    crate::nested::refuse_inside_a_build_script(&crate::nested::the_tool(tool.short), dir, var)?;
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create cache dir {}: {e}", root.display()))?;
 

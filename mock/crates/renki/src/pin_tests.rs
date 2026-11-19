@@ -297,7 +297,7 @@ fn a_branch_falls_back_to_the_last_known_revision_when_the_remote_cannot_be_reac
     let d = tempfile::tempdir().unwrap();
     let path = branch_resolution_path(d.path(), "u", "dev");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let stale = unix_now() - BRANCH_TTL.as_secs() - 1;
+    let stale = unix_now() - AN_HOUR - 1;
     std::fs::write(&path, format!("{stale}\nfeedface99c0ffee\n")).unwrap();
 
     let r = resolve(&T, &pin(Reference::Branch("dev".into())), d.path()).unwrap();
@@ -332,23 +332,6 @@ fn the_full_ref_is_asked_for_so_a_tag_of_the_same_name_cannot_answer() {
 }
 
 #[test]
-fn the_branch_resolution_is_reused_inside_the_ttl_and_not_outside_it() {
-    let d = tempfile::tempdir().unwrap();
-    let path = branch_resolution_path(d.path(), "u", "dev");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let now = unix_now();
-    std::fs::write(&path, format!("{now}\nfeedface99\n")).unwrap();
-    assert_eq!(fresh_resolution(&path), Some("feedface99".into()));
-
-    std::fs::write(
-        &path,
-        format!("{}\nfeedface99\n", now - BRANCH_TTL.as_secs() - 1),
-    )
-    .unwrap();
-    assert_eq!(fresh_resolution(&path), None);
-}
-
-#[test]
 fn a_malformed_or_empty_resolution_is_not_reused() {
     // the control on the reader: a truncated write must not resolve to an
     // empty rev, which would key the cache on nothing and build the default
@@ -357,7 +340,7 @@ fn a_malformed_or_empty_resolution_is_not_reused() {
     let path = d.path().join("m");
     for bad in ["", "notanumber\nabc\n", &format!("{}\n\n", unix_now()), "123\n"] {
         std::fs::write(&path, bad).unwrap();
-        assert_eq!(fresh_resolution(&path), None, "{bad:?}");
+        assert_eq!(any_resolution(&path), None, "{bad:?}");
     }
 }
 
@@ -378,16 +361,16 @@ fn two_branches_on_one_url_do_not_share_a_resolution() {
 fn the_sweep_leaves_the_resolution_the_offline_fallback_reads() {
     // The composition, which neither half was tested against. The fallback at
     // `resolve_branch` reads a resolution whatever its age; the sweep used to
-    // delete anything past `BRANCH_TTL`, which is one hour. So the fallback
+    // delete anything past the hour a resolution used to count as the tip. So the fallback
     // worked in the gap between going offline and the next daily collection
     // pass, and stopped afterwards, with a built engine for that very revision
     // still sitting in the cache.
     let d = tempfile::tempdir().unwrap();
     let path = branch_resolution_path(d.path(), "u", "dev");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let stale = unix_now() - BRANCH_TTL.as_secs() - 1;
+    let stale = unix_now() - AN_HOUR - 1;
     std::fs::write(&path, format!("{stale}\nfeedface99c0ffee\n")).unwrap();
-    filetime_back(&path, BRANCH_TTL.as_secs() + 1);
+    filetime_back(&path, AN_HOUR + 1);
 
     sweep_branch_resolutions(d.path(), Duration::from_secs(60 * 60 * 24 * 30));
     assert!(
@@ -488,4 +471,57 @@ fn a_branch_pin_is_refused_rather_than_reaching_the_network() {
     let err = Resolved::without_network(&T, &pin(Reference::Branch("dev".into()))).unwrap_err();
     assert!(err.contains("dev"), "the branch is not named: {err}");
     assert!(err.contains("network"), "{err}");
+}
+
+/// The hour a resolution used to count as the branch's tip, kept so the sweep's tests still
+/// show a resolution that old is not swept.
+const AN_HOUR: u64 = 60 * 60;
+
+/// A commit on `dev` in the repository at `repo`, answering its sha.
+fn commit_on_dev(repo: &Path, message: &str) -> String {
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["commit", "-q", "--allow-empty", "-m", message]);
+    git(&["rev-parse", "HEAD"])
+}
+
+#[test]
+fn a_branch_pin_sees_the_remote_move_on_the_next_run_and_keys_the_same_build_when_it_did_not() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("engine");
+    let init = std::process::Command::new("git")
+        .args(["init", "-q", "-b", "dev"])
+        .arg(&repo)
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let cache = d.path().join("cache");
+    let p = Pin {
+        url:       repo.display().to_string(),
+        reference: Reference::Branch("dev".into()),
+    };
+
+    let first = commit_on_dev(&repo, "one");
+    assert_eq!(resolve(&T, &p, &cache).unwrap().key_rev, first);
+    // Unmoved: the same revision, so the same key and the build already in the cache.
+    assert_eq!(resolve(&T, &p, &cache).unwrap().key_rev, first);
+
+    let moved = commit_on_dev(&repo, "two");
+    assert_eq!(
+        resolve(&T, &p, &cache).unwrap().key_rev,
+        moved,
+        "the branch moved a moment ago and the run still built the old tip"
+    );
 }
