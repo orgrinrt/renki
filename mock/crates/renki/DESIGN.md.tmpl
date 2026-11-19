@@ -192,6 +192,31 @@ The one interleaving the lock does not cover is a collection pass evicting a
 build between the build and the exec. The run re-materialises a bounded number
 of times, which is handled beside the lock and not by it.
 
+## A new revision builds from its own sources
+
+An install from git compiles each revision from that revision's sources, in the
+shared build directory as everywhere else. Cargo alone would not: `cargo
+install --git` loads its checkout under `$CARGO_HOME` as a path workspace, so a
+package's unit is hashed by its path inside the checkout, the same for every
+revision, and cargo never looks at the files under `$CARGO_HOME` to see whether
+they changed. A unit another revision left in the build directory is then
+fresh, and the install hands back the old revision's binary under the new
+key. A repository's own build of the same packages lands on the same units. A
+version from the registry is keyed by the version and is not open to it.
+
+So every install reports its units as cargo's JSON messages
+(`--message-format json-render-diagnostics`, the diagnostics still rendered to
+the operator), and `path_units` reads each path package and whether its unit
+came back fresh. Where an attempt that names `--git` took a fresh path unit,
+`forget_units` removes the fingerprints of every path package that install
+reported from the build directory's release profile, and the attempt runs once
+more, which compiles them from this revision. The registry's units stay
+shared. An install that compiled every path package itself runs once. A key
+built again for a revision it had before runs twice, and is correct either way;
+a fresh path unit is the only signal rather than a record of which revision
+last built a package, since a record cannot answer for a build directory it
+never saw.
+
 ## No cargo inside a build script
 
 A launcher reached from a build script runs no cargo at all. Cargo holds the
