@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.5-rc.3 (2026-11-19)
+
+### fix
+
+- fix: run no cargo from a launcher a build script started `75269b4`
+- fix: build one pin once whatever toolchain the caller picked `0bcaa23`
+
+### docs
+
+- docs: pin rc.3 in the readme ahead of its release `7f2683c`
+
+### chore
+
+- chore: ship `renki` as `0.0.5-rc.3` `06974c6`
+
 ## 0.0.5-rc.2 (2026-11-16)
 
 ### fix
