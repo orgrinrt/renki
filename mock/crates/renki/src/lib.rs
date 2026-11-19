@@ -112,6 +112,7 @@ mod env;
 pub mod extension;
 mod hash;
 mod manifest;
+mod nested;
 mod pin;
 mod registry;
 mod retry;

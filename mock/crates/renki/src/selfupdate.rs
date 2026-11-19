@@ -51,7 +51,7 @@ pub(crate) fn maybe_self_update(tool: &Tool, state_root: &Path) {
     if tool.self_update == SelfUpdate::Never {
         return;
     }
-    if std::env::var_os(tool.no_self_update_env()).is_some() {
+    if skipped_for_this_run(tool, crate::nested::process_var) {
         return;
     }
     // Only an actually-installed binary self-updates; a dev build is left alone.
@@ -89,6 +89,13 @@ pub(crate) fn maybe_self_update(tool: &Tool, state_root: &Path) {
         // current launcher carries on (the new binary is installed for next time).
         reexec(tool, &exe);
     }
+}
+
+/// Whether this run skips the check, by what `var` reads: the person's opt-out variable, or a
+/// build script's environment, where the reinstall would wait on the build that started the
+/// script the way an engine build would. A skipped check comes round on the next run.
+fn skipped_for_this_run(tool: &Tool, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    var(&tool.no_self_update_env()).is_some() || crate::nested::inside_a_build_script(var)
 }
 
 /// `current_exe()` when it lives under the cargo home bin, else `None`.

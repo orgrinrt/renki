@@ -112,14 +112,19 @@ fn install_with(tmp: &Path, var: Option<(&str, String)>) {
         build_dir:  None,
         dir:        Some(repo),
     };
-    crate::extension::Cargo::build_with(&plan, &into, || {
-        let mut cmd = std::process::Command::new("cargo");
-        cmd.env("CARGO_HOME", &home);
-        if let Some((name, value)) = &var {
-            cmd.env(name, value);
-        }
-        cmd
-    })
+    crate::extension::Cargo::build_with(
+        &plan,
+        &into,
+        || {
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.env("CARGO_HOME", &home);
+            if let Some((name, value)) = &var {
+                cmd.env(name, value);
+            }
+            cmd
+        },
+        |_| None,
+    )
     .unwrap();
     assert!(into.join("bin/engine").is_file());
     assert_eq!(
