@@ -1,0 +1,23 @@
+== --git, one build directory
+--git c6e4cb4 prints one
+--git 8ed8b33 prints one
+== the fingerprint trace of the next --git install
+all paths up-to-date relative to "/home/user/target/sketch-git-install-units/release/.fingerprint/probe-b-8cbefa72da56d2cc/dep-lib-probe_b" mtime=1795106673.725566201s
+filesystem up-to-date "/root/.cargo/git/checkouts/repo-efc3e2b35ef73bda/8659a21/b"
+all paths up-to-date relative to "/home/user/target/sketch-git-install-units/release/.fingerprint/probe-a-7b74841cbecad2de/dep-bin-probe-a" mtime=1795106673.749696473s
+filesystem up-to-date "/root/.cargo/git/checkouts/repo-efc3e2b35ef73bda/8659a21/a"
+--git 8659a21 prints one
+== the units of the next --git install, as cargo's messages report them
+"package_id":"path+<checkouts>/repo-efc3e2b35ef73bda/7baf995/b#probe-b@0.0.1"
+"fresh":true
+"package_id":"path+<checkouts>/repo-efc3e2b35ef73bda/7baf995/a#probe-a@0.0.1"
+"fresh":true
+--git 7baf995 prints one
+== the same four by --path from clones outside CARGO_HOME
+--path c6e4cb4 prints one
+--path 8ed8b33 prints two
+--path 8659a21 prints three
+--path 7baf995 prints four
+== fingerprint directories
+probe-a-7b74841cbecad2de
+probe-b-8cbefa72da56d2cc
