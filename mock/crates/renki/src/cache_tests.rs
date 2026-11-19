@@ -632,3 +632,7 @@ mod typed_failure;
 // What an install leaves in the cache.
 #[path = "cache_tests/one_copy.rs"]
 mod one_copy;
+
+// A launcher a build script started.
+#[path = "cache_tests/under_a_build_script.rs"]
+mod under_a_build_script;

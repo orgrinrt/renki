@@ -98,16 +98,25 @@ impl Cargo {
     /// wins, answering whether a failure is a build that was refused or one that never started.
     /// [`Backend::materialise`] is this with the answer read as its message.
     pub(crate) fn build(plan: &CargoPlan, into: &Path) -> Result<(), BuildError> {
-        Self::build_with(plan, into, || Command::new("cargo"))
+        Self::build_with(
+            plan,
+            into,
+            || Command::new("cargo"),
+            crate::nested::process_var,
+        )
     }
 
     /// [`Cargo::build`] with `cargo` the command each attempt starts from, so a test can hand
-    /// the install an environment of its own.
+    /// the install an environment of its own, and `var` the environment read for whether this
+    /// run is a build script's, where no attempt starts.
     pub(crate) fn build_with(
         plan: &CargoPlan,
         into: &Path,
         cargo: impl Fn() -> Command,
+        var: impl Fn(&str) -> Option<std::ffi::OsString>,
     ) -> Result<(), BuildError> {
+        let root = plan.dir.as_deref().unwrap_or(into);
+        crate::nested::refuse_inside_a_build_script(crate::nested::THE_SAME_COMMAND, root, var)?;
         cargo_is_on_path()?;
         let run = |attempt: &[String]| -> Result<Attempt, String> {
             let mut cmd = cargo();
