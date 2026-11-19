@@ -7,7 +7,7 @@
 //! Split from the backend contract by subject; its paths are re-exported from `extension`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::Backend;
 use crate::retry::{Attempt, BuildError, RETRY_PAUSE, cargo_is_on_path, install_with_retry};
@@ -79,9 +79,13 @@ pub struct Cargo;
 /// Holds where the source commits a lockfile. A source without one gets a
 /// warning from cargo and the fresh resolution anyway, which is cargo's rule
 /// and not this crate's to change; `build_failure` names it as a cause.
+///
+/// The units come back as cargo's JSON messages on standard output, the
+/// diagnostics still rendered to the operator, so [`path_units`] can tell
+/// whether an install from git took a unit another revision left.
 // lint:allow(trait-first-signatures) reason: an argument list handed to `Command::args`, at the launcher's std boundary. FIXME: an iterator once the callers take one.
 pub(crate) fn install_args(attempt: &[String], into: &Path, target_dir: &Path) -> Vec<String> {
-    let mut args = Vec::with_capacity(attempt.len() + 7);
+    let mut args = Vec::with_capacity(attempt.len() + 9);
     args.push("install".into());
     args.extend(attempt.iter().cloned());
     args.push("--locked".into());
@@ -90,7 +94,83 @@ pub(crate) fn install_args(attempt: &[String], into: &Path, target_dir: &Path) -
     args.push("--force".into());
     args.push("--target-dir".into());
     args.push(target_dir.display().to_string());
+    args.push("--message-format".into());
+    args.push("json-render-diagnostics".into());
     args
+}
+
+/// Each path package an install's `compiler-artifact` messages name, with whether its unit came
+/// back fresh. A package from the registry or from git as a dependency is not a path package and
+/// is left out.
+///
+/// `cargo install --git` loads its checkout as a path workspace, so the packages of the
+/// repository being installed are the path packages here, and a unit of one hashed by its path
+/// inside the checkout is the same unit for every revision. Cargo does not check the files under
+/// `$CARGO_HOME`, so such a unit coming back fresh may be another revision's.
+// lint:allow(trait-first-signatures) reason: the pairs are read once by `Cargo::build_with`, at the launcher's std boundary.
+pub(crate) fn path_units(messages: &str) -> Vec<(String, bool)> {
+    messages
+        .lines()
+        .filter(|l| l.contains("\"reason\":\"compiler-artifact\""))
+        .filter_map(|l| {
+            let name = path_package_name(json_text(l, "package_id")?)?;
+            Some((name, l.contains("\"fresh\":true")))
+        })
+        .collect()
+}
+
+/// The text of the string field `key` of a one-line JSON object, none where it is not there.
+fn json_text<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let open = format!("\"{key}\":\"");
+    let start = line.find(&open)? + open.len();
+    let len = line[start ..].find('"')?;
+    Some(&line[start .. start + len])
+}
+
+/// The package name of a path package id: `path+file://<dir>#<name>@<version>`, or
+/// `path+file://<dir>#<version>` where the name is the directory's own. None for any other source.
+fn path_package_name(id: &str) -> Option<String> {
+    let (dir, fragment) = id.strip_prefix("path+file://")?.rsplit_once('#')?;
+    match fragment.split_once('@') {
+        Some((name, _)) => Some(name.to_owned()),
+        None => {
+            dir.rsplit('/')
+                .next()
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned)
+        },
+    }
+}
+
+/// Remove the release fingerprints of `names` from `build_dir`, at `<dir>/release/.fingerprint`
+/// and `<dir>/<triple>/release/.fingerprint` alike, so cargo compiles those packages again.
+///
+/// Best-effort: a fingerprint that cannot be removed leaves that unit as it was, and the build
+/// that follows is no worse than it would have been.
+pub(crate) fn forget_units(build_dir: &Path, names: &[String]) {
+    let mut profiles = vec![build_dir.join("release")];
+    if let Ok(entries) = std::fs::read_dir(build_dir) {
+        profiles.extend(entries.flatten().map(|e| e.path().join("release")));
+    }
+    for fingerprints in profiles.iter().map(|p| p.join(".fingerprint")) {
+        let Ok(entries) = std::fs::read_dir(&fingerprints) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let unit = entry.file_name();
+            let unit = unit.to_string_lossy();
+            if names.iter().any(|name| is_unit_of(&unit, name)) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
+/// Whether the fingerprint directory `unit` is one of package `name`'s: the name, a dash and a hex hash.
+fn is_unit_of(unit: &str, name: &str) -> bool {
+    unit.strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 impl Cargo {
@@ -118,15 +198,34 @@ impl Cargo {
         let root = plan.dir.as_deref().unwrap_or(into);
         crate::nested::refuse_inside_a_build_script(crate::nested::THE_SAME_COMMAND, root, var)?;
         cargo_is_on_path()?;
-        let run = |attempt: &[String]| -> Result<Attempt, String> {
+        let build_dir = plan.build_dir.as_deref().unwrap_or(&plan.target_dir);
+        let install = |attempt: &[String]| -> Result<(bool, String), String> {
             let mut cmd = cargo();
             cmd.args(install_args(attempt, into, &plan.target_dir));
             crate::cache::in_selected_toolchain(&mut cmd, plan.dir.as_deref());
             set_build_dir(&mut cmd, plan.build_dir.as_deref(), &plan.target_dir);
-            let status = cmd
-                .status()
+            cmd.stderr(Stdio::inherit());
+            let out = cmd
+                .output()
                 .map_err(|e| format!("could not run cargo install: {e}"))?;
-            Ok(if !status.success() {
+            Ok((
+                out.status.success(),
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+            ))
+        };
+        let run = |attempt: &[String]| -> Result<Attempt, String> {
+            let (mut ok, messages) = install(attempt)?;
+            // An install from git that took a fresh path unit may have taken another
+            // revision's: forget that install's path packages and compile them from this one.
+            if ok && attempt.iter().any(|a| a == "--git") {
+                let units = path_units(&messages);
+                if units.iter().any(|(_, fresh)| *fresh) {
+                    let names: Vec<String> = units.into_iter().map(|(name, _)| name).collect();
+                    forget_units(build_dir, &names);
+                    ok = install(attempt)?.0;
+                }
+            }
+            Ok(if !ok {
                 Attempt::Failed
             } else if into.join("bin").join(&plan.bin).is_file() {
                 Attempt::Built
