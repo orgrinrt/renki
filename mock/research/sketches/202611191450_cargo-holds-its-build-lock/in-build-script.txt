@@ -1,0 +1,24 @@
+  ls: .
+  ls: ..
+  ls: .cargo-artifact-lock
+  ls: .cargo-build-lock
+  ls: .cargo-lock
+  ls: .fingerprint
+  ls: build
+  ls: deps
+  ls: examples
+  ls: incremental
+  ls: run
+  ls: run.d
+free /home/user/target/locktest/.cargo-artifact-lock
+free /home/user/target/locktest/.cargo-build-lock
+free /home/user/target/locktest/.cargo-lock
+CARGO=set
+OUT_DIR=set
+TARGET=set
+HOST=set
+NUM_JOBS=set
+RUSTC=set
+CARGO_MANIFEST_DIR=set
+CARGO_CFG_TARGET_OS=set
+CARGO_PRIMARY_PACKAGE=unset

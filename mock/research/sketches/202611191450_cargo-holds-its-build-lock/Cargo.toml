@@ -1,0 +1,11 @@
+[package]
+name = "cargo-holds-its-build-lock"
+version = "0.0.0"
+edition = "2024"
+build = "build.rs"
+publish = false
+
+[workspace]
+
+[profile.locktest]
+inherits = "dev"
