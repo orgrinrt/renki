@@ -373,6 +373,25 @@ pub(crate) fn ensure_built(
     resolved: &Resolved,
     dir: &Path,
 ) -> Result<PathBuf, BuildError> {
+    ensure_built_in(
+        tool,
+        cache_root,
+        key,
+        resolved,
+        dir,
+        crate::nested::process_var,
+    )
+}
+
+/// [`ensure_built`] with `var` the environment it reads, so a test hands in a build script's.
+pub(crate) fn ensure_built_in(
+    tool: &Tool,
+    cache_root: &Path,
+    key: &str,
+    resolved: &Resolved,
+    dir: &Path,
+    var: impl Fn(&str) -> Option<OsString>,
+) -> Result<PathBuf, BuildError> {
     // Absolute, because the build runs in `dir` and cargo resolves `--root` and
     // `--target-dir` there, while the lookups here resolve in this process's
     // directory. A relative `<SHORT>_CACHE` would otherwise name two places.
@@ -384,6 +403,10 @@ pub(crate) fn ensure_built(
         drop_leftover_target(cache_root, key, &root);
         return Ok(bin);
     }
+    // Before the key's directory and its lock: a launcher outside the build holding the lock
+    // can itself be waiting on the build directory's, which the build that started this
+    // build script holds until the script returns.
+    crate::nested::refuse_inside_a_build_script(&crate::nested::the_tool(tool.short), dir, var)?;
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("could not create cache dir {}: {e}", root.display()))?;
 

@@ -1,0 +1,7 @@
+fn main() {
+    let out = std::process::Command::new("./probe.sh")
+        .arg("/home/user/target/locktest")
+        .output()
+        .unwrap();
+    std::fs::write("in-build-script.txt", out.stdout).unwrap();
+}

@@ -249,3 +249,31 @@ fn a_path_hash_in_an_inherited_variable_does_not_reach_the_reinstall() {
     reinstall_with(tmp.path(), Some(("CARGO_BUILD_BUILD_DIR", value)));
     assert!(!hashed.exists(), "cargo built into {}", hashed.display());
 }
+
+const SKIPPING: Tool = Tool {
+    short: "t",
+    config_file: "t.toml",
+    pin_keys: crate::pin_keys!("t"),
+    engine_crate: "engine",
+    cache_namespace: "tns",
+    default_url: "u",
+    launcher_crate: "t-launcher",
+    ..Tool::CONVENTIONS
+};
+
+#[test]
+fn a_build_script_skips_the_check_as_the_opt_out_does() {
+    // A reinstall under a build script compiles where the build that started the script
+    // holds the lock, and waits on it the way an engine build would.
+    let build_script = |name: &str| {
+        crate::nested::BUILD_SCRIPT_VARS
+            .contains(&name)
+            .then(|| std::ffi::OsString::from("x"))
+    };
+    assert!(skipped_for_this_run(&SKIPPING, build_script));
+    let opted_out = SKIPPING.no_self_update_env();
+    assert!(skipped_for_this_run(&SKIPPING, |name: &str| {
+        (name == opted_out).then(|| std::ffi::OsString::from("1"))
+    }));
+    assert!(!skipped_for_this_run(&SKIPPING, |_: &str| None));
+}
