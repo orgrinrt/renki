@@ -1,0 +1,50 @@
+2acb1eb chore: lock src changelist 202611222150-f0cy
+0bfa80b chore: ship `renki` as `0.0.5-rc.4`
+1dfd6e8 fix: re-export the unit helpers to the tests only
+0070a80 fix: re-export the unit helpers the new revision tests read, for real
+ca7423e fix: re-export the unit helpers the new revision tests read, for real
+7cbc3ff fix: re-export the unit helpers the new revision tests read, for real
+9fd0db2 docs: add the source changelist for the unit re-export again
+f58c41b chore: lock doc changelist 202611222150-f0cy
+a48ef64 docs: open a round for the unit re-export again
+f3b6277 chore: close design round 202611222148-fm3h
+4bb23f7 chore: lock src changelist 202611222148-fm3h
+817c300 docs: add the source changelist for the rc.4 readme
+91733a6 chore: lock doc changelist 202611222148-fm3h
+5868f69 docs: pin rc.4 in the readme ahead of its release
+ba3722d docs: open a round for the readme ahead of rc.4
+6208503 fix: re-export the unit helpers the new revision tests read
+e80015f chore: close design round 202611222147-x34l
+bdc54a2 chore: lock src changelist 202611222147-x34l
+300d1fa docs: add the source changelist for the unit re-export
+a52208d chore: lock doc changelist 202611222147-x34l
+0b84f4e docs: open a round for the unit re-export the tests read
+15b1dd2 fix: build each git revision from its own sources in the shared dir
+5f26e57 chore: release 0.0.5-rc.3
+06974c6 chore: ship `renki` as `0.0.5-rc.3`
+7f2683c docs: pin rc.3 in the readme ahead of its release
+75269b4 fix: run no cargo from a launcher a build script started
+0bcaa23 fix: build one pin once whatever toolchain the caller picked
+40cebad chore: release 0.0.5-rc.2
+bef7c41 fix: build engines in the shared build dir and keep one per pin
+28a0fde chore: release 0.0.5-rc.1
+c67842f fix: reinstall the launcher into the cache target dir
+bb42c8b fix: forget a refused rebuild only while the record names its revision
+95d8b16 docs: give `renki` its own `README.md` and cut the others down
+a181abc docs: shape the readmes of `renki-config` and `renki-dirs`
+037c6d9 docs: take the second person out of the readme
+1eed3b3 docs: rewrite the readme to the shape
+7fe1982 fix: give a remote branch lookup a deadline
+9f09183 chore: exempt the launcher by name and not list the tables
+d4c5050 chore: name the lint pack by its current repository
+b8d5bc2 chore: release 0.0.4
+ca7ac6d fix: build one engine install at a time in a target dir per key
+15f9670 Merge pull request #27 from orgrinrt/chore/consolidate-the-two-trunks
+36141e7 chore: merge main into dev so the two trunks stop diverging
+9ad28a2 Merge pull request #26 from orgrinrt/dev
+53b35a4 chore: release 0.0.3
+bf4c1dd docs: the rendered documents name no round
+ae90c87 feat: a tool declares the subcommands its launcher answers itself
+2df62b7 feat: `renki-config`, the contracts a tool's settings are read through
+3855709 feat: `renki-dirs`, the typed table of where a tool's files go
+d7f9a70 fix: install an engine and the launcher under the source's own lockfile
