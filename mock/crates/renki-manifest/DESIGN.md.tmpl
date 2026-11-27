@@ -3,30 +3,59 @@
 What reads a manifest off the disk. Every rule it applies, which file is a
 layer, the order, the `meta` table, the merge, the predicate, the glob, is
 `renki-config`'s and asked of it; this crate does the i/o those rules need and
-nothing else. A tool that only reads its manifest takes this crate and the
-contracts, and nothing of the launcher.
+nothing else. It is `#![no_std]` and allocates nothing: the files are read
+through the C library, the text goes into memory the caller gives, and TOML is
+read by `tomlfuse-parse`. A tool that only reads its manifest takes this crate
+and the contracts, and nothing of the launcher.
 
 ## Reading a manifest
 
 One call reads a manifest with everything below: its layers, their includes,
 the predicates that decide which are read, and the merge. A tool writes its
-type and calls it, and wires nothing else; a manifest it reads gets layering
-by default.
+type, gives the room the text is read into, and wires nothing else; a manifest
+it reads gets layering by default.
 
 ```rust
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct App {
-    name: String,
-    hooks: Vec<Hook>,
+struct App<'a> {
+    name: &'a str,
+    hooks: Hooks<'a>,
 }
 
-let app: App = renki_manifest::read("app.toml")?;
+let mut room = Room::<{ 64 * 1024 }, 4096>::new();
+let app: App<'_> = renki_manifest::read("app.toml", &mut room)?;
 ```
 
-`renki_manifest::read::<T>(path)` is `Manifest::find(path)` followed by
-`Manifest::read::<T>`. The parts are public for a caller that wants the dump,
-the provenance or the stack, and the one call is what every other use takes.
+`renki_manifest::read::<T>(path, room)` is `Manifest::find(path, room)`
+followed by `Manifest::read::<T>`. The parts are public for a caller that
+wants the dump, the provenance or the stack, and the one call is what every
+other use takes.
+
+## The room
+
+`Room<const TEXT: usize, const NODES: usize>` is the memory a read uses: the
+text of every layer read, back to back, and the index `tomlfuse-parse` keeps
+while it reads, `NODES` of its nodes. It is the caller's, on the stack, in a
+static or in memory the caller allocated, and every string a read hands out
+borrows from it. The size of each file is known before its bytes are read, so
+a file that does not fit is refused with `BadRead::Room`, naming the file and
+the size the room needs; a caller with an allocator gives one that size and
+reads again. `tomlfuse_parse::nodes_for` answers how many nodes a text of a
+given length can need at most, so a room sized by it never runs out of nodes.
+
+## The host
+
+`Host` is the i/o a read needs, one trait over the operating system: read a
+whole file into the room, list a directory's entries, resolve a path to its
+canonical form into a buffer, read one environment variable, and run
+`sh -c <command>` in a directory and answer its exit. `Unix` implements it
+over the C library through the `libc` crate with its default features off,
+for linux, macOS, freebsd, netbsd, openbsd and illumos; a target with no
+implementation does not build. A shell runs in its directory through a
+wrapping `sh -c 'cd -- "$1" && exec sh -c "$2"'`, so no target needs a
+spawn call some C libraries lack. Every `unsafe` block of the crate is in
+this module.
 
 ## Finding the layers
 
@@ -47,54 +76,62 @@ take their places by `renki_config::Order`, lowest first: `defaults`, the
 base, the rest by `Order::rank`.
 
 A layer in `meta.overlays.untracked` is checked against git where the
-manifest's directory is in a work tree, once per find for all such layers: one
-that git tracks is refused, naming the file and saying
-`git rm --cached <file>`. Nothing is written to `.gitignore`. Git is no
-requirement of reading a manifest: where the directory is in no work tree,
-where no `git` is on the path, or where `git` fails to answer, the check is
-skipped in silence and the read goes on.
+manifest's directory is in a work tree, once per file: one that git tracks is
+refused, naming the file and saying `git rm --cached <file>`. The check is
+`git ls-files --error-unmatch -- <file>` through the host's shell. Nothing is
+written to `.gitignore`. Git is no requirement of reading a manifest: where the
+directory is in no work tree, where no `git` is on the path, or where `git`
+fails to answer, the check is skipped in silence and the read goes on.
 
 ## Answering the predicates
 
-`Ambient` is this crate's `renki_config::Answers`: the process environment for
-`Env`, and for `Shell` a `sh -c` in the manifest's directory with its exit
-answered. The shell half is behind the feature `shell-predicate` and the unix
-targets; a manifest that names a shell predicate on a build without it is
-refused by name. `holds` runs every time a use site is read; this crate keeps
-no answer.
+`Ambient` is this crate's `renki_config::Answers`, over the host: the variable
+for `Env`, and for `Shell` the exit of `sh -c` in the manifest's directory.
+The shell half is behind the feature `shell-predicate`; a manifest that names
+a shell predicate on a build without it is refused by name. `holds` runs every
+time a use site is read; this crate keeps no answer.
 
 ## Merging and the schema
 
-`Manifest::view` merges the read layers into one `toml_edit` document, lowest
-first, asking `renki_config::meet` at every key and applying `meta.replace`
-and `meta.unset` as it says, and keeps beside it which layer last set each
-key. The merged view carries no `meta`.
+The merged view is not built. `Manifest::view` is the stack of read layers,
+lowest first, each a `renki_config::Layer` over its text in the room, and every
+key of it is answered by `renki_config::stacked`, which applies `meet`,
+`meta.replace` and `meta.unset` as the rule says and names the layer that
+answered. The view carries no `meta`.
 
 `Manifest::read::<T>` deserialises the view into the tool's own type through
-`serde`. A tool's type refuses unknown fields; a refusal from the type names
-the key and, from the provenance, the layer and file that hold it, so one
-schema holds across every layer and an unknown key is refused in whichever
-layer wrote it. `Manifest::stack` hands the read layers to
-`renki_config::resolve` for a tool's typed settings, which reads them through
-the same documents.
+`serde` with its default features off: a deserializer walks the stack's keys
+and hands each value from the layer `stacked` names, so a list that appends is
+visited layer by layer and nothing is copied. A tool's strings borrow from the
+room; a type that wants owned values owns them through its own allocator,
+never the reader's. A tool's type refuses unknown fields; a refusal from the
+type names the key and the layer and file that hold it, so one schema holds
+across every layer and an unknown key is refused in whichever layer wrote it.
+`Manifest::stack` hands the read layers to `renki_config::resolve` for a
+tool's typed settings, which reads them through the same documents.
 
 ## The TOML store
 
-`Toml` is `renki_config::Store` over `toml_edit`, moved here from the launcher.
-One parser serves the store, the merge and the deserialising, so a manifest is
-never parsed two ways. It answers every value an array of tables holds, as
-`name.0.field`; a list's string items come back decoded; the shape of a key is
-answered for `meet`. Its writer edits the text line by line rather than
-reserialising, so a person's comments survive every `config set`, and a
-`[[name]]` header is a section to it.
+`Toml` is `renki_config::Store` over `tomlfuse-parse`. It reads a document
+once into the spans of its keys, tables and values, through the parser's
+visitor, and answers a key, a shape and the keys a document holds from those
+spans: every value an array of tables holds, as `name.0.field`, and a list's
+string items decoded on demand by the parser's own decoding, never into a
+buffer of the store's. Its writer edits the text at the key's span into a
+`core::fmt::Write` sink rather than reserialising, so a person's comments
+survive every `config set`, and a `[[name]]` header is a section to it. One
+parser serves the store, the stack and the deserialising, so a manifest is
+never parsed two ways.
 
 ## The dump
 
-`Manifest::dump` writes the merged view as the one text both readers answer
-in: one line per leaf, `<dotted path> = <value>`, an array of tables indexed
-as `name[0]`, the value in one canonical TOML form (a basic string with `\"`,
+`Manifest::dump` writes the view as the one text both readers answer in: one
+line per leaf, `<dotted path> = <value>`, an array of tables indexed as
+`name[0]`, the value in one canonical TOML form (a basic string with `\"`,
 `\\`, `\n` and `\t` escaped, an integer, `true` or `false`, a one-line array),
-the lines sorted bytewise. `get <key>` is the dump's line for that key.
+the lines in byte order of the path. The order is found by walking the
+leaves smallest first through the room's index, and the lines go into a
+`core::fmt::Write` sink. `get <key>` is the dump's line for that key.
 
 ## The POSIX reader
 
@@ -134,3 +171,6 @@ and `any`, and the suite holds a fixture for each: one where it holds and one
 where it does not, `env` with each truthy and falsy word and a refused one.
 The `shell` fixtures run through the Rust reader where `shell-predicate` is
 on; the POSIX reader runs them always, through the same `sh -c`.
+
+TOML itself is held by `tomlfuse-parse`'s own run of the toml-test suite;
+this crate's suite holds the layers, not the syntax.

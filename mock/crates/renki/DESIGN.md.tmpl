@@ -54,6 +54,15 @@ table at the end where the file has none. `set` and `edit` write the base
 file; `--layer <word>` on either writes `<name>.<word>.<ext>` instead,
 creating it where it is not there yet.
 
+Every TOML file the launcher reads goes through the one parser,
+`tomlfuse-parse`, by way of `renki-manifest`: its two configuration files, a
+tool's `tool.toml`, a crate's `Cargo.toml`, each `.cargo/config.toml`,
+cargo's record of what it installed, and the registry's rows, which it also
+writes through the store's writer. renki carries no other TOML crate, so `toml` and
+`toml_edit` are not among its dependencies, and no file is parsed two ways.
+The launcher gives `renki-manifest` its room from its own allocator, sized by
+the refusal that names what a file needs.
+
 ## A tool's own commands
 
 `locate` and `config` are the crate's, fixed in name and in output. A tool
