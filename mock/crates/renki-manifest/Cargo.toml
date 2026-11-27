@@ -12,7 +12,22 @@ readme = "README.md"
 rust-version = "1.88"
 categories = ["config", "command-line-interface"]
 keywords = ["config", "manifest", "overlays", "toml", "layers"]
-# The writer tests read their fixtures, so the fixtures ship with them.
-include = ["src/**/*.rs", "tests/**/*.rs", "tests/writer/*/*", "README.md", "LICENSE"]
+# The writer and host tests read their fixtures, so the fixtures ship with them.
+include = ["src/**/*.rs", "tests/**/*.rs", "tests/writer/*/*", "tests/host/**", "README.md", "LICENSE"]
 
 [dependencies]
+# The rules a manifest is read by, and the parser it is read with. Neither
+# reaches `std` or an allocator.
+renki-config = { version = "0.0.2", path = "../renki-config" }
+# A git dependency until `tomlfuse-parse` is published, and renki-manifest
+# is not released while it stands.
+tomlfuse-parse = { git = "https://github.com/orgrinrt/tomlfuse", branch = "work/tomlfuse-parse" }
+serde = { version = "1", default-features = false }
+
+# The C library, on the targets `Unix` has a row for and no other.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "illumos"))'.dependencies]
+libc = { version = "0.2", default-features = false }
+
+[features]
+# A predicate answered by `sh -c`, which spawns a process.
+shell-predicate = []
