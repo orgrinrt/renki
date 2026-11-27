@@ -60,8 +60,12 @@ tool's `tool.toml`, a crate's `Cargo.toml`, each `.cargo/config.toml`,
 cargo's record of what it installed, and the registry's rows, which it also
 writes through the store's writer. renki carries no other TOML crate, so `toml` and
 `toml_edit` are not among its dependencies, and no file is parsed two ways.
-The launcher gives `renki-manifest` its room from its own allocator, sized by
-the refusal that names what a file needs.
+The launcher gives `renki-manifest` its room from its own allocator: it reads
+with a room of a first size and, where `BadRead::Room` names a larger one,
+allocates that and reads once more. That retry is written once, in this crate,
+and every reading the launcher does goes through it. It builds
+`renki-manifest` with the feature `processes`, so a shell predicate and the
+untracked-layer check run.
 
 ## A tool's own commands
 

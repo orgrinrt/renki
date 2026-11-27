@@ -28,9 +28,11 @@ tool declares per closed set with the `choices!` macro; and `PredicateName`,
 text that must name a predicate the manifest defines, for a field of a tool's
 own schema that applies conditionally.
 
-`Literal<'a>` is the seam between a store and a kind: `Bool`, `Int`,
-`Str(&'a str)` and `List(&'a str)`, the list as its own source text, walked
-through the store's `items`. A store turns its node into one, a kind turns one
+`Literal<'a, St>` is the seam between a store and a kind: `Bool`, `Int`,
+`Str` over text the store lends already decoded, and `List` over the store's
+own handle for the list, `St::List<'a>`, walked through the store's `items`;
+a list has no text of its own to be read again, so an array of tables is one
+like any other. A store turns its node into one, a kind turns one
 into its value, and neither knows the other. `BadValue` is the refusal,
 carrying the kind's name and the text offered.
 
@@ -66,7 +68,9 @@ refuses.
 ## The store
 
 `Store` is the backend contract, implemented by marker types. It names the
-format and its extension, parses text into a borrowed `Document<'a>`, answers
+format and its extension, parses text into a borrowed `Document<'a>` over an
+index the caller hands in with the text, `St::Cell` slots, so a store keeps no
+memory of its own and allocates nothing, answers
 a dotted key as a `Literal` or `Isnt`, iterates the keys a document holds so
 an unknown one is refused by name, tells what shape a key holds (`Shape`), and
 writes one key into text it is given, into a `core::fmt::Write` sink, keeping

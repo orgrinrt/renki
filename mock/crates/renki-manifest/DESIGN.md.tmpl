@@ -23,8 +23,8 @@ struct App<'a> {
     hooks: Hooks<'a>,
 }
 
-let mut room = Room::<{ 64 * 1024 }, 4096>::new();
-let app: App<'_> = renki_manifest::read("app.toml", &mut room)?;
+let mut rooms = Rooms::<{ 64 * 1024 }, 4096>::new();
+let app: App<'_> = renki_manifest::read("app.toml", &mut rooms.room())?;
 ```
 
 `renki_manifest::read::<T>(path, room)` is `Manifest::find(path, room)`
@@ -34,22 +34,32 @@ other use takes.
 
 ## The room
 
-`Room<const TEXT: usize, const NODES: usize>` is the memory a read uses: the
-text of every layer read, back to back, and the index `tomlfuse-parse` keeps
-while it reads, `NODES` of its nodes. It is the caller's, on the stack, in a
-static or in memory the caller allocated, and every string a read hands out
-borrows from it. The size of each file is known before its bytes are read, so
-a file that does not fit is refused with `BadRead::Room`, naming the file and
-the size the room needs; a caller with an allocator gives one that size and
+`Room<'r>` is the memory a read uses, borrowed from the caller as four
+slices: the text of every layer read, back to back; a decode shelf as long as
+the text; the nodes of `tomlfuse-parse`'s index, which is each document as it
+was read; and a path shelf, where the base's path and each joined include path
+are written with their terminating NUL for the host. `Rooms<TEXT, NODES>` owns
+the four in fixed arrays, on the stack or in a static, for a caller with no
+allocator, and lends a `Room`. Every string a read hands out borrows from the
+room.
+
+The size of each file is known before its bytes are read, so a file that does
+not fit is refused with `BadRead::Room`, naming the file and the text and
+nodes the room needs; a caller with an allocator gives slices of that size and
 reads again. `tomlfuse_parse::nodes_for` answers how many nodes a text of a
 given length can need at most, so a room sized by it never runs out of nodes.
+A decoded TOML string is never longer than its source, since every escape
+decodes to at most its own length and a line-ending backslash removes bytes,
+so a decode shelf as long as the text never runs out either.
 
 ## The host
 
 `Host` is the i/o a read needs, one trait over the operating system: read a
 whole file into the room, list a directory's entries, resolve a path to its
-canonical form into a buffer, read one environment variable, and run
-`sh -c <command>` in a directory and answer its exit. `Unix` implements it
+canonical form into a buffer, read one environment variable, and, with the
+feature `processes`, run `sh -c <command>` in a directory and answer its exit.
+Every path it takes is a NUL-terminated one from the room's path shelf, and a
+`BadRead` names the file by its place there. `Unix` implements it
 over the C library through the `libc` crate with its default features off,
 for linux, macOS, freebsd, netbsd, openbsd and illumos; a target with no
 implementation does not build. A shell runs in its directory through a
@@ -81,14 +91,18 @@ refused, naming the file and saying `git rm --cached <file>`. The check is
 `git ls-files --error-unmatch -- <file>` through the host's shell. Nothing is
 written to `.gitignore`. Git is no requirement of reading a manifest: where the
 directory is in no work tree, where no `git` is on the path, or where `git`
-fails to answer, the check is skipped in silence and the read goes on.
+fails to answer, the check is skipped in silence and the read goes on. The
+check spawns a process, so it is run only with the feature `processes`;
+without it the check is not run, and the dump opens with the line
+`# the untracked check was not run`.
 
 ## Answering the predicates
 
 `Ambient` is this crate's `renki_config::Answers`, over the host: the variable
 for `Env`, and for `Shell` the exit of `sh -c` in the manifest's directory.
-The shell half is behind the feature `shell-predicate`; a manifest that names
-a shell predicate on a build without it is refused by name. `holds` runs every
+The shell half is behind the feature `processes`, off by default, the one
+gate on spawning a process; a manifest that names a shell predicate on a
+build without it is refused by name. `renki`, the launcher, turns it on. `holds` runs every
 time a use site is read; this crate keeps no answer.
 
 ## Merging and the schema
@@ -112,16 +126,23 @@ tool's typed settings, which reads them through the same documents.
 
 ## The TOML store
 
-`Toml` is `renki_config::Store` over `tomlfuse-parse`. It reads a document
-once into the spans of its keys, tables and values, through the parser's
-visitor, and answers a key, a shape and the keys a document holds from those
-spans: every value an array of tables holds, as `name.0.field`, and a list's
-string items decoded on demand by the parser's own decoding, never into a
-buffer of the store's. Its writer edits the text at the key's span into a
-`core::fmt::Write` sink rather than reserialising, so a person's comments
-survive every `config set`, and a `[[name]]` header is a section to it. One
-parser serves the store, the stack and the deserialising, so a manifest is
-never parsed two ways.
+`Toml` is `renki_config::Store` over `tomlfuse-parse`, reading TOML 1.1.0.
+A document is the parser's index over the room's nodes, each node holding its
+key's span and its value's span, and the store keeps nothing of its own: a
+key, a shape and the keys a document holds are answered by the index's read
+view, every value an array of tables holds as `name.0.field`. A string with an
+escape is decoded into the room's decode shelf when the document is read, by
+the parser's own decoding, and lent from there; one without is lent from the
+text. A list is the store's handle on its node, which `items` walks, so an
+array of tables is a list like any other.
+
+Its writer edits the text at the key's value span into a `core::fmt::Write`
+sink rather than reserialising, so a person's comments survive every
+`config set`. A key inside an inline table is edited inside its braces, a
+multi-line value is replaced whole, a line inside a multi-line string is never
+taken for a key, and a key under a `[[name]]` header is edited in that
+element. One parser serves the store, the stack and the deserialising, so a
+manifest is never parsed two ways.
 
 ## The dump
 
@@ -169,8 +190,7 @@ checkout carries them too.
 Both readers evaluate the same predicate kinds, `env`, `shell`, `not`, `all`
 and `any`, and the suite holds a fixture for each: one where it holds and one
 where it does not, `env` with each truthy and falsy word and a refused one.
-The `shell` fixtures run through the Rust reader where `shell-predicate` is
-on; the POSIX reader runs them always, through the same `sh -c`.
+The `shell` fixtures run through the Rust reader where `processes` is on; the POSIX reader runs them always, through the same `sh -c`.
 
 TOML itself is held by `tomlfuse-parse`'s own run of the toml-test suite;
 this crate's suite holds the layers, not the syntax.
