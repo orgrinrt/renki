@@ -1,0 +1,17 @@
+[package]
+name = "a-no-std-toml-parser-against-toml-test"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Its own workspace, so the repository's members never pick it up.
+[workspace]
+
+[lib]
+name = "nostd_toml"
+
+[dependencies]
+
+[dev-dependencies]
+toml-test-data = "=2.14.1"
+toml-test = "=2.1.0"
