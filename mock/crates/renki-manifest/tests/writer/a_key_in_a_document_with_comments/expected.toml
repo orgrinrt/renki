@@ -1,0 +1,7 @@
+# The tool's settings.
+name = "widget" # what it is called
+
+[build]
+# how many at once
+jobs = 8 # the default is the cores
+profile = "dev"

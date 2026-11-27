@@ -1,0 +1,7 @@
+[[hooks]]
+event = "start"
+run = "a"
+
+[[hooks]]
+event = "stop"
+run = "b"

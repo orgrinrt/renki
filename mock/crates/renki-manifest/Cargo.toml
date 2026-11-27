@@ -12,6 +12,7 @@ readme = "README.md"
 rust-version = "1.88"
 categories = ["config", "command-line-interface"]
 keywords = ["config", "manifest", "overlays", "toml", "layers"]
-include = ["src/**/*.rs", "tests/**/*.rs", "README.md", "LICENSE"]
+# The writer tests read their fixtures, so the fixtures ship with them.
+include = ["src/**/*.rs", "tests/**/*.rs", "tests/writer/*/*", "README.md", "LICENSE"]
 
 [dependencies]
