@@ -1,0 +1,53 @@
+    Finished `test` profile [unoptimized] target(s) in 0.01s
+     Running unittests src/lib.rs (<target>/debug/deps/nostd_toml-7ae593ed49212d7b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api.rs (<target>/debug/deps/api-0a9ca4d46c9acfef)
+
+running 7 tests
+test a_duplicate_is_found_through_any_quoting_and_escaping ... ok
+test a_node_is_twenty_eight_bytes ... ok
+test decode_into_says_the_size_it_needs ... ok
+test a_short_index_is_refused_and_one_more_node_is_enough ... ok
+test strings_borrow_when_decoding_changes_nothing_and_decode_lazily_otherwise ... ok
+test nesting_past_the_bound_is_refused ... ok
+test the_inside_of_a_closed_value_is_forgotten ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/toml_test.rs (<target>/debug/deps/toml_test-6a0510a6ba5f9d20)
+
+running 2 tests
+FLIPPED valid/datetime/no-seconds.toml
+FLIPPED valid/inline-table/newline-comment.toml
+FLIPPED valid/inline-table/newline.toml
+FLIPPED valid/key/empty-05.toml
+FLIPPED valid/string/escape-esc.toml
+FLIPPED valid/string/hex-escape.toml
+FLIPPED invalid/datetime/no-secs.toml
+FLIPPED invalid/inline-table/linebreak-01.toml
+FLIPPED invalid/inline-table/linebreak-02.toml
+FLIPPED invalid/inline-table/linebreak-03.toml
+FLIPPED invalid/inline-table/linebreak-04.toml
+FLIPPED invalid/inline-table/trailing-comma.toml
+FLIPPED invalid/local-datetime/no-secs.toml
+FLIPPED invalid/local-time/no-secs.toml
+FLIPPED invalid/string/basic-byte-escapes.toml
+test the_cases_that_differ_between_versions_flip_with_the_version ... ok
+TOTAL 1.0.0: valid 208/208 passed, invalid 501/501 refused
+NODES 1.0.0: most held at once 26 (by valid/table/names-with-values.toml, 160 bytes), most per byte of text 0.333
+TOTAL 1.1.0: valid 218/218 passed, invalid 494/494 refused
+NODES 1.1.0: most held at once 26 (by valid/table/names-with-values.toml, 160 bytes), most per byte of text 0.333
+test every_case_of_every_version ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests nostd_toml
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
