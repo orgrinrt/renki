@@ -1,0 +1,7 @@
+name = "widget"
+
+[build]
+jobs = 4
+
+[run]
+quiet = true

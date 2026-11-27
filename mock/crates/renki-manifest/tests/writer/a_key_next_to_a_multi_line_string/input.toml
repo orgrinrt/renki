@@ -1,0 +1,5 @@
+description = """
+A tool.
+name = "not a key"
+"""
+name = "widget"
