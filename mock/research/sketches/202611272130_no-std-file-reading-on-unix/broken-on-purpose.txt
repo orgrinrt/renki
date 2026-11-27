@@ -1,0 +1,9 @@
+thread 'a_file_bigger_than_the_buffer_says_the_size_it_needs' (16062) panicked at tests/on_this_host.rs:30:5:
+assertion `left == right` failed
+  left: Err(TooBig { need: 11 })
+ right: Err(TooBig { need: 100 })
+stack backtrace:
+--
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `--test on_this_host`

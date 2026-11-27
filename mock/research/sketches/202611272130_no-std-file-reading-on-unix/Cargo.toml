@@ -1,0 +1,11 @@
+[package]
+name = "no-std-file-reading-on-unix"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Its own workspace, so the repository's members never pick it up.
+[workspace]
+
+[dependencies]
+libc = { version = "0.2", default-features = false }
