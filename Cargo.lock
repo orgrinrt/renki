@@ -160,6 +160,12 @@ dependencies = [
 [[package]]
 name = "renki-manifest"
 version = "0.0.1"
+dependencies = [
+ "libc",
+ "renki-config",
+ "serde",
+ "tomlfuse-parse",
+]
 
 [[package]]
 name = "rustix"
@@ -353,6 +359,11 @@ name = "toml_writer"
 version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+
+[[package]]
+name = "tomlfuse-parse"
+version = "0.0.6-rc.1"
+source = "git+https://github.com/orgrinrt/tomlfuse?branch=work%2Ftomlfuse-parse#27c0cf478701b525238bf892f09d0ca35f496c84"
 
 [[package]]
 name = "trybuild"
