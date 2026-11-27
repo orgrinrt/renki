@@ -9,8 +9,9 @@
 //! the point: a store is the contract and nothing more, and the resolver,
 //! the kinds and the rows run over this one exactly as over TOML.
 
-use core::fmt;
+mod common;
 
+use common::{Cli, Toy, ToyDoc, doc, layer};
 use notko::{Maybe, Outcome};
 use renki_config::{
     BadDocument,
@@ -23,9 +24,9 @@ use renki_config::{
     Got,
     Int,
     Kind,
+    Layer,
     List,
     Literal,
-    Lookup,
     Origin,
     PathText,
     Rendered,
@@ -33,7 +34,6 @@ use renki_config::{
     Setting,
     Store,
     Text,
-    TextItems,
     User,
     Value,
     choices,
@@ -43,121 +43,12 @@ use renki_config::{
     unknown_keys,
 };
 
-// --- the toy store --------------------------------------------------------
-
-struct Toy;
-
-#[derive(Debug)]
-struct ToyDoc<'t> {
-    text: &'t str,
-}
-
-fn erred<'a, T>(r: Outcome<T, renki_config::BadConfig<'a>>) -> Option<renki_config::BadConfig<'a>> {
+fn erred<'a>(
+    r: Outcome<impl Sized, renki_config::BadConfig<'a>>,
+) -> Option<renki_config::BadConfig<'a>> {
     match r.err() {
         Maybe::Is(e) => Some(e),
         Maybe::Isnt => None,
-    }
-}
-
-/// `key = value` lines, comments stripped, blank lines skipped.
-fn lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
-    text.lines()
-        .map(|l| l.split_once('#').map_or(l, |(a, _)| a).trim())
-        .filter(|l| !l.is_empty())
-        .filter_map(|l| l.split_once('=').map(|(k, v)| (k.trim(), v.trim())))
-}
-
-fn literal(raw: &str) -> Literal<'_> {
-    if raw == "true" {
-        Literal::Bool(true)
-    } else if raw == "false" {
-        Literal::Bool(false)
-    } else if let Ok(i) = raw.parse::<i64>() {
-        Literal::Int(i)
-    } else if raw.starts_with('[') {
-        Literal::List(raw)
-    } else {
-        Literal::Str(raw.trim_matches('"'))
-    }
-}
-
-impl Store for Toy {
-    type Document<'t> = ToyDoc<'t>;
-    type Items<'d> = ToyItems<'d>;
-    type Keys<'d> = ToyKeys<'d>;
-
-    const EXTENSION: &'static str = "toy";
-    const NAME: &'static str = "toy";
-
-    fn parse<'t>(text: &'t str) -> Outcome<ToyDoc<'t>, BadDocument> {
-        for (i, l) in text.lines().enumerate() {
-            let l = l.split_once('#').map_or(l, |(a, _)| a).trim();
-            if !l.is_empty() && !l.contains('=') {
-                return Outcome::Err(BadDocument::at(Maybe::Is(i as u32 + 1)));
-            }
-        }
-        Outcome::Ok(ToyDoc {
-            text,
-        })
-    }
-
-    fn get<'d>(doc: &'d ToyDoc<'_>, key: &str) -> Maybe<Literal<'d>> {
-        match lines(doc.text).find(|(k, _)| *k == key) {
-            Some((_, v)) => Maybe::Is(literal(v)),
-            None => Maybe::Isnt,
-        }
-    }
-
-    fn keys<'d>(doc: &'d ToyDoc<'_>) -> ToyKeys<'d> {
-        ToyKeys(Box::new(lines(doc.text).map(|(k, _)| k)))
-    }
-
-    fn items<'d>(list: &'d str) -> ToyItems<'d> {
-        ToyItems(TextItems::over(list).unwrap())
-    }
-
-    fn set(text: &str, key: &str, value: Rendered<'_>, into: &mut impl fmt::Write) -> fmt::Result {
-        let rendered = match value {
-            Rendered::Text(t) => format!("\"{t}\""),
-            Rendered::Raw(t) => t.to_string(),
-        };
-        let mut found = false;
-        for l in text.lines() {
-            let (body, comment) = l.split_once('#').map_or((l, ""), |(a, b)| (a, b));
-            match body.split_once('=') {
-                Some((k, _)) if k.trim() == key => {
-                    found = true;
-                    write!(into, "{key} = {rendered}")?;
-                    if !comment.is_empty() {
-                        write!(into, " #{comment}")?;
-                    }
-                    writeln!(into)?;
-                },
-                _ => writeln!(into, "{l}")?,
-            }
-        }
-        if !found {
-            writeln!(into, "{key} = {rendered}")?;
-        }
-        Ok(())
-    }
-}
-
-struct ToyKeys<'d>(Box<dyn Iterator<Item = &'d str> + 'd>);
-impl<'d> Iterator for ToyKeys<'d> {
-    type Item = &'d str;
-
-    fn next(&mut self) -> Option<&'d str> {
-        self.0.next()
-    }
-}
-
-struct ToyItems<'d>(TextItems<'d>);
-impl<'d> Iterator for ToyItems<'d> {
-    type Item = Literal<'d>;
-
-    fn next(&mut self) -> Option<Literal<'d>> {
-        self.0.next().map(literal)
     }
 }
 
@@ -165,7 +56,7 @@ impl<'d> Iterator for ToyItems<'d> {
 
 choices!(Theme = "dark" | "light");
 
-fn table() -> [Declared<Toy>; 6] {
+fn table() -> [Declared<'static, Toy>; 6] {
     [
         Setting::<Choice<Theme>, User>::new("theme", "dark", "Which look the pages use.").row(),
         Setting::<Int, Either>::new("server.port", "8787", "The port the server listens on.").row(),
@@ -178,42 +69,27 @@ fn table() -> [Declared<Toy>; 6] {
     ]
 }
 
-struct Cli<'a> {
-    flags: &'a [(&'a str, &'a str)],
-    env:   &'a [(&'a str, &'a str)],
-}
-
-impl Lookup for Cli<'_> {
-    fn flag<'s>(&'s self, key: &str) -> Maybe<&'s str> {
-        match self.flags.iter().find(|(k, _)| *k == key) {
-            Some((_, v)) => Maybe::Is(v),
-            None => Maybe::Isnt,
-        }
+/// A file's one-layer stack, the base alone, or no stack where there is no file.
+fn stack<'a>(d: Maybe<&'a ToyDoc<'a>>) -> Vec<Layer<'a, Toy>> {
+    match d {
+        Maybe::Is(d) => vec![layer("app.toy", d)],
+        Maybe::Isnt => Vec::new(),
     }
-
-    fn env<'s>(&'s self, name: EnvKey<'_>) -> Maybe<&'s str> {
-        let name = name.to_string();
-        match self.env.iter().find(|(k, _)| *k == name) {
-            Some((_, v)) => Maybe::Is(v),
-            None => Maybe::Isnt,
-        }
-    }
-}
-
-fn doc(text: &str) -> ToyDoc<'_> {
-    Toy::parse(text).unwrap()
 }
 
 fn all<'a>(
-    rows: &'a [Declared<Toy>],
+    rows: &'a [Declared<'static, Toy>],
     cli: &'a Cli<'a>,
-    repo: Maybe<&'a ToyDoc<'a>>,
-    user: Maybe<&'a ToyDoc<'a>>,
+    repo: &'a [Layer<'a, Toy>],
+    user: &'a [Layer<'a, Toy>],
 ) -> Vec<(&'static str, String, Origin)> {
-    resolve(rows, "widget", cli, repo, user)
-        .map(|r| {
+    // the keys are taken from the static rows, so the answer outlives the stacks
+    rows.iter()
+        .zip(resolve(rows, "widget", cli, repo, user))
+        .map(|(row, r)| {
             let r = r.unwrap();
-            (r.row().key(), r.to_string(), r.source())
+            assert_eq!(r.row().key(), row.key());
+            (row.key(), r.to_string(), r.source())
         })
         .collect()
 }
@@ -411,7 +287,12 @@ fn every_place_wins_over_the_ones_below_it_and_the_source_says_which() {
         flags: &[("server.port", "3")],
         env:   &[("WIDGET_CFG_THEME", "dark")],
     };
-    let got = all(&rows, &cli, Maybe::Is(&repo), Maybe::Is(&user));
+    let got = all(
+        &rows,
+        &cli,
+        &stack(Maybe::Is(&repo)),
+        &stack(Maybe::Is(&user)),
+    );
     assert_eq!(got, [
         ("theme", "dark".to_string(), Origin::Env),
         ("server.port", "3".to_string(), Origin::Flag),
@@ -427,11 +308,16 @@ fn every_place_wins_over_the_ones_below_it_and_the_source_says_which() {
         flags: &[],
         env:   &[],
     };
-    let got = all(&rows, &cli, Maybe::Is(&repo), Maybe::Is(&user));
+    let got = all(
+        &rows,
+        &cli,
+        &stack(Maybe::Is(&repo)),
+        &stack(Maybe::Is(&user)),
+    );
     assert_eq!(got[0], ("theme", "light".to_string(), Origin::User));
     assert_eq!(got[1], ("server.port", "1".to_string(), Origin::Repo));
     // the control: no files, no flags, every row is its default
-    let got = all(&rows, &cli, Maybe::Isnt, Maybe::Isnt);
+    let got = all(&rows, &cli, &[], &[]);
     assert!(got.iter().all(|(_, _, s)| *s == Origin::Default), "{got:?}");
     assert_eq!(got[5].1, "[]");
 }
@@ -446,29 +332,31 @@ fn a_repo_file_cannot_set_a_persons_setting_and_a_user_file_cannot_set_the_repos
         flags: &[],
         env:   &[],
     };
-    let got = all(&rows, &cli, Maybe::Is(&repo), Maybe::Isnt);
+    let got = all(&rows, &cli, &stack(Maybe::Is(&repo)), &[]);
     assert_eq!(got[0], ("theme", "dark".to_string(), Origin::Default));
-    let misplaced: Vec<&str> = misplaced_keys(&rows, &repo).collect();
+    let repo_stack = stack(Maybe::Is(&repo));
+    let misplaced: Vec<&str> = misplaced_keys(&rows, &repo_stack).map(|(k, _)| k).collect();
     assert_eq!(misplaced, ["theme"]);
     // and the other way: `strict` is the repo's, and a user file naming it is
     // not read for it
     let user = doc("strict = true\n");
-    let got = all(&rows, &cli, Maybe::Isnt, Maybe::Is(&user));
+    let got = all(&rows, &cli, &[], &stack(Maybe::Is(&user)));
     assert_eq!(got[2], ("strict", "false".to_string(), Origin::Default));
     // the control: a key the repo may hold is not misplaced
     let repo = doc("strict = true\nserver.port = 9\n");
-    assert_eq!(misplaced_keys(&rows, &repo).count(), 0);
+    assert_eq!(misplaced_keys(&rows, &stack(Maybe::Is(&repo))).count(), 0);
 }
 
 #[test]
 fn a_key_the_schema_does_not_know_is_named() {
     let rows = table();
     let user = doc("theme = \"dark\"\nthme = \"light\"\nserver.prot = 1\n");
-    let unknown: Vec<&str> = unknown_keys(&rows, &user).collect();
+    let user_stack = stack(Maybe::Is(&user));
+    let unknown: Vec<&str> = unknown_keys(&rows, &user_stack).map(|(k, _)| k).collect();
     assert_eq!(unknown, ["thme", "server.prot"]);
     // the control
     let user = doc("theme = \"dark\"\n");
-    assert_eq!(unknown_keys(&rows, &user).count(), 0);
+    assert_eq!(unknown_keys(&rows, &stack(Maybe::Is(&user))).count(), 0);
 }
 
 #[test]
@@ -479,11 +367,12 @@ fn a_value_the_kind_refuses_is_refused_with_its_source_named() {
         flags: &[],
         env:   &[],
     };
-    let bad = resolve(&rows, "widget", &cli, Maybe::Isnt, Maybe::Is(&user))
+    let user_stack = stack(Maybe::Is(&user));
+    let bad = resolve(&rows, "widget", &cli, &[], &user_stack)
         .find_map(erred)
         .unwrap();
     assert_eq!((bad.key(), bad.source()), ("server.port", Origin::User));
-    assert_eq!(bad.why().got(), Got::Text("eighty"));
+    assert_eq!(bad.why().unwrap().got(), Got::Text("eighty"));
     assert_eq!(
         bad.to_string(),
         "server.port from user: \"eighty\" is not int"
@@ -494,7 +383,7 @@ fn a_value_the_kind_refuses_is_refused_with_its_source_named() {
         flags: &[("theme", "blue")],
         env:   &[],
     };
-    let bad = resolve(&rows, "widget", &cli, Maybe::Isnt, Maybe::Isnt)
+    let bad = resolve(&rows, "widget", &cli, &[], &[])
         .find_map(erred)
         .unwrap();
     assert_eq!((bad.key(), bad.source()), ("theme", Origin::Flag));
@@ -507,7 +396,7 @@ fn a_resolved_value_keeps_where_it_was_found_and_prints_canonically() {
         flags: &[("skip", "a, b")],
         env:   &[],
     };
-    let r = resolve(&rows, "widget", &cli, Maybe::Isnt, Maybe::Isnt)
+    let r = resolve(&rows, "widget", &cli, &[], &[])
         .map(|r| r.unwrap())
         .find(|r| r.row().key() == "skip")
         .unwrap();

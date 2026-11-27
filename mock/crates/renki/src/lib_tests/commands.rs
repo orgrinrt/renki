@@ -14,7 +14,7 @@ use renki_config::{Bool, Declared, List, Origin, PathText, Setting, User};
 use super::*;
 use crate::config::Toml;
 
-const SETTINGS: &[Declared<Toml>] = &[
+const SETTINGS: &[Declared<'static, Toml>] = &[
     Setting::<Bool, User>::new("strict", "false", "A flag.").row(),
     Setting::<List<PathText>, User>::new("roots", "[\"~\"]", "Some paths.").row(),
 ];

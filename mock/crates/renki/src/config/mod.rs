@@ -22,7 +22,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use notko::{Maybe, Outcome};
-use renki_config::{Declared, EnvKey, Lookup, Origin, Store};
+use renki_config::{Declared, EnvKey, Layer, Lookup, Origin, Part, Store};
 
 pub use self::toml::Toml;
 use crate::tool::Tool;
@@ -235,18 +235,24 @@ pub(crate) fn resolve_all(
         Maybe::Is(t) => Maybe::Is(parse("repository", t)?),
         Maybe::Isnt => Maybe::Isnt,
     };
-    if let Maybe::Is(doc) = &user
-        && let Some(key) = renki_config::unknown_keys(tool.settings, doc).next()
-    {
+    // Each file is its stack's one layer, the base, until the reader finds a
+    // file's layers itself.
+    let user: Vec<Layer<'_, Toml>> = match &user {
+        Maybe::Is(doc) => vec![Layer::new(Part::Base, "user", doc)],
+        Maybe::Isnt => Vec::new(),
+    };
+    let repo: Vec<Layer<'_, Toml>> = match &repo {
+        Maybe::Is(doc) => vec![Layer::new(Part::Base, "repository", doc)],
+        Maybe::Isnt => Vec::new(),
+    };
+    if let Some((key, _)) = renki_config::unknown_keys(tool.settings, &user).next() {
         return Err(format!(
             "the user configuration names {key:?}, which {} has no setting called; `{} config schema` \
              lists them",
             tool.short, tool.short
         ));
     }
-    if let Maybe::Is(doc) = &repo
-        && let Some(key) = renki_config::misplaced_keys(tool.settings, doc).next()
-    {
+    if let Some((key, _)) = renki_config::misplaced_keys(tool.settings, &repo).next() {
         return Err(format!(
             "the repository's {} sets {key:?}, which is a user setting and does not belong in a \
              repository file",
@@ -254,11 +260,18 @@ pub(crate) fn resolve_all(
         ));
     }
     let mut out = Vec::with_capacity(tool.settings.len());
-    for r in renki_config::resolve(tool.settings, tool.short, cli, repo.as_ref(), user.as_ref()) {
+    // The key is taken from the static row, so the answer outlives the stacks.
+    for (row, r) in tool.settings.iter().zip(renki_config::resolve(
+        tool.settings,
+        tool.short,
+        cli,
+        &repo,
+        &user,
+    )) {
         match r {
             Outcome::Ok(r) => {
                 out.push(ResolvedSetting {
-                    key:    r.row().key(),
+                    key:    row.key(),
                     text:   r.to_string(),
                     source: r.source(),
                 })
@@ -293,7 +306,7 @@ pub(crate) fn engine_env(
 }
 
 /// The row for a key, or why there is none.
-pub(crate) fn row_of<'t>(tool: &'t Tool, key: &str) -> Result<&'t Declared<Toml>, String> {
+pub(crate) fn row_of<'t>(tool: &'t Tool, key: &str) -> Result<&'t Declared<'static, Toml>, String> {
     tool.settings
         .iter()
         .find(|r| r.key() == key)

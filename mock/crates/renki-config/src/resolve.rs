@@ -14,7 +14,8 @@ use core::fmt;
 
 use notko::{Maybe, Outcome};
 
-use crate::{BadValue, Declared, Literal, Origin, Store};
+use crate::meta::is_meta;
+use crate::{BadMerge, BadValue, Declared, Layer, ListRun, Literal, Origin, Part, Store, stacked};
 
 /// The two answers only the caller can give: what a flag said for a key, and
 /// what the environment holds under a variable's name. The launcher reads
@@ -81,30 +82,80 @@ impl fmt::Display for EnvKey<'_> {
     }
 }
 
-/// A value as it was found: text from a flag, a variable or a default, or a
-/// store's literal from a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Value<'a> {
+/// A value as it was found: text from a flag, a variable or a default, a
+/// store's literal from one layer, or a list appended across a stack.
+pub enum Value<'a, St: Store> {
     /// Text, in the kind's own form.
     // lint:allow(no-bare-string) reason: borrowed from the caller's text. FIXME: port to Str.
     Text(&'a str),
-    /// A literal, from a document.
+    /// A literal, from a layer's document.
     Stored(Literal<'a>),
+    /// A list, from every layer of a stack that holds it.
+    Run(ListRun<'a, St>),
 }
 
-/// One setting, resolved: the row, the value, and where it came from.
-/// Displays as the value's canonical text, which is what the engine reads
-/// out of its environment.
-#[derive(Debug, Clone, Copy)]
+impl<St: Store> Clone for Value<'_, St> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<St: Store> Copy for Value<'_, St> {}
+
+impl<St: Store> PartialEq for Value<'_, St> {
+    // lint:allow(no-bare-numeric, arvo-types-only) reason: `PartialEq::eq` is core's signature.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Text(a), Value::Text(b)) => a == b,
+            (Value::Stored(a), Value::Stored(b)) => a == b,
+            (Value::Run(a), Value::Run(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl<St: Store> fmt::Debug for Value<'_, St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Text(t) => f.debug_tuple("Text").field(t).finish(),
+            Value::Stored(l) => f.debug_tuple("Stored").field(l).finish(),
+            Value::Run(r) => f.debug_tuple("Run").field(r).finish(),
+        }
+    }
+}
+
+/// One setting, resolved: the row, the value, where it came from and, for a
+/// value from a file, the layer it came from. Displays as the value's
+/// canonical text, which is what the engine reads out of its environment.
 pub struct ResolvedView<'a, St: Store> {
-    row:    &'a Declared<St>,
+    row:    &'a Declared<'a, St>,
     source: Origin,
-    value:  Value<'a>,
+    layer:  Maybe<Part<'a>>,
+    value:  Value<'a, St>,
+}
+
+impl<St: Store> Clone for ResolvedView<'_, St> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<St: Store> Copy for ResolvedView<'_, St> {}
+
+impl<St: Store> fmt::Debug for ResolvedView<'_, St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResolvedView")
+            .field("row", &self.row)
+            .field("source", &self.source)
+            .field("layer", &self.layer)
+            .field("value", &self.value)
+            .finish()
+    }
 }
 
 impl<'a, St: Store> ResolvedView<'a, St> {
     /// The row this resolved.
-    pub const fn row(&self) -> &'a Declared<St> {
+    pub const fn row(&self) -> &'a Declared<'a, St> {
         self.row
     }
 
@@ -113,8 +164,14 @@ impl<'a, St: Store> ResolvedView<'a, St> {
         self.source
     }
 
+    /// For [`Origin::Repo`] and [`Origin::User`], the layer of that stack the
+    /// value came from; `Isnt` for every other origin.
+    pub const fn layer(&self) -> Maybe<Part<'a>> {
+        self.layer
+    }
+
     /// The value as it was found.
-    pub const fn value(&self) -> Value<'a> {
+    pub const fn value(&self) -> Value<'a, St> {
         self.value
     }
 }
@@ -124,23 +181,32 @@ impl<St: Store> fmt::Display for ResolvedView<'_, St> {
         match self.value {
             Value::Text(t) => self.row.render_text(t, f),
             Value::Stored(l) => self.row.render_literal(l, f),
+            Value::Run(r) => self.row.render_run(r, f),
         }
     }
 }
 
-/// Why a setting did not resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cause<'a> {
+    Value(BadValue<'a>),
+    Merge(BadMerge<'a>),
+}
+
+/// Why a setting did not resolve: a value its kind refuses, or layers of a
+/// stack that do not merge at its key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BadConfig<'a> {
-    // lint:allow(no-bare-static-str) reason: the row's static key. FIXME: port to Str.
-    key:    &'static str,
+    // lint:allow(no-bare-string) reason: the row's key. FIXME: port to Str.
+    key:    &'a str,
     source: Origin,
-    why:    BadValue<'a>,
+    layer:  Maybe<Part<'a>>,
+    cause:  Cause<'a>,
 }
 
 impl<'a> BadConfig<'a> {
     /// The setting.
-    // lint:allow(no-bare-static-str) reason: the row's static key. FIXME: port to Str.
-    pub const fn key(&self) -> &'static str {
+    // lint:allow(no-bare-string) reason: the row's key. FIXME: port to Str.
+    pub const fn key(&self) -> &'a str {
         self.key
     }
 
@@ -150,44 +216,74 @@ impl<'a> BadConfig<'a> {
         self.source
     }
 
-    /// The kind's refusal.
-    pub const fn why(&self) -> BadValue<'a> {
-        self.why
+    /// For a file, the layer of its stack the refused value came from.
+    pub const fn layer(&self) -> Maybe<Part<'a>> {
+        self.layer
+    }
+
+    /// The kind's refusal, where the kind refused the value.
+    pub const fn why(&self) -> Maybe<BadValue<'a>> {
+        match self.cause {
+            Cause::Value(v) => Maybe::Is(v),
+            Cause::Merge(_) => Maybe::Isnt,
+        }
+    }
+
+    /// The merge's refusal, where the layers did not merge at the key.
+    pub const fn merge(&self) -> Maybe<BadMerge<'a>> {
+        match self.cause {
+            Cause::Merge(m) => Maybe::Is(m),
+            Cause::Value(_) => Maybe::Isnt,
+        }
     }
 }
 
 impl fmt::Display for BadConfig<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} from {}: {}", self.key, self.source, self.why)
+        write!(f, "{} from {}", self.key, self.source)?;
+        if let Maybe::Is(Part::Layer(name)) = self.layer {
+            write!(f, ":{}", name.word())?;
+        }
+        match self.cause {
+            Cause::Value(v) => write!(f, ": {v}"),
+            Cause::Merge(m) => write!(f, ": {m}"),
+        }
     }
 }
 
 /// Resolve every row, in the table's order.
 ///
-/// Precedence, highest first: the flag, the variable, the repository's
-/// document where the row's scope reads it, the person's document where it
-/// does, the default. The first place holding a value wins and is checked
-/// by the row's kind; a refusal names the place, since a wrong value in the
-/// repository's file wants a different repair than one in a variable.
+/// Precedence, highest first: the flag, the variable, the repository's stack
+/// where the row's scope reads it, the person's stack where it does, the
+/// default. Either stack may be empty. Inside a stack the layers merge at the
+/// key by [`stacked`]. The first place holding a value wins and is checked by
+/// the row's kind; a refusal names the place and the layer, since a wrong
+/// value in the repository's file wants a different repair than one in a
+/// variable.
 // lint:allow(no-bare-string) reason: the tool's short name, borrowed from its descriptor. FIXME: port to Str.
 pub fn resolve<'a, St: Store, L: Lookup>(
-    rows: &'a [Declared<St>],
+    rows: &'a [Declared<'a, St>],
     short: &'a str,
     lookup: &'a L,
-    repo: Maybe<&'a St::Document<'a>>,
-    user: Maybe<&'a St::Document<'a>>,
+    repo: &'a [Layer<'a, St>],
+    user: &'a [Layer<'a, St>],
 ) -> impl Iterator<Item = Outcome<ResolvedView<'a, St>, BadConfig<'a>>> + 'a {
     rows.iter().map(move |row| {
-        let (source, value) = find(row, short, lookup, repo, user);
+        let (source, layer, value) = match find(row, short, lookup, repo, user) {
+            Outcome::Ok(found) => found,
+            Outcome::Err(e) => return Outcome::Err(e),
+        };
         let checked = match value {
             Value::Text(t) => row.check_text(t),
             Value::Stored(l) => row.check_literal(l),
+            Value::Run(r) => row.check_run(r),
         };
         match checked {
             Outcome::Ok(()) => {
                 Outcome::Ok(ResolvedView {
                     row,
                     source,
+                    layer,
                     value,
                 })
             },
@@ -195,58 +291,80 @@ pub fn resolve<'a, St: Store, L: Lookup>(
                 Outcome::Err(BadConfig {
                     key: row.key(),
                     source,
-                    why,
+                    layer,
+                    cause: Cause::Value(why),
                 })
             },
         }
     })
 }
 
+type Found<'a, St> = (Origin, Maybe<Part<'a>>, Value<'a, St>);
+
 // lint:allow(no-bare-string) reason: the tool's short name, borrowed from its descriptor. FIXME: port to Str.
 fn find<'a, St: Store, L: Lookup>(
-    row: &'a Declared<St>,
+    row: &'a Declared<'a, St>,
     short: &'a str,
     lookup: &'a L,
-    repo: Maybe<&'a St::Document<'a>>,
-    user: Maybe<&'a St::Document<'a>>,
-) -> (Origin, Value<'a>) {
+    repo: &'a [Layer<'a, St>],
+    user: &'a [Layer<'a, St>],
+) -> Outcome<Found<'a, St>, BadConfig<'a>> {
     if let Maybe::Is(t) = lookup.flag(row.key()) {
-        return (Origin::Flag, Value::Text(t));
+        return Outcome::Ok((Origin::Flag, Maybe::Isnt, Value::Text(t)));
     }
     if let Maybe::Is(t) = lookup.env(EnvKey::of(short, row.key())) {
-        return (Origin::Env, Value::Text(t));
+        return Outcome::Ok((Origin::Env, Maybe::Isnt, Value::Text(t)));
     }
-    if row.reads_repo()
-        && let Maybe::Is(doc) = repo
-        && let Maybe::Is(l) = St::get(doc, row.key())
+    for (reads, source, stack) in
+        [(row.reads_repo(), Origin::Repo, repo), (row.reads_user(), Origin::User, user)]
     {
-        return (Origin::Repo, Value::Stored(l));
+        if !reads {
+            continue;
+        }
+        match stacked(stack, row.key()) {
+            Outcome::Ok(Maybe::Is((layer, value))) => {
+                return Outcome::Ok((source, Maybe::Is(layer.part()), value));
+            },
+            Outcome::Ok(Maybe::Isnt) => {},
+            Outcome::Err(e) => {
+                return Outcome::Err(BadConfig {
+                    key: row.key(),
+                    source,
+                    layer: Maybe::Isnt,
+                    cause: Cause::Merge(e),
+                });
+            },
+        }
     }
-    if row.reads_user()
-        && let Maybe::Is(doc) = user
-        && let Maybe::Is(l) = St::get(doc, row.key())
-    {
-        return (Origin::User, Value::Stored(l));
-    }
-    (Origin::Default, Value::Text(row.default()))
+    Outcome::Ok((Origin::Default, Maybe::Isnt, Value::Text(row.default())))
 }
 
-/// The keys a document holds that no row declares, so a typo in a hand edit
-/// is refused by name rather than silently being a default.
+/// The keys a stack's layers hold that no row declares, each with the layer
+/// that holds it, so a typo in a hand edit is refused by name and file
+/// rather than silently being a default. Keys under `meta` are the reader's
+/// and never among them.
 // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
 pub fn unknown_keys<'d, St: Store>(
-    rows: &'d [Declared<St>],
-    doc: &'d St::Document<'_>,
-) -> impl Iterator<Item = &'d str> + 'd {
-    St::keys(doc).filter(move |k| !rows.iter().any(|r| r.key() == *k))
+    rows: &'d [Declared<'_, St>],
+    stack: &'d [Layer<'d, St>],
+) -> impl Iterator<Item = (&'d str, &'d Layer<'d, St>)> + 'd {
+    stack.iter().flat_map(move |layer| {
+        St::keys(layer.doc())
+            .filter(move |k| !is_meta(k) && !rows.iter().any(|r| r.key() == *k))
+            .map(move |k| (k, layer))
+    })
 }
 
-/// The keys the repository's document holds that are the person's alone, so
-/// a clone cannot set somebody's theme.
+/// The keys the repository's stack holds that are the person's alone, each
+/// with the layer that holds it, so a clone cannot set somebody's theme.
 // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
 pub fn misplaced_keys<'d, St: Store>(
-    rows: &'d [Declared<St>],
-    repo: &'d St::Document<'_>,
-) -> impl Iterator<Item = &'d str> + 'd {
-    St::keys(repo).filter(move |k| rows.iter().any(|r| r.key() == *k && !r.reads_repo()))
+    rows: &'d [Declared<'_, St>],
+    repo: &'d [Layer<'d, St>],
+) -> impl Iterator<Item = (&'d str, &'d Layer<'d, St>)> + 'd {
+    repo.iter().flat_map(move |layer| {
+        St::keys(layer.doc())
+            .filter(move |k| !is_meta(k) && rows.iter().any(|r| r.key() == *k && !r.reads_repo()))
+            .map(move |k| (k, layer))
+    })
 }

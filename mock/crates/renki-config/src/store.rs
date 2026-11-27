@@ -13,7 +13,7 @@ use core::fmt;
 
 use notko::{Maybe, Outcome};
 
-use crate::Literal;
+use crate::{Literal, Shape};
 
 /// Why text is not a document of some store.
 ///
@@ -70,10 +70,11 @@ pub enum Rendered<'a> {
 /// Implemented by a marker type per format. It parses text into a document
 /// that borrows from it, answers one dotted key as a [`Literal`], lists the
 /// keys a document holds so a key the schema does not know is refused by
-/// name, walks a list literal's items, and writes one key back into the text
-/// it was given, keeping everything else in that text where it was, comments
-/// included. Nothing else: the precedence, the kinds and the scopes are the
-/// resolver's and are the same over every store.
+/// name, tells what shape a key holds, walks a list literal's items, and
+/// writes one key back into the text it was given, keeping everything else
+/// in that text where it was, comments included. Nothing else: the
+/// precedence, the kinds and the scopes are the resolver's and are the same
+/// over every store.
 pub trait Store: 'static {
     /// What the schema and the diagnostics call the format.
     // lint:allow(no-bare-static-str) reason: a format's static name. FIXME: port to Str.
@@ -100,6 +101,12 @@ pub trait Store: 'static {
     /// The items of a list literal this store produced.
     // lint:allow(no-bare-string) reason: the list's own text. FIXME: port to Str.
     fn items<'d>(list: &'d str) -> Self::Items<'d>;
+    /// What shape the document holds at a dotted key: a table, a list or a
+    /// scalar, or `Isnt` where it holds nothing there. An array of tables is
+    /// a list, and its tables' keys are `name.0.field` in the document's
+    /// order.
+    // lint:allow(no-bare-string) reason: a dotted key. FIXME: port to Str.
+    fn shape(doc: &Self::Document<'_>, key: &str) -> Maybe<Shape>;
     /// `text` with `key` set to `value`, written into `into`, everything else
     /// kept byte for byte. A key not yet in the text is added where a reader
     /// would look for it.

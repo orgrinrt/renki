@@ -143,7 +143,7 @@ pub struct Tool {
     /// that order, and handed to the engine as `<SHORT>_CFG_<KEY>` variables.
     /// Empty for a tool with nothing to configure, which also leaves the
     /// `config` subcommand to the engine.
-    pub settings:        &'static [renki_config::Declared<crate::config::Toml>],
+    pub settings:        &'static [renki_config::Declared<'static, crate::config::Toml>],
     /// The subcommands this launcher answers itself, beside `locate` and
     /// `config`, for the questions the engine cannot be asked. Tried where
     /// `config` is, before a root is required, so one runs where there is no
