@@ -27,7 +27,7 @@ use renki_config::{Declared, EnvKey, Layer, Lookup, Origin, Part, Store};
 pub use self::toml::Toml;
 use crate::tool::Tool;
 
-/// The person's file: `<config root>/<config_file>`, so `~/.config/homma/homma.toml`
+/// The person's file: `<config root>/<config_file>`, so `~/.config/widget/widget.toml`
 /// on linux. The name reuses [`Tool::config_file`], which names the file a
 /// repository carries, on purpose: the same tool's configuration at two
 /// scopes, and a reader who knows one knows where to look for the other.
