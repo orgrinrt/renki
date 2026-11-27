@@ -6,6 +6,28 @@ layer, the order, the `meta` table, the merge, the predicate, the glob, is
 nothing else. A tool that only reads its manifest takes this crate and the
 contracts, and nothing of the launcher.
 
+## Reading a manifest
+
+One call reads a manifest with everything below: its layers, their includes,
+the predicates that decide which are read, and the merge. A tool writes its
+type and calls it, and wires nothing else; a manifest it reads gets layering
+by default.
+
+```rust
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct App {
+    name: String,
+    hooks: Vec<Hook>,
+}
+
+let app: App = renki_manifest::read("app.toml")?;
+```
+
+`renki_manifest::read::<T>(path)` is `Manifest::find(path)` followed by
+`Manifest::read::<T>`. The parts are public for a caller that wants the dump,
+the provenance or the stack, and the one call is what every other use takes.
+
 ## Finding the layers
 
 `Manifest::find` takes the base's path. It reads the base and, where there is
@@ -27,8 +49,10 @@ base, the rest by `Order::rank`.
 A layer in `meta.overlays.untracked` is checked against git where the
 manifest's directory is in a work tree, once per find for all such layers: one
 that git tracks is refused, naming the file and saying
-`git rm --cached <file>`. Nothing is written to `.gitignore`. Where the
-directory is in no work tree, nothing is checked.
+`git rm --cached <file>`. Nothing is written to `.gitignore`. Git is no
+requirement of reading a manifest: where the directory is in no work tree,
+where no `git` is on the path, or where `git` fails to answer, the check is
+skipped in silence and the read goes on.
 
 ## Answering the predicates
 
@@ -104,3 +128,9 @@ reader is checked against the fixture, and both against the same bytes, so a
 behaviour lands in both readers or the fixture that pins it is red for the
 one that lacks it. The fixtures sit under `posix/` so a consumer's sparse
 checkout carries them too.
+
+Both readers evaluate the same predicate kinds, `env`, `shell`, `not`, `all`
+and `any`, and the suite holds a fixture for each: one where it holds and one
+where it does not, `env` with each truthy and falsy word and a refused one.
+The `shell` fixtures run through the Rust reader where `shell-predicate` is
+on; the POSIX reader runs them always, through the same `sh -c`.
