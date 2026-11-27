@@ -1,0 +1,26 @@
+== aarch64-apple-darwin
+exit 0
+== x86_64-apple-darwin
+exit 0
+== x86_64-unknown-freebsd
+exit 0
+== x86_64-unknown-netbsd
+exit 0
+== x86_64-unknown-openbsd
+exit 0
+== x86_64-unknown-illumos
+exit 0
+== x86_64-unknown-dragonfly
+help: a function with a similar name exists
+     |
+  35 -         *libc::__error()
+  35 +         *libc::dlerror()
+     |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `no-std-file-reading-on-unix` (lib) due to 1 previous error
+exit 101
+== aarch64-unknown-linux-gnu
+exit 0
+== x86_64-unknown-linux-musl
+exit 0

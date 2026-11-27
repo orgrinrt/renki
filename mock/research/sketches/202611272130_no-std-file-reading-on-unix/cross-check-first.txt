@@ -1,0 +1,34 @@
+== aarch64-apple-darwin
+exit 0
+== x86_64-apple-darwin
+exit 0
+== x86_64-unknown-freebsd
+exit 0
+== x86_64-unknown-netbsd
+ 34 -         *libc::__error()
+ 34 +         *libc::__errno()
+    |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `no-std-file-reading-on-unix` (lib) due to 1 previous error
+exit 0
+== x86_64-unknown-openbsd
+ 34 -         *libc::__error()
+ 34 +         *libc::__errno()
+    |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `no-std-file-reading-on-unix` (lib) due to 1 previous error
+exit 0
+== x86_64-unknown-illumos
+   |
+30 |         *libc::__errno_location()
+   |                ^^^^^^^^^^^^^^^^ not found in `libc`
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `no-std-file-reading-on-unix` (lib) due to 1 previous error
+exit 0
+== aarch64-unknown-linux-gnu
+exit 0
+== x86_64-unknown-linux-musl
+exit 0
