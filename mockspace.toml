@@ -20,7 +20,8 @@ module_crates = []
 # Layer labels by depth index.
 layers = [
     "L0 tables",      # renki-dirs, renki-config: no_std, no alloc, contracts and markers
-    "L1 launcher",    # renki: std, reads the environment, execs the engine
+    "L1 reader",      # renki-manifest: std, reads a manifest and its layers off the disk
+    "L2 launcher",    # renki: std, reads the environment, execs the engine
 ]
 
 [domain_kinds]
@@ -30,6 +31,7 @@ layers = [
 [crate_colors]
 renki-dirs = "#E8EEF7 | #3A6EA5"
 renki-config = "#E8EEF7 | #3A6EA5"
+renki-manifest = "#E8F3EC | #2E7D4F"
 renki = "#EDE6F3 | #5C2D82"
 
 # ---------------------------------------------------------------------------
@@ -144,9 +146,10 @@ build = "error"
 push = "error"
 rules = [
     { scope = "renki-dirs", forbidden = "std::*, alloc::*", reason = "renki-dirs is no_std and no alloc; the caller reads the environment and hands the text in" },
-    { scope = "renki-config", forbidden = "std::*, alloc::*", reason = "renki-config is the contracts; a store and a file live in the launcher" },
+    { scope = "renki-config", forbidden = "std::*, alloc::*", reason = "renki-config is the contracts; a store and a file live in renki-manifest" },
     { scope = "renki-dirs", forbidden = "renki::*, renki_config::*", reason = "the table is the bottom; nothing above it is reachable from it" },
-    { scope = "renki-config", forbidden = "renki::*", reason = "the contracts do not know the launcher; the launcher implements them" },
+    { scope = "renki-config", forbidden = "renki::*, renki_manifest::*", reason = "the contracts do not know their readers; the readers implement them" },
+    { scope = "renki-manifest", forbidden = "renki::*", reason = "reading a manifest knows nothing of the launcher; the launcher reads through it" },
 ]
 
 # --- Ignored tests: each names the row that tracks its gap -------------------
