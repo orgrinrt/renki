@@ -180,7 +180,7 @@ pub(crate) fn set(tool: &Tool, user: &Path, key: &str, value: &str) -> Result<St
 
 /// A value's canonical text through its row, so a list typed as `a, b`
 /// lands in the file as `["a", "b"]`.
-struct Canonical<'a>(&'a renki_config::Declared<Toml>, &'a str);
+struct Canonical<'a>(&'a renki_config::Declared<'static, Toml>, &'a str);
 
 impl core::fmt::Display for Canonical<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

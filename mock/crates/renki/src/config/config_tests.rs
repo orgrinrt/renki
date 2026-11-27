@@ -26,7 +26,7 @@ use crate::tool::Tool;
 
 choices!(Theme = "dark" | "light");
 
-const SETTINGS: &[Declared<Toml>] = &[
+const SETTINGS: &[Declared<'static, Toml>] = &[
     Setting::<Choice<Theme>, User>::new("theme", "dark", "Which look the pages use.").row(),
     Setting::<Int, Either>::new("server.port", "8787", "The port.").row(),
     Setting::<Bool, Repo>::new("strict", "false", "Whether the gate refuses on warnings.").row(),

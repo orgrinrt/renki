@@ -111,6 +111,25 @@ impl Store for Toml {
         }
     }
 
+    fn shape(doc: &Document<'_>, key: &str) -> Maybe<renki_config::Shape> {
+        let mut item: &Item = doc.doc.as_item();
+        for segment in key.split('.') {
+            item = match item.as_table_like().and_then(|t| t.get(segment)) {
+                Some(next) => next,
+                None => return Maybe::Isnt,
+            };
+        }
+        if item.is_array_of_tables() || item.is_array() {
+            Maybe::Is(renki_config::Shape::List)
+        } else if item.is_table_like() {
+            Maybe::Is(renki_config::Shape::Table)
+        } else if item.is_value() {
+            Maybe::Is(renki_config::Shape::Scalar)
+        } else {
+            Maybe::Isnt
+        }
+    }
+
     fn set(text: &str, key: &str, value: Rendered<'_>, into: &mut impl fmt::Write) -> fmt::Result {
         let rendered = match value {
             Rendered::Text(t) => quoted(t),

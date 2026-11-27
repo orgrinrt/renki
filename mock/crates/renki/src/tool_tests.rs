@@ -147,7 +147,7 @@ fn a_command_table_is_refused_for_the_three_things_that_make_one_unreachable() {
     // Every arm is a descriptor that would run and answer the wrong thing
     // quietly: an empty name matches every bare argument, a name the crate's
     // own queries take never runs, and two of one name run by table order.
-    const SETTINGS: &[renki_config::Declared<crate::config::Toml>] =
+    const SETTINGS: &[renki_config::Declared<'static, crate::config::Toml>] =
         &[renki_config::Setting::<renki_config::Bool, renki_config::User>::new(
             "strict", "false", "A flag.",
         )
@@ -233,7 +233,7 @@ fn a_command_named_after_a_launcher_flag_is_refused_since_the_flag_comes_off_fir
     // table is looked at, so a command named after one never reaches the
     // table: the directory flag vanishes, the engine flag is refused as a
     // flag with no path, and `--cfg` swallows the next argument.
-    const SETTINGS: &[renki_config::Declared<crate::config::Toml>] =
+    const SETTINGS: &[renki_config::Declared<'static, crate::config::Toml>] =
         &[renki_config::Setting::<renki_config::Bool, renki_config::User>::new(
             "strict", "false", "A flag.",
         )
