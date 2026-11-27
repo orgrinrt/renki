@@ -18,17 +18,19 @@ launcher calls for its own build.
 
 ## Configuration
 
-The launcher implements `renki-config`'s contracts for the one store that
-ships, TOML, and does the reading nothing `no_std` can do. `Toml` is the
-`Store`: it parses a document, answers a dotted key as a borrowed literal,
-lists the keys a document holds, and writes one key back into the text it was
-given, keeping everything else where it was, comments included, by editing
-the line rather than reserialising a value tree.
+The launcher reads its two configuration files through `renki-manifest`,
+which finds each file's layers, answers its predicates and holds the TOML
+store, and keeps for itself what is a launcher's: the `--cfg` flag, the
+variables handed to the engine, and the `config` verbs. Each of the two files
+is a stack of layers, `<config_file>` and every `<name>.<layer>.<ext>` the
+manifest rules find for it.
 
 The reader resolves every declared setting once, in the design's order: a
 `--cfg key=value` flag, the tool's `<SHORT>_CFG_<KEY>` variable, the
-repository's `<config_file>` where the setting's scope allows it, the
-person's `<config root>/<config_file>`, then the default. A key the schema
+repository's `<config_file>` stack where the setting's scope allows it, the
+person's `<config root>/<config_file>` stack, then the default; inside a
+stack, the highest layer that holds the key, with a list appended across the
+layers as the manifest rules say. A key the schema
 does not know is refused by name from any of those places, and a value the
 kind refuses is refused with its source named. The engine receives the result
 as `<SHORT>_CFG_<KEY>` per setting plus `<SHORT>_CONFIG_FILE` naming the
@@ -41,12 +43,16 @@ engine's to read.
 `widget config` joins `widget locate` as a query the launcher answers without
 the engine, since the engine is what is being configured and may not build:
 `path`, `schema`, `get <key>`, `set <key> <value>` and `edit`. `get` prints
-the source beside the value. The output is `key=value` lines like `locate`.
+the source beside the value, and for a value from a file its layer,
+`repo:local` for `<name>.local.<ext>`; `path` lists every layer read, in its
+order. The output is `key=value` lines like `locate`.
 `set` and `edit` both create the person's config directory when it is not
 there yet, and `set` puts a key where a reader would look for it: a top-level
 key at the end of the top level, which is above the first table header when
 the file opens with one, and a dotted key at the end of its table, or in a new
-table at the end where the file has none.
+table at the end where the file has none. `set` and `edit` write the base
+file; `--layer <word>` on either writes `<name>.<word>.<ext>` instead,
+creating it where it is not there yet.
 
 ## A tool's own commands
 
@@ -87,6 +93,29 @@ The alternative was the consumer matching the name in its own `main` ahead of
 the settings resolved by the same reader the engine environment comes from,
 and because the collision check above can only be made where the crate's own
 names are known, which a match in `main` runs before.
+
+## A hosted tool's descriptor
+
+`extension::Descriptor` is a parsed `tool.toml` and refuses unknown fields, so
+what a host wants its tools to say is added here. Three fields join it.
+`who`, a list of words naming whom the tool is for, which renki keeps and
+interprets none of; a host matches them against its own roles. `moment`, one
+line saying when the tool is reached for, kept and shown. And `settings`,
+rows of `key`, `kind`, `default`, `scope` and `doc` in the shape of
+`renki-config`'s `Setting`, each turned into a `renki_config::Declared` over
+the descriptor's text by `Declared::named`, and checked by
+`Declared::defect` when the descriptor is parsed, so a bad row refuses the
+descriptor the way a bad `run` does.
+
+The kinds a descriptor may name are the ones whose parsers need nothing but
+the text: `bool`, `int`, `text`, `path` and `list`. A `choice` is refused by
+name, since its options are a type's and a descriptor has none.
+
+Where a hosted tool's values come from is the host's: it resolves the rows
+over the documents it chooses through `renki_config::resolve`, and
+`extension::command` hands the tool the result as `<NAME>_CFG_<KEY>`, the
+descriptor's `name` as the short name, the way a launcher hands its engine
+`<SHORT>_CFG_<KEY>`.
 
 ## The retried install
 

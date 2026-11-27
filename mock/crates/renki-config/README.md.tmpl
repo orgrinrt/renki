@@ -2,7 +2,9 @@
 
 A tool's configuration, as contracts. A setting has a kind, a scope and a
 default, all in its type; a store is a file format that parses a document,
-answers a key and writes one back; the resolver reads every declared setting
-from five places in a fixed order and says which one won. Nothing here reads a
-file or the environment, allocates, or names `std`: the launcher does that
-and implements the store. `#![no_std]`, no alloc, notko for fallibility.
+answers a key and writes one back; a manifest is a base file and its layers,
+ordered, merged and switched by named predicates by rules held here once; the
+resolver reads every declared setting from five places in a fixed order and
+says which place and which layer won. Nothing here reads a file or the
+environment, runs a process, allocates, or names `std`: `renki-manifest` does
+that and implements the store. `#![no_std]`, no alloc, notko for fallibility.

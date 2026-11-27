@@ -1,13 +1,15 @@
 # renki-config. Design
 
-The contracts a tool's configuration is declared, read and written through.
-The launcher resolves every setting once from five places in a fixed order
-and hands the engine the result, the way it hands over `--dir`; a gui, a cli
-and a hand edit all go through one schema and one file. This crate is the
-schema, the store contract and the resolver, and nothing else: it reads no
-file and no environment, allocates nothing, borrows every string from text
-the caller holds, and speaks notko's `Outcome` and `Maybe`. The launcher
-implements the store and does the reading.
+The contracts a tool's configuration is declared, read and written through,
+and the rules by which a manifest's layers are found, ordered and merged. The
+launcher resolves every setting once from five places in a fixed order and
+hands the engine the result, the way it hands over `--dir`; a gui, a cli and a
+hand edit all go through one schema and one file. This crate is the schema,
+the store contract, the layer rules, the predicate and the resolver, and
+nothing else: it reads no file and no environment, runs no process, allocates
+nothing, borrows every string from text the caller holds, and speaks notko's
+`Outcome` and `Maybe`. What reads the disk is `renki-manifest`, which
+implements the store and asks this crate every question of rule.
 
 ## Kinds, as types
 
@@ -20,66 +22,163 @@ by construction, nothing on it is `self`. The kinds that ship: `Bool` to
 refusing an empty one; `List<K>` to an iterator over `K`'s values, the
 store's own iterator through an associated type rather than a `Vec`, whose
 canonical text is `["a", "b"]` and which therefore refuses a text item
-holding a `"`, since the canonical form has no escape for one; and
-`Choice<C>` to a `&'static str` drawn from `C::OPTIONS`, where `C: Choices`
-is a marker a tool declares per closed set with the `choices!` macro.
+holding a `"`, since the canonical form has no escape for one; `Choice<C>` to
+a `&'static str` drawn from `C::OPTIONS`, where `C: Choices` is a marker a
+tool declares per closed set with the `choices!` macro; and `PredicateName`,
+text that must name a predicate the manifest defines, for a field of a tool's
+own schema that applies conditionally.
 
-`Literal<'a, L>` is the seam between a store and a kind: `Bool`, `Int`,
-`Str(&'a str)` and `List(L)`, with `L` the store's list iterator. A store
-turns its node into one, a kind turns one into its value, and neither knows
-the other. `BadValue` is the refusal, carrying the kind's name and the text
-offered.
+`Literal<'a>` is the seam between a store and a kind: `Bool`, `Int`,
+`Str(&'a str)` and `List(&'a str)`, the list as its own source text, walked
+through the store's `items`. A store turns its node into one, a kind turns one
+into its value, and neither knows the other. `BadValue` is the refusal,
+carrying the kind's name and the text offered.
 
 ## Scopes, as types
 
 `Scope` is a trait over `User`, `Repo` and `Either`, closed by the private
 `ConfigSealed`. Each says whether the person's file and the repository's file
-are read for a setting of that scope. A repository file carrying a person's setting is refused by name from
-the table the declaration filled in, rather than by a check somebody
-remembered to write.
+are read for a setting of that scope. A repository file carrying a person's
+setting is refused by name from the table the declaration filled in, rather
+than by a check somebody remembered to write. Every layer of the repository's
+file is the repository's file for this: a person's setting in
+`name.local.ext` beside a repository's `name.ext` is refused the same.
 
 ## The setting and its row
 
 `Setting<K, S>` is one setting, typed: a dotted key, a default in the kind's
 text form, and one sentence of documentation. Its `row` is a `const fn`
-producing `Declared`, the erased shape a `Tool` carries in one static slice
-whatever the kinds of its settings: the kind's and scope's names, the scope's
-two booleans, the default, the doc, and the kind's two parsers as function
-pointers, so the row still checks a value the way its type would. `Declared`
-is built by `Setting::row` and nothing else, which is what keeps the pointers
-and the names in agreement, and `Declared::defect` is the descriptor check: a
-key that is not a dotted identifier, two rows sharing a key, or a default the
-row's own kind refuses.
+producing `Declared<'static, St>`, the erased shape a `Tool` carries in one
+static slice whatever the kinds of its settings: the kind's and scope's names,
+the scope's two booleans, the default, the doc, and the kind's two parsers as
+function pointers, so the row still checks a value the way its type would.
+
+`Declared<'a, St>` borrows its strings for `'a`, so a table read at run time,
+a tool descriptor's, is the same type over the descriptor's text. Such a row
+is built by `Declared::named`, which takes the kind by its `NAME` and refuses a
+name no shipped kind answers to; `Choice` is not among them, since its options
+come from a type. Between `Setting::row` and `Declared::named` the pointers
+and the names cannot disagree. `Declared::defect` is the descriptor check: a
+key that is not a dotted identifier, a key under `meta`, which is the reader's
+and no tool's, two rows sharing a key, or a default the row's own kind
+refuses.
 
 ## The store
 
 `Store` is the backend contract, implemented by marker types. It names the
 format and its extension, parses text into a borrowed `Document<'a>`, answers
 a dotted key as a `Literal` or `Isnt`, iterates the keys a document holds so
-an unknown one is refused by name, and writes one key into text it is given,
-into a `core::fmt::Write` sink, keeping everything else in that text byte for
-byte, comments included. TOML is the store that ships, in the launcher, since
+an unknown one is refused by name, tells what shape a key holds (`Shape`), and
+writes one key into text it is given, into a `core::fmt::Write` sink, keeping
+everything else in that text byte for byte, comments included. An array of
+tables is a list here like any other, and its keys are `name.0.field` in the
+document's order. TOML is the store that ships, in `renki-manifest`, since
 parsing TOML is not a `no_std` job here; a second store is an impl of this
 trait and nothing more.
+
+## Layers
+
+A manifest is a base file `name.ext` and any number of layers
+`name.<word>.ext`. `layer_of` reads a file name against the base's `name` and
+the store's extension and answers `Base`, a `Layer(LayerName)`, or `Isnt` for
+a file that is no part of this manifest, and refuses with `BadLayer` a file
+of the manifest's shape that cannot be one: two words, the word `base`, or a
+word outside `[a-z0-9_-]`. `LayerName` is the word, borrowed; `defaults` is
+the one that sits below the base.
+
+`Order` is the place of every overlay above the base. It is read from the
+base's `meta.overlays.order`, else the `defaults` layer's, else it is
+`Order::DEFAULT`, `["*", "local", "secret", "private"]`, where `*` stands for
+every layer the list does not name, in byte order of the word. `Order::rank`
+answers a word's place, or a `BadLayer` naming the word and saying to add it
+or `*` to `meta.overlays.order` where the order has no `*` and does not name
+it. An order naming `defaults` or `base`, naming a word twice, or holding two
+`*`, is refused when read.
+
+## The meta table
+
+`meta` is the one table read before the rest of any layer, and the only one
+whose schema is this crate's. `Meta<'d, St>` reads it out of a document
+through the store: `include` (a list of entries, each a glob matching files or
+a directory where it ends in `/`, relative to the file that names it),
+`order`, `untracked` (the words that must not be tracked by git, default
+`local`, `secret` and `private`), `when` (a predicate's name), `predicates`,
+`replace` and `unset` (dotted keys of this layer). `Meta::defect` refuses a
+`meta` key that is none of these, an `order`, `untracked` or `predicates` in a
+layer above the base, and a `when` on the base or on `defaults`, each by name.
+`unknown_keys` and the resolver never see a key under `meta`.
+
+`glob_matches` is the one glob rule both readers keep: `*`, `?` and `[...]`
+within one path segment, with `!` negating a bracket, which is the POSIX
+shell's pattern rule, and no `**`.
+
+## Merging
+
+`meet` is the merge rule, once, for every reader that merges: given the
+`Shape` a lower layer holds at a key, the shape a higher one holds, and
+whether the higher's `meta.replace` names the key, it answers the `Meet`:
+`Deep` for two tables, which merge key by key; `Append` for two lists, the
+higher's items after the lower's, an array of tables the same; `Over` for two
+scalars, or for anything the higher replaces; or a `BadMerge` for one shape
+over another that nothing replaces, naming both. `meta.unset` takes a key out
+of what the layers below hold before the layer applies. A key `replace` names
+that the layer does not hold, or `unset` names that no lower layer holds, is
+refused.
+
+## The stack
+
+A `Layer<'a, St>` is one read layer: its `LayerName` or the base, a label for
+the file it came from, and its document. A stack is a slice of them, lowest
+first, which the caller builds and this crate only reads. `stacked` answers a
+dotted key over a stack by `meet`: the highest layer holding a scalar wins;
+for a list it answers `ListRun<'a, St>`, the run of each holding layer's list
+from the lowest that the highest `replace` and `unset` leave, which the kind
+walks layer by layer through the store's `items`, so an appended list is
+neither copied nor allocated.
+
+## The predicate
+
+`Predicate<'a>` is one definition under `meta.predicates.<name>`: `Env` over a
+variable's name, `Shell` over a command, and `Not`, `All` and `Any` over other
+predicates' names. `Predicates<'d, St>` is the table read from the base and
+`defaults`, the two layers always read, so no predicate depends on a layer it
+decides; a definition in an overlay is refused by name.
+
+`Answers` is what only the caller can give: a variable's value, and a shell
+command's exit, run in the manifest's directory. `holds` evaluates a name over
+the table and the caller's `Answers`: `Env` holds where `truthy` says the
+value is (`1`, `true`, `yes`, `on`, in any case), does not where it is unset,
+empty, `0`, `false`, `no` or `off`, and is a `BadPredicate` naming the
+variable and the value otherwise; `Shell` holds on exit 0, not on 1, and is a
+`BadPredicate` with the command and the exit on anything else. A name the
+table does not define, and a loop among `Not`, `All` and `Any`, are refused
+with the name and the loop. Nothing is kept between calls: a predicate is
+evaluated when its use site is read, every time. This crate names no variable
+and defines no predicate.
 
 ## Resolution and provenance
 
 `Origin` is the closed set of places a value comes from: `Flag`, `Env`,
 `Repo`, `User`, `Default`, in that precedence. `resolve` is generic over the
 store and over how the caller answers a flag and a variable by key, takes the
-two documents as `Maybe`s, and yields per setting a `ResolvedView<'a>`: the key,
-the literal, and the origin that won. A key present in a file that no row
-declares is refused by name; a user-only key in the repository file is
-refused by name; a value a kind refuses is refused with its origin named.
-`env_key` renders a setting's variable name, `<SHORT>_CFG_<KEY>` with dots
-to underscores, into a caller's sink, so the launcher and an engine in rust
-agree on it without either allocating.
+repository's stack and the person's stack, each possibly empty, and yields per
+setting a `ResolvedView<'a, St>`: the key, the value, the origin that won and,
+for `Repo` and `User`, the layer, so `config get` prints `repo:local` where
+the value came from `name.local.ext`. Its `Value<'a, St>` is text, a literal,
+or a `ListRun`. A key present in a layer that no row declares is refused by
+name and layer; a user-only key in any layer of the repository's stack is
+refused by name and layer; a value a kind refuses is refused with its origin
+and layer named. `env_key` renders a setting's variable name,
+`<SHORT>_CFG_<KEY>` with dots to underscores, into a caller's sink, so the
+launcher and an engine in rust agree on it without either allocating.
 
-## What stays with the launcher
+## What stays with the readers
 
-Reading files and the environment, the TOML store, the `--cfg` flag, the
-`config` query's five verbs, `$EDITOR`, and the `String` diagnostics the
-operator reads. All of it is `std`, all of it is renki's, and none of it is
-reachable from here: the forbidden-imports lint refuses `renki::*` in this
+Reading files, listing directories, the environment and processes, git, the
+TOML store, merging whole documents into one tree and deserialising it, the
+`--cfg` flag, the `config` query's five verbs, `$EDITOR`, and the `String`
+diagnostics the operator reads. All of it is `std` and lives in
+`renki-manifest` and `renki`, none of it is reachable from here: the
+forbidden-imports lint refuses `renki::*` and `renki_manifest::*` in this
 crate, and `no-std`, `no-alloc`, `no-bare-result` and `no-bare-option` refuse
 the rest.

@@ -1,0 +1,10 @@
+# renki-manifest
+
+A manifest read off the disk with its layers. It finds `name.ext` and every
+`name.<layer>.ext` beside it or through `meta.overlays.include`, answers the
+named predicates from the environment and a shell, merges the layers by
+`renki-config`'s rules into one view, and hands that to a tool's schema with
+every refusal naming its file. The TOML store lives here, and a POSIX reader
+of the same manifests sits beside it under `posix/`, held to one suite with
+the Rust one. On `renki-config`; `renki` and any tool reading a manifest
+depend on it. `std`, unix.
