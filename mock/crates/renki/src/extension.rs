@@ -789,6 +789,8 @@ mod cargo;
 pub(crate) use cargo::install_args;
 pub use cargo::{Cargo, CargoPlan};
 pub(crate) use cargo::{drop_target, set_build_dir};
+#[cfg(test)]
+pub(crate) use cargo::{forget_units, path_units};
 
 /// The file whose timestamp says when a materialised tool was last used.
 ///

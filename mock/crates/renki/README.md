@@ -16,7 +16,7 @@ cargo add renki
 
 ```toml
 [dependencies]
-renki = "0.0.5-rc.3"
+renki = "0.0.5-rc.4"
 ```
 
 Pin the exact version rather than a range, since `0.0.x` releases are incompatible with each other anyway, and a new field on `Tool` breaks the build unless the literal spreads `Tool::CONVENTIONS` and lets the base answer the ones it has no opinion about. `renki` is a library and not installed as a command. What goes on `PATH` is the launcher built with it.
@@ -58,7 +58,7 @@ The launcher answers `widget locate` itself, printing the repo root, the config 
 
 ## Where it keeps things
 
-Builds, materialised tools and the resolved head of any branch pin go in the cache, and the one small registry of which repos have run the tool goes in the state directory, both placed by `renki-dirs`. Emptying the cache only costs a rebuild, so deleting it is always safe. An engine compiles its dependencies where the repository's own cargo builds them, so only its binary stays in the cache. A build nothing points at any more is removed by the next run, and one still pinned that nobody has wanted for `Tool::cache_retention`, thirty days by default, goes the same way.
+Builds, materialised tools and the resolved head of any branch pin go in the cache, and the one small registry of which repos have run the tool goes in the state directory, both placed by `renki-dirs`. Emptying the cache only costs a rebuild, so deleting it is always safe. An engine compiles its dependencies where the repository's own cargo builds them, so only its binary stays in the cache, and a pin that moved to another revision of the same repository is still built from that revision's own sources. A build nothing points at any more is removed by the next run, and one still pinned that nobody has wanted for `Tool::cache_retention`, thirty days by default, goes the same way.
 
 A launcher started from a cargo build script builds nothing, since cargo holds the build directory's lock for as long as the script runs and a build started under it would wait for that lock forever. An engine already built for the pin runs like always, and a pin with no engine yet is refused with a line telling to run the tool once from a shell first. A `cargo run` and a test binary are not build scripts and build as usual.
 

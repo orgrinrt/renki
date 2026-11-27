@@ -1,0 +1,50 @@
+db6f712 chore: lock src changelist 202611272136
+a3c3f28 docs: name widget in the two rustdoc examples
+ca9662e docs: open a round for the rustdoc example names
+109460d chore: take the one search from the lint pack
+c2189f8 chore: take the one search from the lint pack
+124db62 chore: take the one search from the lint pack
+4799fb4 docs: add the renki 0.0.5-rc.4 changelog
+1d50362 docs: add the renki 0.0.5-rc.4 changelog
+529dd0d chore: release 0.0.5-rc.4
+b462e12 chore: bump renki to 0.0.5-rc.4
+ae7ccd1 chore: bump renki to 0.0.5-rc.4
+391aa34 chore: release 0.0.5-rc.4
+e6bf23e chore: prepare renki 0.0.5-rc.4
+b1136e5 chore: prepare renki 0.0.5-rc.4
+1827b77 chore: close design round 202611222150-f0cy
+5728d2c chore: lock src changelist 202611222150-f0cy
+b7892ab chore: lock doc changelist 202611222150-f0cy
+1a1d368 chore: close design round 202611222148-fm3h
+0e63730 chore: lock src changelist 202611222148-fm3h
+3693dc7 chore: lock doc changelist 202611222148-fm3h
+2361d93 chore: ship `renki` as `0.0.5-rc.4`
+c518dec fix: re-export the unit helpers to the tests only
+8a18bee docs: add the source changelist for the unit re-export again
+ce6daed docs: open a round for the unit re-export again
+7df6201 docs: add the source changelist for the rc.4 readme
+8bddffd docs: pin rc.4 in the readme ahead of its release
+4224afe docs: open a round for the readme ahead of rc.4
+32cb14c chore: close design round 202611222147-x34l
+9fa9e41 chore: lock src changelist 202611222147-x34l
+f4c6d03 docs: add the source changelist for the unit re-export
+b24b5b6 chore: lock doc changelist 202611222147-x34l
+e41577f docs: open a round for the unit re-export the tests read
+15b1dd2 fix: build each git revision from its own sources in the shared dir
+5f26e57 chore: release 0.0.5-rc.3
+06974c6 chore: ship `renki` as `0.0.5-rc.3`
+7f2683c docs: pin rc.3 in the readme ahead of its release
+75269b4 fix: run no cargo from a launcher a build script started
+0bcaa23 fix: build one pin once whatever toolchain the caller picked
+40cebad chore: release 0.0.5-rc.2
+bef7c41 fix: build engines in the shared build dir and keep one per pin
+28a0fde chore: release 0.0.5-rc.1
+c67842f fix: reinstall the launcher into the cache target dir
+bb42c8b fix: forget a refused rebuild only while the record names its revision
+95d8b16 docs: give `renki` its own `README.md` and cut the others down
+a181abc docs: shape the readmes of `renki-config` and `renki-dirs`
+037c6d9 docs: take the second person out of the readme
+1eed3b3 docs: rewrite the readme to the shape
+7fe1982 fix: give a remote branch lookup a deadline
+9f09183 chore: exempt the launcher by name and not list the tables
+d4c5050 chore: name the lint pack by its current repository

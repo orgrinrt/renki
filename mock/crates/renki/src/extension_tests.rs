@@ -281,6 +281,8 @@ fn a_cargo_install_is_locked_to_the_source_s_own_lockfile() {
         "--force",
         "--target-dir",
         "/cache/target",
+        "--message-format",
+        "json-render-diagnostics",
     ]);
     // the attempt's own arguments come first and whole, since cargo reads
     // the package name positionally after the source selector; the four
@@ -296,7 +298,16 @@ fn a_cargo_install_is_locked_to_the_source_s_own_lockfile() {
         assert_eq!(&args[1 .. 1 + shape.len()], attempt.as_slice(), "{shape:?}");
         assert_eq!(
             &args[1 + shape.len() ..],
-            ["--locked", "--root", "/cache/k", "--force", "--target-dir", "/cache/target"],
+            [
+                "--locked",
+                "--root",
+                "/cache/k",
+                "--force",
+                "--target-dir",
+                "/cache/target",
+                "--message-format",
+                "json-render-diagnostics",
+            ],
             "{shape:?}"
         );
     }

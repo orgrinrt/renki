@@ -156,7 +156,7 @@ compile_error!(
 #[cfg(not(target_os = "macos"))]
 pub type Host = Xdg;
 
-/// The directory name a tool owns under every root: `homma`, `vibecheck`.
+/// The directory name a tool owns under every root: `widget`.
 ///
 /// One path segment. Not empty, no separator, and neither of the two names
 /// that walk rather than name.

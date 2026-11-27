@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.0.5-rc.4 (2026-11-23)
+
+### fix
+
+- fix: re-export the unit helpers to the tests only `c518dec`
+- fix: build each git revision from its own sources in the shared dir `15b1dd2`
+
+### docs
+
+- docs: add the source changelist for the unit re-export again `8a18bee`
+- docs: open a round for the unit re-export again `ce6daed`
+- docs: add the source changelist for the rc.4 readme `7df6201`
+- docs: pin rc.4 in the readme ahead of its release `8bddffd`
+- docs: open a round for the readme ahead of rc.4 `4224afe`
+- docs: add the source changelist for the unit re-export `f4c6d03`
+- docs: open a round for the unit re-export the tests read `e41577f`
+
+### chore
+
+- chore: bump renki to 0.0.5-rc.4 `b462e12`
+- chore: bump renki to 0.0.5-rc.4 `ae7ccd1`
+- chore: release 0.0.5-rc.4 `391aa34`
+- chore: prepare renki 0.0.5-rc.4 `e6bf23e`
+- chore: prepare renki 0.0.5-rc.4 `b1136e5`
+- chore: close design round 202611222150-f0cy `1827b77`
+- chore: lock src changelist 202611222150-f0cy `5728d2c`
+- chore: lock doc changelist 202611222150-f0cy `b7892ab`
+- chore: close design round 202611222148-fm3h `1a1d368`
+- chore: lock src changelist 202611222148-fm3h `0e63730`
+- chore: lock doc changelist 202611222148-fm3h `3693dc7`
+- chore: ship `renki` as `0.0.5-rc.4` `2361d93`
+- chore: close design round 202611222147-x34l `32cb14c`
+- chore: lock src changelist 202611222147-x34l `9fa9e41`
+- chore: lock doc changelist 202611222147-x34l `b24b5b6`
+
+## 0.0.5-rc.4 (2026-11-23)
+
+### fix
+
+- fix: re-export the unit helpers to the tests only `c518dec`
+- fix: build each git revision from its own sources in the shared dir `15b1dd2`
+
+### docs
+
+- docs: add the source changelist for the unit re-export again `8a18bee`
+- docs: open a round for the unit re-export again `ce6daed`
+- docs: add the source changelist for the rc.4 readme `7df6201`
+- docs: pin rc.4 in the readme ahead of its release `8bddffd`
+- docs: open a round for the readme ahead of rc.4 `4224afe`
+- docs: add the source changelist for the unit re-export `f4c6d03`
+- docs: open a round for the unit re-export the tests read `e41577f`
+
+### chore
+
+- chore: prepare renki 0.0.5-rc.4 `e6bf23e`
+- chore: prepare renki 0.0.5-rc.4 `b1136e5`
+- chore: close design round 202611222150-f0cy `1827b77`
+- chore: lock src changelist 202611222150-f0cy `5728d2c`
+- chore: lock doc changelist 202611222150-f0cy `b7892ab`
+- chore: close design round 202611222148-fm3h `1a1d368`
+- chore: lock src changelist 202611222148-fm3h `0e63730`
+- chore: lock doc changelist 202611222148-fm3h `3693dc7`
+- chore: ship `renki` as `0.0.5-rc.4` `2361d93`
+- chore: close design round 202611222147-x34l `32cb14c`
+- chore: lock src changelist 202611222147-x34l `9fa9e41`
+- chore: lock doc changelist 202611222147-x34l `b24b5b6`
+
 ## 0.0.5-rc.3 (2026-11-19)
 
 ### fix
