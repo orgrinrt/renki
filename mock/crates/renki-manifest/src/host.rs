@@ -15,10 +15,8 @@ use core::fmt;
 /// layers knows which one to look at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadRead<'p> {
-    /// `file` does not fit in the memory given. `need` is the size that memory
-    /// has to be for it to fit: for a [`Room`](crate::Room), its whole text,
-    /// the layers already read in it included, so a room of `need` bytes reads
-    /// it.
+    /// `file` does not fit in the memory given, or for a variable, its value.
+    /// `need` is the size that memory has to be for it to fit.
     Room {
         /// The file that does not fit.
         file: &'p CStr,
@@ -33,6 +31,12 @@ pub enum BadRead<'p> {
         call:  &'static str,
         /// What it set `errno` to, or for `posix_spawn` what it returned.
         errno: c_int,
+    },
+    /// `file` is no regular file: a directory, a FIFO, a device or a socket
+    /// named where a file was to be read.
+    NotAFile {
+        /// What was named.
+        file: &'p CStr,
     },
     /// `file` is not UTF-8 text from byte `at` on.
     NotText {
@@ -59,6 +63,9 @@ impl fmt::Display for BadRead<'_> {
                 file,
                 at,
             } => write!(f, "{file:?} is not UTF-8 from byte {at}"),
+            BadRead::NotAFile {
+                file,
+            } => write!(f, "{file:?} is not a regular file"),
         }
     }
 }
@@ -71,11 +78,15 @@ pub trait Host {
     /// Reads the whole file at `path` into `into` and answers how many bytes
     /// it holds. The size is known before a byte is read, so a file that does
     /// not fit is refused with [`BadRead::Room`] and nothing is read; a file
-    /// that grows past what it said while it is read is refused the same.
+    /// that grows past what it said while it is read is refused the same. It
+    /// is opened without blocking, and what is no regular file is refused
+    /// with [`BadRead::NotAFile`], so a FIFO is never waited on.
     fn read<'p>(path: &'p CStr, into: &mut [u8]) -> Result<usize, BadRead<'p>>;
 
     /// Calls `each` with the name of every entry of the directory at `dir`,
-    /// `.` and `..` left out, in the order the directory gives them.
+    /// `.` and `..` left out, in the order the directory gives them. A
+    /// listing the C library ends with an error is refused, after the entries
+    /// it gave, so no entry goes missing in silence.
     fn list<'p>(dir: &'p CStr, each: impl FnMut(&CStr)) -> Result<(), BadRead<'p>>;
 
     /// The canonical form of `path`, every link and every `.` and `..`
@@ -83,10 +94,11 @@ pub trait Host {
     /// longest path the system has, or it is refused with the size it needs.
     fn canonical<'p, 'b>(path: &'p CStr, into: &'b mut [u8]) -> Result<&'b CStr, BadRead<'p>>;
 
-    /// The value of the environment variable `name`, where it is set. It
-    /// borrows from the process's environment, which holds while nothing
-    /// sets a variable; reading a manifest sets none.
-    fn var(name: &CStr) -> Option<&'static [u8]>;
+    /// The value of the environment variable `name`, where it is set, copied
+    /// into `into`, or refused with [`BadRead::Room`] and the length it needs.
+    /// Nothing borrows the process's environment past the call, since a
+    /// thread of the program may set a variable while a manifest is read.
+    fn var<'n, 'b>(name: &'n CStr, into: &'b mut [u8]) -> Result<Option<&'b [u8]>, BadRead<'n>>;
 
     /// Runs `sh -c <command>` in the directory `dir` and answers its exit, or
     /// `None` where it ended with no exit, by a signal.

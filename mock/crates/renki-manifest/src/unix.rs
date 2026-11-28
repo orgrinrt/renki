@@ -18,27 +18,40 @@ use crate::{BadRead, Host};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unix;
 
-fn errno() -> c_int {
+/// Where the C library keeps this thread's `errno`.
+fn errno_slot() -> *mut c_int {
     #[cfg(target_os = "linux")]
-    // SAFETY: the C library's own thread-local errno, always readable.
+    // SAFETY: the C library's own thread-local errno, always there.
     unsafe {
-        *libc::__errno_location()
+        libc::__errno_location()
     }
     #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     // SAFETY: as above.
     unsafe {
-        *libc::__error()
+        libc::__error()
     }
     #[cfg(any(target_os = "openbsd", target_os = "netbsd"))]
     // SAFETY: as above.
     unsafe {
-        *libc::__errno()
+        libc::__errno()
     }
     #[cfg(target_os = "illumos")]
     // SAFETY: as above.
     unsafe {
-        *libc::___errno()
+        libc::___errno()
     }
+}
+
+fn errno() -> c_int {
+    // SAFETY: the slot is this thread's and always readable.
+    unsafe { *errno_slot() }
+}
+
+/// Sets `errno` to 0, for a call such as `readdir` that answers an error and
+/// the end alike and tells them apart only by `errno`.
+fn clear_errno() {
+    // SAFETY: the slot is this thread's and always writable.
+    unsafe { *errno_slot() = 0 }
 }
 
 fn os<'p>(file: &'p CStr, call: &'static str) -> BadRead<'p> {
@@ -49,15 +62,19 @@ fn os<'p>(file: &'p CStr, call: &'static str) -> BadRead<'p> {
     }
 }
 
-/// The size `fstat` gives the open file `fd`.
-fn size_of(fd: c_int) -> Result<usize, c_int> {
+/// What `fstat` says of the open file `fd`: its size, where it is a regular
+/// file, and `None` where it is anything else.
+fn regular_size(fd: c_int) -> Result<Option<usize>, c_int> {
     // SAFETY: `stat` is plain data, and all zeroes is a value of it.
     let mut st: libc::stat = unsafe { core::mem::zeroed() };
     // SAFETY: `fd` is open, and `st` is a `stat` this frame owns.
     if unsafe { libc::fstat(fd, &mut st) } < 0 {
         return Err(errno());
     }
-    Ok(usize::try_from(st.st_size).unwrap_or(usize::MAX))
+    if st.st_mode & libc::S_IFMT != libc::S_IFREG {
+        return Ok(None);
+    }
+    Ok(Some(usize::try_from(st.st_size).unwrap_or(usize::MAX)))
 }
 
 /// One `read` into `into`, retried on `EINTR`.
@@ -84,7 +101,11 @@ fn read_open<'p>(path: &'p CStr, fd: c_int, into: &mut [u8]) -> Result<usize, Ba
             errno,
         }
     };
-    let size = size_of(fd).map_err(|e| refused("fstat", e))?;
+    let Some(size) = regular_size(fd).map_err(|e| refused("fstat", e))? else {
+        return Err(BadRead::NotAFile {
+            file: path,
+        });
+    };
     if size > into.len() {
         return Err(BadRead::Room {
             file: path,
@@ -97,7 +118,9 @@ fn read_open<'p>(path: &'p CStr, fd: c_int, into: &mut [u8]) -> Result<usize, Ba
             // full: one more byte means it grew past what `fstat` said
             let mut probe = [0u8; 1];
             if read_some(fd, &mut probe).map_err(|e| refused("read", e))? > 0 {
-                let now = size_of(fd).map_err(|e| refused("fstat", e))?;
+                let now = regular_size(fd)
+                    .map_err(|e| refused("fstat", e))?
+                    .unwrap_or(0);
                 return Err(BadRead::Room {
                     file: path,
                     need: now.max(at + 1),
@@ -115,8 +138,15 @@ fn read_open<'p>(path: &'p CStr, fd: c_int, into: &mut [u8]) -> Result<usize, Ba
 
 impl Host for Unix {
     fn read<'p>(path: &'p CStr, into: &mut [u8]) -> Result<usize, BadRead<'p>> {
+        // without blocking, so a FIFO named like a layer answers at once and is
+        // refused by `fstat` below instead of waiting for a writer
         // SAFETY: `path` is NUL-terminated.
-        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+        let fd = unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
         if fd < 0 {
             return Err(os(path, "open"));
         }
@@ -132,10 +162,17 @@ impl Host for Unix {
         if handle.is_null() {
             return Err(os(dir, "opendir"));
         }
+        let mut ended = Ok(());
         loop {
+            // `readdir` answers null at the end and on an error alike, and
+            // sets `errno` only on the error
+            clear_errno();
             // SAFETY: `handle` is an open directory stream.
             let entry = unsafe { libc::readdir(handle) };
             if entry.is_null() {
+                if errno() != 0 {
+                    ended = Err(os(dir, "readdir"));
+                }
                 break;
             }
             // SAFETY: a non-null entry holds a NUL-terminated name that stays
@@ -147,7 +184,7 @@ impl Host for Unix {
         }
         // SAFETY: `handle` was opened above and is closed once, here.
         unsafe { libc::closedir(handle) };
-        Ok(())
+        ended
     }
 
     fn canonical<'p, 'b>(path: &'p CStr, into: &'b mut [u8]) -> Result<&'b CStr, BadRead<'p>> {
@@ -167,15 +204,24 @@ impl Host for Unix {
         CStr::from_bytes_until_nul(into).map_err(|_| os(path, "realpath"))
     }
 
-    fn var(name: &CStr) -> Option<&'static [u8]> {
+    fn var<'n, 'b>(name: &'n CStr, into: &'b mut [u8]) -> Result<Option<&'b [u8]>, BadRead<'n>> {
         // SAFETY: `name` is NUL-terminated.
         let value = unsafe { libc::getenv(name.as_ptr()) };
         if value.is_null() {
-            return None;
+            return Ok(None);
         }
         // SAFETY: a non-null answer is a NUL-terminated string in the
-        // environment block, which holds while nothing sets a variable.
-        Some(unsafe { CStr::from_ptr(value) }.to_bytes())
+        // environment block. It is copied out at once and nothing of it is
+        // kept, so no borrow of the block outlives this call.
+        let value = unsafe { CStr::from_ptr(value) }.to_bytes();
+        let Some(into) = into.get_mut(.. value.len()) else {
+            return Err(BadRead::Room {
+                file: name,
+                need: value.len(),
+            });
+        };
+        into.copy_from_slice(value);
+        Ok(Some(into))
     }
 
     #[cfg(feature = "processes")]
@@ -195,7 +241,9 @@ mod spawn {
     const DASH_C: &CStr = c"-c";
     // the directory is set by the shell itself, so no target needs a spawn
     // call to change it, which not every C library has
-    const WRAP: &CStr = c"cd -- \"$1\" && exec /bin/sh -c \"$2\"";
+    // a directory it cannot enter exits 125, which no predicate holds or fails
+    // on, and what the command prints goes to `/dev/null`, so no dump holds it
+    const WRAP: &CStr = c"cd -- \"$1\" || exit 125; exec /bin/sh -c \"$2\" >/dev/null";
     const ZERO: &CStr = c"sh";
 
     unsafe extern "C" {
