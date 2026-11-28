@@ -10,7 +10,7 @@
 //! and `hilavitkutin_str::Str`, which is a later unit; the markers sit above
 //! the item they cover, which is where rustfmt leaves them alone.
 
-use core::fmt;
+use core::fmt::{self, Write};
 
 use notko::{Maybe, Outcome};
 
@@ -118,6 +118,25 @@ impl<'d, St: Store> Predicates<'d, St> {
                 }
             }
         }
+        // then a loop, walking each definition in turn, its names depth first
+        // in the order written, answering no variable and running nothing
+        let quiet = |_: Predicate<'d>| Outcome::Ok(false);
+        for layer in layers.into_iter().filter_map(|l| {
+            match l {
+                Maybe::Is(l) => Some(l),
+                Maybe::Isnt => None,
+            }
+        }) {
+            for key in St::keys(layer.doc()) {
+                let Some(rest) = key.strip_prefix(PREDICATES) else {
+                    continue;
+                };
+                let name = rest.split_once('.').map_or(rest, |(name, _)| name);
+                if let Outcome::Err(e) = answer(name, &table, &quiet, Maybe::Isnt) {
+                    return Outcome::Err(e);
+                }
+            }
+        }
         Outcome::Ok(table)
     }
 
@@ -213,7 +232,30 @@ impl fmt::Display for BadPredicate<'_> {
                 )
             },
             BadPredicate::Value(var, value) => {
-                write!(f, "{var} is {value:?}, which is neither true nor false")
+                // the value as a TOML basic string, as the dump writes one
+                write!(f, "{var} is \"")?;
+                for c in value.chars() {
+                    match c {
+                        '"' => f.write_str("\\\"")?,
+                        '\\' => f.write_str("\\\\")?,
+                        '\n' => f.write_str("\\n")?,
+                        '\t' => f.write_str("\\t")?,
+                        '\r' => f.write_str("\\r")?,
+                        c if c < ' ' || c == '\u{7f}' => {
+                            // `\u{1f}` from the char itself, as `\u001F`
+                            let digits = c.escape_unicode().skip(3).take_while(|d| *d != '}');
+                            f.write_str("\\u")?;
+                            for _ in digits.clone().count() .. 4 {
+                                f.write_char('0')?;
+                            }
+                            for d in digits {
+                                f.write_char(d.to_ascii_uppercase())?;
+                            }
+                        },
+                        c => write!(f, "{c}")?,
+                    }
+                }
+                f.write_str("\", which is neither true nor false")
             },
             BadPredicate::Exit(command, Maybe::Is(code)) => {
                 write!(f, "`{command}` exited {code}, which is neither 0 nor 1")
@@ -254,21 +296,50 @@ struct Path<'p, 'd> {
 /// Whether the predicate `name` holds over `table` and the caller's
 /// `answers`. Evaluated now and never kept. Every name an `all` or `any`
 /// lists is answered, so a refusal anywhere in it is found whatever the
-/// others answer.
+/// others answer. The table was checked for a loop when it was read, so
+/// none is met here.
 // lint:allow(no-bare-string, no-bare-numeric, arvo-types-only) reason: a predicate's name and its truth. FIXME: port to Str and arvo's Bool.
 pub fn holds<'r, 'd: 'r, St: Store, A: Answers>(
     name: &'r str,
     table: &Predicates<'d, St>,
     answers: &'r A,
 ) -> Outcome<bool, BadPredicate<'r>> {
-    answer(name, table, answers, Maybe::Isnt)
+    let leaf = |p: Predicate<'r>| {
+        match p {
+            Predicate::Env(var) => {
+                match answers.var(var) {
+                    Maybe::Isnt => Outcome::Ok(false),
+                    Maybe::Is(value) => {
+                        match truthy(value) {
+                            Maybe::Is(b) => Outcome::Ok(b),
+                            Maybe::Isnt => Outcome::Err(BadPredicate::Value(var, value)),
+                        }
+                    },
+                }
+            },
+            Predicate::Shell(command) => {
+                match answers.exit(command) {
+                    Maybe::Is(0) => Outcome::Ok(true),
+                    Maybe::Is(1) => Outcome::Ok(false),
+                    other => Outcome::Err(BadPredicate::Exit(command, other)),
+                }
+            },
+            // `answer` walks the others itself
+            Predicate::Not(_) | Predicate::All(_) | Predicate::Any(_) => Outcome::Ok(false),
+        }
+    };
+    answer(name, table, &leaf, Maybe::Isnt)
 }
 
+/// The walk under `holds` and under the loop check: `name` answered over
+/// `table`, `leaf` answering a variable or a command, every name an `all` or
+/// `any` lists walked in the order written, and a name met again on the path
+/// that reached it refused as a loop, with the name that reached it.
 // lint:allow(no-bare-string, no-bare-numeric, arvo-types-only) reason: a predicate's name and its truth. FIXME: port to Str and arvo's Bool.
-fn answer<'r, 'd: 'r, St: Store, A: Answers>(
+fn answer<'r, 'd: 'r, St: Store, F: Fn(Predicate<'r>) -> Outcome<bool, BadPredicate<'r>>>(
     name: &'r str,
     table: &Predicates<'d, St>,
-    answers: &'r A,
+    leaf: &F,
     up: Maybe<&Path<'_, 'r>>,
 ) -> Outcome<bool, BadPredicate<'r>> {
     let mut at = up;
@@ -292,25 +363,8 @@ fn answer<'r, 'd: 'r, St: Store, A: Answers>(
         Outcome::Err(e) => return Outcome::Err(e),
     };
     match definition {
-        Predicate::Env(var) => {
-            match answers.var(var) {
-                Maybe::Isnt => Outcome::Ok(false),
-                Maybe::Is(value) => {
-                    match truthy(value) {
-                        Maybe::Is(b) => Outcome::Ok(b),
-                        Maybe::Isnt => Outcome::Err(BadPredicate::Value(var, value)),
-                    }
-                },
-            }
-        },
-        Predicate::Shell(command) => {
-            match answers.exit(command) {
-                Maybe::Is(0) => Outcome::Ok(true),
-                Maybe::Is(1) => Outcome::Ok(false),
-                other => Outcome::Err(BadPredicate::Exit(command, other)),
-            }
-        },
-        Predicate::Not(other) => answer(other, table, answers, Maybe::Is(&here)).map(|b| !b),
+        Predicate::Env(_) | Predicate::Shell(_) => leaf(definition),
+        Predicate::Not(other) => answer(other, table, leaf, Maybe::Is(&here)).map(|b| !b),
         Predicate::All(list) | Predicate::Any(list) => {
             let all = matches!(definition, Predicate::All(_));
             let mut result = all;
@@ -318,7 +372,7 @@ fn answer<'r, 'd: 'r, St: Store, A: Answers>(
                 let Literal::Str(other) = item else {
                     return Outcome::Err(BadPredicate::Malformed(name));
                 };
-                match answer(other, table, answers, Maybe::Is(&here)) {
+                match answer(other, table, leaf, Maybe::Is(&here)) {
                     Outcome::Ok(b) if all => result &= b,
                     Outcome::Ok(b) => result |= b,
                     Outcome::Err(e) => return Outcome::Err(e),

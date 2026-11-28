@@ -64,7 +64,7 @@ pub use layer::{BadLayer, LayerName, Order, Part, layer_of};
 pub use list::{ListValue, TextItems};
 pub use literal::{BadValue, Got, Literal};
 pub use merge::{BadMerge, Meet, Shape, meet};
-pub use meta::{Meta, glob_matches};
+pub use meta::{Meta, MetaList, glob_matches};
 pub use predicate::{Answers, BadPredicate, Predicate, Predicates, holds, truthy};
 pub use resolve::{
     BadConfig,

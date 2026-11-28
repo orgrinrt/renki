@@ -18,13 +18,8 @@ keywords = ["config", "manifest", "overlays", "toml", "layers"]
 include = ["src/**/*.rs", "tests/the_c_calls_on_this_host.rs", "tests/the_readme_tells_the_truth_about_the_package.rs", "tests/every_target_unix_names_builds.rs", "tests/writer/*/*", "tests/host/**", "README.md", "LICENSE"]
 
 [dependencies]
-# The rules a manifest is read by, and the parser it is read with. Neither
-# reaches `std` or an allocator.
-renki-config = { version = "0.0.2", path = "../renki-config" }
-# A git dependency until `tomlfuse-parse` is published, and renki-manifest
-# is not released while it stands.
-tomlfuse-parse = { version = "0.0.1-rc.1", git = "https://github.com/orgrinrt/tomlfuse", branch = "work/tomlfuse-parse" }
-serde = { version = "1", default-features = false }
+# `renki-config`, `tomlfuse-parse` and `serde` join these with the reading that
+# uses them; until then the first two are the tests' alone.
 
 # The C library, on the targets `Unix` has a row for and no other.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "illumos"))'.dependencies]
