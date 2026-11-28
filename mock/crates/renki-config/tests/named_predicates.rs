@@ -41,7 +41,7 @@ fn every_truthy_and_falsy_word_in_any_case_and_nothing_else() {
 fn the_table_reads_each_kind_of_definition() {
     let b = doc(BASE);
     let base = layer("app.toy", &b);
-    let table = Predicates::read(&base, Maybe::Isnt);
+    let table = Predicates::read(&base, Maybe::Isnt).unwrap();
     assert_eq!(
         table.get("cloud"),
         Outcome::Ok(Maybe::Is(Predicate::Env("CLOUD")))
@@ -69,7 +69,7 @@ fn the_table_reads_each_kind_of_definition() {
 fn an_env_predicate_holds_where_the_variable_is_truthy_and_refuses_another_value() {
     let b = doc(BASE);
     let base = layer("app.toy", &b);
-    let table = Predicates::read(&base, Maybe::Isnt);
+    let table = Predicates::read(&base, Maybe::Isnt).unwrap();
     assert_eq!(
         holds("cloud", &table, &said(&[("CLOUD", "yes")], &[])),
         Outcome::Ok(true)
@@ -97,7 +97,7 @@ fn an_env_predicate_holds_where_the_variable_is_truthy_and_refuses_another_value
 fn a_shell_predicate_holds_on_zero_not_on_one_and_refuses_any_other_exit() {
     let b = doc(BASE);
     let base = layer("app.toy", &b);
-    let table = Predicates::read(&base, Maybe::Isnt);
+    let table = Predicates::read(&base, Maybe::Isnt).unwrap();
     assert_eq!(
         holds("built", &table, &said(&[], &[("test -e built", 0)])),
         Outcome::Ok(true)
@@ -121,7 +121,7 @@ fn a_shell_predicate_holds_on_zero_not_on_one_and_refuses_any_other_exit() {
 fn not_all_and_any_combine_other_predicates_by_name() {
     let b = doc(BASE);
     let base = layer("app.toy", &b);
-    let table = Predicates::read(&base, Maybe::Isnt);
+    let table = Predicates::read(&base, Maybe::Isnt).unwrap();
     for (cloud, built, local, both, either) in [
         ("1", 0, false, true, true),
         ("1", 1, false, false, true),
@@ -151,13 +151,17 @@ fn not_all_and_any_combine_other_predicates_by_name() {
 
 #[test]
 fn a_name_the_table_does_not_define_is_refused_by_name() {
+    // named by a definition, it is refused when the table is read
     let b = doc("meta.predicates.a.not = \"b\"\n");
     let base = layer("app.toy", &b);
-    let table = Predicates::read(&base, Maybe::Isnt);
     assert_eq!(
-        holds("a", &table, &said(&[], &[])).err(),
+        Predicates::read(&base, Maybe::Isnt).err(),
         Maybe::Is(BadPredicate::Undefined("b"))
     );
+    // named by a use, it is refused when the use is answered
+    let b = doc("meta.predicates.a.not = \"b\"\nmeta.predicates.b.env = \"B\"\n");
+    let base = layer("app.toy", &b);
+    let table = Predicates::read(&base, Maybe::Isnt).unwrap();
     assert_eq!(
         holds("zed", &table, &said(&[], &[])).err(),
         Maybe::Is(BadPredicate::Undefined("zed"))
@@ -172,7 +176,7 @@ fn a_loop_among_not_all_and_any_is_refused_naming_it() {
          meta.predicates.c.not = \"a\"\nmeta.predicates.s.not = \"s\"\n",
     );
     let base = layer("app.toy", &b);
-    let table = Predicates::read(&base, Maybe::Isnt);
+    let table = Predicates::read(&base, Maybe::Isnt).unwrap();
     let none = said(&[], &[]);
     let e = holds("a", &table, &none).unwrap_err();
     assert_eq!(e, BadPredicate::Loop("a", "c"));
@@ -185,7 +189,7 @@ fn a_loop_among_not_all_and_any_is_refused_naming_it() {
     // the control: a name reached twice by two branches is no loop
     let b = doc("meta.predicates.x.env = \"X\"\nmeta.predicates.d.all = [\"x\", \"x\"]\n");
     let base = layer("app.toy", &b);
-    let table = Predicates::read(&base, Maybe::Isnt);
+    let table = Predicates::read(&base, Maybe::Isnt).unwrap();
     assert_eq!(
         holds("d", &table, &said(&[("X", "1")], &[])),
         Outcome::Ok(true)
@@ -200,7 +204,7 @@ fn the_table_is_read_from_the_base_and_defaults_and_never_from_an_overlay() {
         doc("meta.predicates.z.env = \"Z\"\n"),
     );
     let (defaults, base) = (layer("app.defaults.toy", &d), layer("app.toy", &b));
-    let table = Predicates::read(&base, Maybe::Is(&defaults));
+    let table = Predicates::read(&base, Maybe::Is(&defaults)).unwrap();
     let a = said(&[("X", "1"), ("Y", "1"), ("Z", "1")], &[]);
     assert_eq!(
         holds("x", &table, &a),
@@ -230,9 +234,8 @@ fn a_definition_of_no_known_kind_or_shape_is_refused_by_name() {
     ] {
         let b = doc(text);
         let base = layer("app.toy", &b);
-        let table = Predicates::read(&base, Maybe::Isnt);
         assert_eq!(
-            holds("p", &table, &said(&[("X", "1")], &[("true", 0)])).err(),
+            Predicates::read(&base, Maybe::Isnt).err(),
             Maybe::Is(BadPredicate::Malformed("p")),
             "{text}"
         );

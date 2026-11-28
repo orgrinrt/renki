@@ -63,12 +63,62 @@ impl<St: Store> fmt::Debug for Predicates<'_, St> {
 }
 
 impl<'d, St: Store> Predicates<'d, St> {
-    /// The table over the base and, where there is one, `defaults`.
-    pub const fn read(base: &'d Layer<'d, St>, defaults: Maybe<&'d Layer<'d, St>>) -> Self {
-        Predicates {
+    /// The table over the base and, where there is one, `defaults`, checked
+    /// whole: every definition either layer holds is read, whether anything
+    /// uses it or not, and one that is malformed, or a `Not`, `All` or `Any`
+    /// naming what the table does not define, is refused here.
+    pub fn read(
+        base: &'d Layer<'d, St>,
+        defaults: Maybe<&'d Layer<'d, St>>,
+    ) -> Outcome<Self, BadPredicate<'d>> {
+        let table = Predicates {
             base,
             defaults,
+        };
+        // a name a definition refers to must be one the table defines
+        let defined = |other| {
+            match table.get(other) {
+                Outcome::Ok(Maybe::Is(_)) => Outcome::Ok(()),
+                Outcome::Ok(Maybe::Isnt) => Outcome::Err(BadPredicate::Undefined(other)),
+                Outcome::Err(e) => Outcome::Err(e),
+            }
+        };
+        let layers = [Maybe::Is(base), defaults];
+        for layer in layers.into_iter().filter_map(|l| {
+            match l {
+                Maybe::Is(l) => Some(l),
+                Maybe::Isnt => None,
+            }
+        }) {
+            for key in St::keys(layer.doc()) {
+                let Some(rest) = key.strip_prefix(PREDICATES) else {
+                    continue;
+                };
+                let name = rest.split_once('.').map_or(rest, |(name, _)| name);
+                let named = match table.get(name) {
+                    Outcome::Ok(Maybe::Is(Predicate::Not(other))) => Maybe::Is(other),
+                    Outcome::Ok(Maybe::Is(Predicate::All(list) | Predicate::Any(list))) => {
+                        for item in St::items(list) {
+                            let Literal::Str(other) = item else {
+                                return Outcome::Err(BadPredicate::Malformed(name));
+                            };
+                            if let Outcome::Err(e) = defined(other) {
+                                return Outcome::Err(e);
+                            }
+                        }
+                        Maybe::Isnt
+                    },
+                    Outcome::Ok(_) => Maybe::Isnt,
+                    Outcome::Err(e) => return Outcome::Err(e),
+                };
+                if let Maybe::Is(other) = named
+                    && let Outcome::Err(e) = defined(other)
+                {
+                    return Outcome::Err(e);
+                }
+            }
         }
+        Outcome::Ok(table)
     }
 
     /// The definition of `name`, `Isnt` where neither layer defines it, or a

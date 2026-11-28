@@ -57,6 +57,7 @@ pub struct Meta<'d, St: Store> {
     defines:   Maybe<&'d str>,
     // lint:allow(no-bare-string) reason: a dotted key of the document. FIXME: port to Str.
     unheld:    Maybe<&'d str>,
+    mixed:     Maybe<BadLayer<'d>>,
     _store:    PhantomData<St>,
 }
 
@@ -107,6 +108,16 @@ impl<'d, St: Store> Meta<'d, St> {
             }
         }
         let replace = St::get(doc, REPLACE);
+        // the first list of keys or entries holding an item that is no string
+        let mut mixed = Maybe::Isnt;
+        for key in [INCLUDE, REPLACE, UNSET] {
+            if let Maybe::Is(Literal::List(list)) = St::get(doc, key)
+                && St::items(list).any(|item| !matches!(item, Literal::Str(_)))
+            {
+                mixed = Maybe::Is(BadLayer::MetaShape(key));
+                break;
+            }
+        }
         let mut unheld = Maybe::Isnt;
         if let Maybe::Is(Literal::List(list)) = replace {
             for item in St::items(list) {
@@ -128,6 +139,7 @@ impl<'d, St: Store> Meta<'d, St> {
             stray,
             defines,
             unheld,
+            mixed,
             _store: PhantomData,
         }
     }
@@ -170,7 +182,8 @@ impl<'d, St: Store> Meta<'d, St> {
     }
 
     /// The first thing wrong with this table, for a layer that is `at`: a
-    /// key that is none of the reader's, a key of the wrong shape, an order,
+    /// key that is none of the reader's, a key of the wrong shape, a list of
+    /// entries or keys holding an item that is no string, an order,
     /// an untracked list or a predicate in a layer above the base, a `when`
     /// on the base or on `defaults`, and a key `meta.replace` names that this
     /// layer does not hold.
@@ -193,6 +206,9 @@ impl<'d, St: Store> Meta<'d, St> {
                 return Maybe::Is(BadLayer::MetaShape(key));
             }
             i += 1;
+        }
+        if let Maybe::Is(bad) = self.mixed {
+            return Maybe::Is(bad);
         }
         if let Maybe::Is(l) = self.when
             && !matches!(l, Literal::Str(_))
@@ -225,7 +241,8 @@ impl<'d, St: Store> Meta<'d, St> {
 /// for any run of bytes and `?` for any one, neither crossing a `/`, and
 /// `[...]` for one byte of a set, `!` first negating it, `a-z` a range and a
 /// `]` first a member. There is no `**`; two stars are one. A `[` with no
-/// closing `]` is itself.
+/// closing `]` is itself. A `.` that begins the name or follows a `/` is
+/// matched by a `.` in the pattern alone, never by `*`, `?` or `[...]`.
 // lint:allow(no-bare-string, no-bare-numeric, arvo-types-only) reason: the caller's text and a predicate over it. FIXME: port to Str and arvo's Bool.
 pub fn glob_matches(pattern: &str, name: &str) -> bool {
     let (p, n) = (pattern.as_bytes(), name.as_bytes());
@@ -234,8 +251,11 @@ pub fn glob_matches(pattern: &str, name: &str) -> bool {
     // lint:allow(no-bare-numeric, arvo-types-only) reason: a scanner's own positions. FIXME: port to arvo.
     let mut back: Maybe<(usize, usize)> = Maybe::Isnt;
     while ni < n.len() {
+        // a `.` that begins a name is matched by a `.` in the pattern alone
+        let leading = n[ni] == b'.' && (ni == 0 || n[ni - 1] == b'/');
         let step = if pi < p.len() {
             match p[pi] {
+                b'*' | b'?' | b'[' if leading => Maybe::Isnt,
                 b'*' => {
                     back = Maybe::Is((pi, ni));
                     pi += 1;
