@@ -8,16 +8,20 @@ through the C library, the text goes into memory the caller gives, and TOML is
 read by `tomlfuse-parse`. A tool that only reads its manifest takes this crate
 and the contracts, and nothing of the launcher.
 
-Its reading implements the contracts' store, so it will speak notko and the
-stack's string and number types as `renki-config` does. Its reading, its store
-and its deserialiser wait, with the contracts' port, on those crates being on
-the registry; the host, the one unsafe module and the POSIX reader do not.
-The stack's bare-type lints read the crates that take notko or arvo. This
-crate takes neither until the stack's string and number crates are on the
-registry, so the lints read none of it now, and whether they should before
-then is a question open with the maintainer. The host does not take notko
-meanwhile: it speaks `core`'s `Result` and `Option` and the C library's
-integers.
+It takes notko, for the contracts' `Outcome` and `Maybe` its store answers in
+and for `notko::lend::Lend`, through which the room's shelves are lent, and
+no arvo. The stack's bare-type lints read the crates that take arvo, so they
+read none of this one: its strings and numbers are `core`'s, `&str`, `usize`
+and the C library's integers, and the host speaks `core`'s `Result` and
+`Option`. It does not wait on the stack's string and number crates.
+
+Its surface shows no type of another crate's trait signature. Where it
+implements a trait another crate owns, the bare types that signature fixes sit
+behind a trait or newtype of its own, so nothing public names them; no lint
+marker and no exemption stand in for that. The one such trait it would meet is
+`tomlfuse_parse::Visitor`, and it implements none: the TOML store reads
+through the parser's document view and hands the parser `()`, the visitor
+that wants nothing.
 
 ## Reading a manifest
 
@@ -45,20 +49,26 @@ other use takes.
 
 ## The room
 
-`Room<'r>` is the memory a read uses, borrowed from the caller as four
-slices: the text of every layer read, back to back; a decode shelf as long as
-the text; the nodes of `tomlfuse-parse`'s index, which is each document as it
-was read; and a path shelf, where the base's path and each joined include path
-are written with their terminating NUL for the host. `Rooms<TEXT, NODES>` owns
-the four in fixed arrays, on the stack or in a static, for a caller with no
+`Room<'r>` is the memory a read uses, four shelves the caller lends through
+`notko::lend::Lend`: the text of every layer read, back to back; a decode
+shelf as long as the text; the nodes of `tomlfuse-parse`'s index, which is
+each document as it was read; and a path shelf, where the base's path and each
+joined include path are written with their terminating NUL for the host.
+`Room::new` takes any lend of each, an array, a slice or storage of the
+caller's own, and the room holds what each lent. `Rooms<TEXT, NODES>` owns the
+four in fixed arrays, on the stack or in a static, for a caller with no
 allocator, and lends a `Room`. Every string a read hands out borrows from the
 room.
 
-The size of each file is known before its bytes are read, so a file that does
-not fit is refused with `BadRead::Room`, naming the file and the text and
-nodes the room needs; a caller with an allocator gives slices of that size and
-reads again. `tomlfuse_parse::nodes_for` answers how many nodes a text of a
-given length can need at most, so a room sized by it never runs out of nodes.
+A shelf that falls short is refused with `BadRead::Room`, naming the file,
+the shelf and the `notko::lend::Exhausted` it gave: how much it held and how
+much the read wanted. The size of each file is known before its bytes are
+read, so the text shelf's `wanted` is the whole need; the node shelf's is the
+parser's, one more than it held, the least the read is known to want.
+`tomlfuse_parse::nodes_for` answers how many nodes a text of a given length
+can need at most, so a caller with an allocator gives a text shelf of the
+`wanted` it was told and a node shelf of `nodes_for` of that, and the second
+read never runs out of nodes.
 A decoded TOML string is never longer than its source, since every escape
 decodes to at most its own length and a line-ending backslash removes bytes,
 so a decode shelf as long as the text never runs out either.
@@ -178,8 +188,10 @@ tool's typed settings, which reads them through the same documents.
 
 `Toml` is `renki_config::Store` over `tomlfuse-parse`, reading TOML 1.1.0.
 A document is the parser's index over the room's nodes, each node holding its
-key's span and its value's span, and the store keeps nothing of its own: a
-key, a shape and the keys a document holds are answered by the index's read
+key's span and its value's span, read with the visitor `()`, and the store
+keeps nothing of its own. A node shelf that falls short, the parser's
+`ErrorKind::Exhausted`, is refused as the room's `BadRead::Room` and not as a
+document's `<parser>` line. A key, a shape and the keys a document holds are answered by the index's read
 view, every value an array of tables holds as `name.0.field`. A string with an
 escape is decoded into the room's decode shelf when the document is read, by
 the parser's own decoding, and lent from there; one without is lent from the
@@ -275,7 +287,7 @@ reader cannot know them.
 Every line above has a fixture, but these:
 
 ```text
-<file> needs a room of <need> bytes
+<file>: the room's <shelf> shelf holds <had>, and the read wants at least <wanted>
 <dir>: no shell could be run there
 <file>:<line>: the predicate <name> runs a shell, which this build cannot
 <file>: its path holds a newline, which no line can name
