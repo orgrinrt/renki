@@ -33,10 +33,13 @@ use renki_config::{
     Rendered,
     Repo,
     Setting,
+    ShortShelf,
     Store,
+    StoreShelf,
     Text,
     User,
     Value,
+    Walk,
     choices,
     key_is_wellformed,
     misplaced_keys,
@@ -428,8 +431,8 @@ fn a_store_writes_one_key_and_keeps_every_other_byte() {
 
 #[test]
 fn a_document_that_is_not_one_is_refused_at_its_line() {
-    let mut index = [(); 4];
-    let e = Toy::parse("a = 1\nnot a line\n", &mut index)
+    let (mut index, mut spelling) = ([(); 4], [0u8; 16]);
+    let e = Toy::parse("a = 1\nnot a line\n", &mut (&mut index, &mut spelling))
         .unwrap()
         .unwrap_err();
     assert_eq!(e.line(), Maybe::Is(2));
@@ -438,49 +441,67 @@ fn a_document_that_is_not_one_is_refused_at_its_line() {
 }
 
 #[test]
-fn a_short_index_is_refused_with_its_numbers_apart_from_a_wrong_document() {
-    // the toy keeps one cell a key
-    let text = "a = 1\nb = 2\nc = 3\n";
-    let mut one = [(); 1];
-    assert_eq!(Toy::parse(text, &mut one).unwrap_err(), Exhausted {
-        wanted: 2,
-        had:    1,
-    });
-    let mut none: [(); 0] = [];
-    assert_eq!(Toy::parse(text, &mut none).unwrap_err(), Exhausted {
-        wanted: 1,
-        had:    0,
-    });
-    // the size it was told it wants at the least is not always the whole
-    // need, so a caller grows it until the text fits
-    let mut three = [(); 3];
-    let d = Toy::parse(text, &mut three).unwrap().unwrap();
+fn a_short_shelf_is_refused_naming_it_with_the_whole_need_apart_from_a_wrong_document() {
+    // the toy keeps one cell a key and spells each key with a newline after it
+    let text = "a = 1\nbb = 2\nc = 3\n";
+    let short = |cells: usize, bytes: usize| {
+        let (mut index, mut spelling) = (vec![(); cells], vec![0u8; bytes]);
+        Toy::parse(text, &mut (&mut index[..], &mut spelling[..]))
+            .map(|_| ())
+            .unwrap_err()
+    };
+    let refused = |shelf, wanted, had| {
+        ShortShelf::new(shelf, Exhausted {
+            wanted,
+            had,
+        })
+    };
+    assert_eq!(short(1, 64), refused(StoreShelf::Index, 3, 1));
+    assert_eq!(short(0, 64), refused(StoreShelf::Index, 3, 0));
+    assert_eq!(short(3, 5), refused(StoreShelf::Spelling, 7, 5));
+    // the whole need, given, is enough in one more read
+    let (mut index, mut spelling) = ([(); 3], [0u8; 7]);
+    let d = Toy::parse(text, &mut (&mut index, &mut spelling))
+        .unwrap()
+        .unwrap();
     assert_eq!(Toy::get(&d, "c"), Maybe::Is(Literal::Int(3)));
+    assert_eq!(short(1, 64).shelf(), StoreShelf::Index);
+    assert_eq!(short(1, 64).exhausted().wanted, 3);
 }
 
 #[test]
-fn any_lend_of_the_index_reads_a_document() {
-    struct Tail(Vec<()>);
-    impl Lend<()> for Tail {
-        fn lend(&mut self) -> &mut [()] {
+fn any_pair_of_lends_gives_a_store_its_shelves() {
+    struct Tail(Vec<u8>);
+    impl Lend<u8> for Tail {
+        fn lend(&mut self) -> &mut [u8] {
             &mut self.0[1 ..]
         }
     }
     let text = "a = 1\nb = [1, 2]\n";
-    let mut array = [(); 2];
-    let mut vec = vec![(); 2];
+    let (mut array, mut bytes) = ([(); 2], [0u8; 4]);
+    let (mut vec, mut spelled) = (vec![(); 2], vec![0u8; 4]);
     let mut slice: &mut [()] = vec.as_mut_slice();
-    let mut tail = Tail(vec![(); 3]);
+    let (mut more, mut tail) = ([(); 3], Tail(vec![0u8; 5]));
+    let mut first = (&mut array, &mut bytes);
+    let mut second = (&mut slice, &mut spelled[..]);
+    let mut third = (&mut more, &mut tail);
     let docs = [
-        Toy::parse(text, &mut array).unwrap().unwrap(),
-        Toy::parse(text, &mut slice).unwrap().unwrap(),
-        Toy::parse(text, &mut tail).unwrap().unwrap(),
+        Toy::parse(text, &mut first).unwrap().unwrap(),
+        Toy::parse(text, &mut second).unwrap().unwrap(),
+        Toy::parse(text, &mut third).unwrap().unwrap(),
     ];
     for d in &docs {
         assert_eq!(
             Toy::get(d, "b"),
             Maybe::Is(Literal::List(ToyList("[1, 2]")))
         );
+        // the keys a store hands out are walked through `Walk`, from what it spelled
+        let mut keys = Toy::keys(d);
+        let mut seen = Vec::new();
+        while let Maybe::Is(k) = keys.step() {
+            seen.push(k);
+        }
+        assert_eq!(seen, ["a", "b"]);
     }
 }
 

@@ -71,14 +71,17 @@ fn items<'a>(stack: &'a [Layer<'a, Toy>], key: &'a str) -> Vec<&'a str> {
     let Maybe::Is((_, Value::Run(run))) = winner(stack, key) else {
         panic!("{key} is no list over the stack");
     };
-    run.flat_map(<Toy as renki_config::Store>::items)
-        .map(|l| {
+    let mut out = Vec::new();
+    for list in run {
+        let mut items = <Toy as renki_config::Store>::items(list);
+        while let Maybe::Is(l) = renki_config::Walk::step(&mut items) {
             match l {
-                Literal::Str(s) => s,
+                Literal::Str(s) => out.push(s),
                 other => panic!("{other:?}"),
             }
-        })
-        .collect()
+        }
+    }
+    out
 }
 
 #[test]

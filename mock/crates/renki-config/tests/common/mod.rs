@@ -13,7 +13,7 @@
 
 use core::fmt;
 
-use notko::lend::{Exhausted, Lend};
+use notko::lend::Exhausted;
 use notko::{Maybe, Outcome};
 use renki_config::{
     Answers,
@@ -25,9 +25,13 @@ use renki_config::{
     Part,
     Rendered,
     Shape,
+    Shelves,
+    ShortShelf,
     Stack,
     Store,
+    StoreShelf,
     TextItems,
+    Walk,
     layer_of,
 };
 
@@ -35,7 +39,9 @@ pub struct Toy;
 
 #[derive(Debug)]
 pub struct ToyDoc<'t> {
-    text: &'t str,
+    text:    &'t str,
+    /// Every key, a line each, as the toy spelled them into its spelling shelf.
+    spelled: &'t str,
 }
 
 /// `key = value` lines, comments stripped, blank lines skipped.
@@ -78,30 +84,42 @@ impl Store for Toy {
     const EXTENSION: &'static str = "toy";
     const NAME: &'static str = "toy";
 
-    fn parse<'t, L: Lend<()> + ?Sized>(
+    fn parse<'t, S: Shelves<()> + ?Sized>(
         text: &'t str,
-        index: &'t mut L,
-    ) -> Outcome<Outcome<ToyDoc<'t>, BadDocument>, Exhausted> {
-        let had = index.lend().len();
-        let mut used = 0;
+        shelves: &'t mut S,
+    ) -> Outcome<Outcome<ToyDoc<'t>, BadDocument>, ShortShelf> {
+        let (index, spelling) = shelves.shelves();
         for (i, l) in text.lines().enumerate() {
             let l = l.split_once('#').map_or(l, |(a, _)| a).trim();
-            if l.is_empty() {
-                continue;
-            }
-            if !l.contains('=') {
+            if !l.is_empty() && !l.contains('=') {
                 return Outcome::Ok(Outcome::Err(BadDocument::at(Maybe::Is(i as u32 + 1))));
             }
-            if used == had {
-                return Outcome::Err(Exhausted {
-                    wanted: had + 1,
-                    had,
-                });
-            }
-            used += 1;
         }
+        // the whole need of both shelves, known once the text is read
+        let keys = lines(text).count();
+        let bytes: usize = lines(text).map(|(k, _)| k.len() + 1).sum();
+        let short = |shelf, wanted, had| {
+            ShortShelf::new(shelf, Exhausted {
+                wanted,
+                had,
+            })
+        };
+        if keys > index.len() {
+            return Outcome::Err(short(StoreShelf::Index, keys, index.len()));
+        }
+        if bytes > spelling.len() {
+            return Outcome::Err(short(StoreShelf::Spelling, bytes, spelling.len()));
+        }
+        let mut at = 0;
+        for (k, _) in lines(text) {
+            spelling[at .. at + k.len()].copy_from_slice(k.as_bytes());
+            spelling[at + k.len()] = b'\n';
+            at += k.len() + 1;
+        }
+        let spelled: &'t [u8] = &spelling[.. at];
         Outcome::Ok(Outcome::Ok(ToyDoc {
             text,
+            spelled: core::str::from_utf8(spelled).unwrap(),
         }))
     }
 
@@ -113,7 +131,7 @@ impl Store for Toy {
     }
 
     fn keys<'d>(doc: &'d ToyDoc<'_>) -> ToyKeys<'d> {
-        ToyKeys(Box::new(lines(doc.text).map(|(k, _)| k)))
+        ToyKeys(doc.spelled.lines())
     }
 
     fn items<'d>(list: Self::List<'d>) -> ToyItems<'d> {
@@ -170,21 +188,21 @@ impl Store for Toy {
     }
 }
 
-pub struct ToyKeys<'d>(Box<dyn Iterator<Item = &'d str> + 'd>);
-impl<'d> Iterator for ToyKeys<'d> {
+pub struct ToyKeys<'d>(core::str::Lines<'d>);
+impl<'d> Walk for ToyKeys<'d> {
     type Item = &'d str;
 
-    fn next(&mut self) -> Option<&'d str> {
-        self.0.next()
+    fn step(&mut self) -> Maybe<&'d str> {
+        self.0.next().into()
     }
 }
 
 pub struct ToyItems<'d>(TextItems<'d>);
-impl<'d> Iterator for ToyItems<'d> {
+impl<'d> Walk for ToyItems<'d> {
     type Item = Literal<'d, Toy>;
 
-    fn next(&mut self) -> Option<Literal<'d, Toy>> {
-        self.0.next().map(literal)
+    fn step(&mut self) -> Maybe<Literal<'d, Toy>> {
+        self.0.next().map(literal).into()
     }
 }
 
@@ -193,7 +211,9 @@ impl<'d> Iterator for ToyItems<'d> {
 /// takes no memory.
 pub fn doc(text: &str) -> ToyDoc<'_> {
     let index: &mut [()] = Box::leak(vec![(); text.lines().count()].into_boxed_slice());
-    Toy::parse(text, index).unwrap().unwrap()
+    let spelling: &mut [u8] = Box::leak(vec![0u8; text.len()].into_boxed_slice());
+    let shelves = Box::leak(Box::new((index, spelling)));
+    Toy::parse(text, shelves).unwrap().unwrap()
 }
 
 /// The part a file is of the manifest `app`, which every test names.
