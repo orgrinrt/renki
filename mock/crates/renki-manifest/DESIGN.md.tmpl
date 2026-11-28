@@ -96,13 +96,19 @@ one, `name.defaults.ext`, then lists the base's directory and keeps every file
 base and `defaults`, it reads `meta` first and follows `meta.overlays.include`:
 each entry relative to the file that names it, a directory where it ends in
 `/` (its files listed, the layers among them kept), else a glob matched with
-`renki_config::glob_matches` against the entries of its directory. A file an
-entry matches that is no layer of this manifest is refused by name. A
-directory entry naming no directory is refused, naming the entry and the
-file; a glob that matches nothing reads nothing. An entry is joined to its
-file's directory and resolved by the file system, a link and a `..` after it
-included, never as text. A path holding a newline is refused, since neither
-reader can name it on a line.
+`renki_config::glob_matches` against the entries of its directory. A name a
+glob matches that is no layer of this manifest, a directory among them, is
+refused by name; in a directory an entry lists, what is no layer is passed
+over. A layer that is no regular file is refused by name. A directory entry
+naming no directory is refused, naming the entry and the file; a glob that
+matches nothing, in a directory that is there or not, reads nothing. An entry
+is joined to its file's directory and resolved by the file system, a link and
+a `..` after it included, never as text, and a refusal names it as joined,
+which is what the manifest wrote. A path holding a newline is refused where a
+reader would read or name it: the base, an include entry, a name a glob
+matches and a layer's name, since neither reader can name it on a line; a
+name holding one that is no layer and that nothing names is passed over like
+any other.
 The `defaults` layer is read from beside the base only: its predicates decide
 which layers are read, so it is found before any include is followed, and one
 an include reaches is refused by name.
@@ -219,7 +225,8 @@ the same revision is what its Rust side pins.
 
 `posix/conformance/` holds one directory per fixture: the manifest's files
 with their layers, a `dump` file with the expected dump, or a `refused` file
-with the expected refusal's line. A fixture outside the POSIX subset holds
+with the expected refusal's line, which is the text both readers give. A
+fixture outside the POSIX subset holds
 both: the dump the Rust reader answers and the refusal the POSIX reader gives.
 A file of a fixture that is not TOML is kept as `<name>.toml.in` and copied to
 its name when the fixture is run, so the repository's TOML lint, which reads
