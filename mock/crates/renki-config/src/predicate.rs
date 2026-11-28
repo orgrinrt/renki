@@ -321,6 +321,10 @@ pub fn holds<'r, 'd: 'r, St: Store, A: Answers>(
                 match answers.exit(command) {
                     Maybe::Is(0) => Outcome::Ok(true),
                     Maybe::Is(1) => Outcome::Ok(false),
+                    // past 128 a shell says a signal ended the command: no exit
+                    Maybe::Is(code) if code > 128 => {
+                        Outcome::Err(BadPredicate::Exit(command, Maybe::Isnt))
+                    },
                     other => Outcome::Err(BadPredicate::Exit(command, other)),
                 }
             },
