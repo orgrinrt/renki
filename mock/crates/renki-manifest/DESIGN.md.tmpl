@@ -94,7 +94,9 @@ by that path, whatever `sh` the caller's `PATH` finds, so a predicate meets the
 same shell in either. Its standard output goes to `/dev/null` and its standard
 error is the reader's, in both readers, so what a predicate prints never
 reaches a dump. A directory the shell cannot enter exits 125, which a
-predicate neither holds nor fails on, so it is refused.
+predicate neither holds nor fails on, so it is refused. A shell that cannot
+be started or waited on at all is refused as `BadRead::Shell`, with the
+directory it was to run in, apart from a file that cannot be read.
 
 ## Finding the layers
 
@@ -270,10 +272,11 @@ or `a \u escape`, which the Rust reader reads. `BadRead::Os` keeps the C call
 and its `errno` for a caller that asks, and writes neither, since the POSIX
 reader cannot know them.
 
-Every line above has a fixture, but these, each held by a test of its own:
+Every line above has a fixture, but these:
 
 ```text
 <file> needs a room of <need> bytes
+<dir>: no shell could be run there
 <file>:<line>: the predicate <name> runs a shell, which this build cannot
 <file>: its path holds a newline, which no line can name
 the base: its path holds a newline, which no line can name
@@ -281,8 +284,9 @@ the base: its path holds a newline, which no line can name
 <file>: its directory holds a layer whose name holds a newline, which no line can name
 ```
 
-The room is the Rust reader's alone and the build without `processes` is
-too; a name holding a newline cannot be kept in every checkout of the
+The room is the Rust reader's alone, and so is a build without `processes`;
+their tests come with the reading. No fixture can take a shell away from both
+readers. A name holding a newline cannot be kept in every checkout of the
 fixtures, so a test writes each such tree itself.
 
 ## The POSIX reader
@@ -331,15 +335,19 @@ that pins it is red for the one that lacks it. The fixtures sit under
 
 The POSIX reader is run over the suite under `dash` and under `bash`, each
 where it is installed, and under every `awk` of `mawk`, `gawk`, the one true
-`awk` and `busybox awk` that is installed; at least one shell and one `awk`
-must be. An `env` predicate of a fixture never names a variable a shell reads
-itself, such as `LC_ALL`, since a shell would answer one before the reader
-does, and a fixture that sets one gives it a value every shell takes.
+`awk`, `busybox awk`, and the `awk` and `nawk` the path names, as macOS and the
+BSDs ship theirs, each program once; at least one shell and one `awk` must
+be, and the run names every pair it read the suite under. An `env` predicate
+of a fixture never names a variable a shell reads itself, since a shell would
+answer one before the reader does, with one exception: `LC_ALL` set to
+`POSIX`, which every shell takes and the reader hands back as it was, so the
+reader's own handling of it is pinned. A run of the suite under every pair a
+host has is kept in the repository's research.
 
 Every refusal of the table above has a fixture but those named there: each
 layer and include rule, each form outside the subset and each invalid one
-inside it, a directory that cannot be listed, by a permission the test takes
-away, and a file found that then cannot be read. Paths that hold a space
+inside it, a directory that cannot be listed and a file found that then
+cannot be read, each by a permission the test takes away. Paths that hold a space
 or a quote, an include through a link, and a dot file beside an include's
 glob have fixtures too, and so does each of the three ways the untracked
 check is skipped. One test holds every `Display` of the table to its line,
