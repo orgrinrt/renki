@@ -81,8 +81,13 @@ impl Store for Toy {
     type Keys<'d> = ToyKeys<'d>;
     type List<'d> = ToyList<'d>;
 
-    const EXTENSION: &'static str = "toy";
-    const NAME: &'static str = "toy";
+    fn name() -> &'static str {
+        "toy"
+    }
+
+    fn extension() -> &'static str {
+        "toy"
+    }
 
     fn parse<'t, S: Shelves<()> + ?Sized>(
         text: &'t str,

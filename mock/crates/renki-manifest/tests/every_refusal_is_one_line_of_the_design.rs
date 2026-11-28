@@ -320,7 +320,7 @@ fn instance(template: &str, text: &str) -> bool {
 fn fits(hole: &str, held: &str) -> bool {
     match hole {
         "<line>" | "<code>" | "<had>" | "<wanted>" => held.bytes().all(|b| b.is_ascii_digit()),
-        "<shelf>" => ["text", "decode", "node", "path"].contains(&held),
+        "<shelf>" => ["text", "spelling", "node", "path"].contains(&held),
         "<higher>" | "<lower>" => SHAPES.iter().any(|s| s.name() == held),
         "<got>" => GOTS.iter().any(|g| g.to_string() == held),
         "<form>" => FORMS.contains(&held),
