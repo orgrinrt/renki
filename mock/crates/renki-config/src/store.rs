@@ -119,11 +119,16 @@ pub trait Store: Sized + 'static {
     /// order.
     // lint:allow(no-bare-string) reason: a dotted key. FIXME: port to Str.
     fn shape(doc: &Self::Document<'_>, key: &str) -> Maybe<Shape>;
-    /// `text` with `key` set to `value`, written into `into`, everything else
-    /// kept byte for byte. A key not yet in the text is added where a reader
-    /// would look for it.
-    // lint:allow(no-bare-string) reason: the caller's file text and a dotted key. FIXME: port to Str.
-    fn set(text: &str, key: &str, value: Rendered<'_>, into: &mut impl fmt::Write) -> fmt::Result;
+    /// The text `doc` was parsed from with `key` set to `value`, written into
+    /// `into`, everything else kept byte for byte. A key not yet in the text is
+    /// added where a reader would look for it.
+    // lint:allow(no-bare-string) reason: a dotted key. FIXME: port to Str.
+    fn set(
+        doc: &Self::Document<'_>,
+        key: &str,
+        value: Rendered<'_>,
+        into: &mut impl fmt::Write,
+    ) -> fmt::Result;
 }
 
 /// Where a resolved value came from, highest precedence first.
