@@ -27,7 +27,7 @@ The host:
   `mawk`, so the run read the suite under each program once.
 
 What the four awks parted on before the reader was written to POSIX `awk`
-alone, as the run that found it showed: `busybox awk`'s `system()` answers 0
+alone, as a probe of each showed: `busybox awk`'s `system()` answers 0
 for a command a signal ended, where the other three answer 256 plus the
 signal; and `close()` of a command pipe answers three ways among the four,
 the one true `awk` 0 whatever the exit. The reader now reads a predicate's status from the
