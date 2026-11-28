@@ -1,0 +1,1 @@
+sub/app.secret.toml: the layer secret is tracked by git and must not be; git rm --cached sub/app.secret.toml

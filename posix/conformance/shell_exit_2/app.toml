@@ -1,0 +1,4 @@
+seen = ["base"]
+
+[meta.predicates.cloud]
+shell = "exit 2"

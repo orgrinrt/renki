@@ -1,0 +1,5 @@
+other = 1
+[server]
+host = "x"
+[server.tls]
+on = true

@@ -1,0 +1,5 @@
+seen = ["base"]
+
+[meta.predicates.cloud]
+env = "CLOUD"
+shell = "true"

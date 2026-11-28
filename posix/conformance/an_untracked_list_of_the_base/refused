@@ -1,0 +1,1 @@
+app.cloud.toml: the layer cloud is tracked by git and must not be; git rm --cached app.cloud.toml

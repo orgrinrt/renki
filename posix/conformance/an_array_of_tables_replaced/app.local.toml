@@ -1,0 +1,3 @@
+meta.replace = ["hook"]
+[[hook]]
+run = "test"

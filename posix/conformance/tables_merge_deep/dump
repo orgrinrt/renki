@@ -1,0 +1,4 @@
+server.host = "base"
+server.port = 8080
+server.tls.cert = "local.pem"
+server.tls.on = false

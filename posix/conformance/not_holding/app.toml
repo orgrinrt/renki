@@ -1,0 +1,7 @@
+seen = ["base"]
+
+[meta.predicates.cloud]
+not = "ci"
+
+[meta.predicates.ci]
+env = "CI"

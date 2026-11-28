@@ -1,0 +1,10 @@
+seen = ["base"]
+
+[meta.predicates.cloud]
+all = ["a", "b"]
+
+[meta.predicates.a]
+env = "A"
+
+[meta.predicates.b]
+env = "B"
