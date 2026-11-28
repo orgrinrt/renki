@@ -1,1 +1,1 @@
-app.cloud.toml:1: the predicate cloud is not one of env, shell, not, all or any of its shape
+app.toml:3: the predicate cloud is not one of env, shell, not, all or any of its shape
