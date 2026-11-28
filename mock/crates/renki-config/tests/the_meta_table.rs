@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{Toy, doc, part};
+use common::{Toy, ToyList, doc, part};
 use notko::Maybe;
 use renki_config::{BadLayer, Got, Literal, Meta, MetaList, glob_matches};
 
@@ -25,13 +25,16 @@ fn every_meta_key_is_read_out_of_its_layer() {
     let m = Meta::<Toy>::read(&d);
     assert_eq!(
         m.include(),
-        Maybe::Is(Literal::List("[\"more/\", \"*.toy\"]"))
+        Maybe::Is(Literal::List(ToyList("[\"more/\", \"*.toy\"]")))
     );
-    assert_eq!(m.order(), Maybe::Is(Literal::List("[\"*\"]")));
-    assert_eq!(m.untracked(), Maybe::Is(Literal::List("[\"local\"]")));
+    assert_eq!(m.order(), Maybe::Is(Literal::List(ToyList("[\"*\"]"))));
+    assert_eq!(
+        m.untracked(),
+        Maybe::Is(Literal::List(ToyList("[\"local\"]")))
+    );
     assert_eq!(m.when(), Maybe::Is("cloud"));
-    assert_eq!(m.replace(), Maybe::Is(Literal::List("[\"name\"]")));
-    assert_eq!(m.unset(), Maybe::Is(Literal::List("[\"skip\"]")));
+    assert_eq!(m.replace(), Maybe::Is(Literal::List(ToyList("[\"name\"]"))));
+    assert_eq!(m.unset(), Maybe::Is(Literal::List(ToyList("[\"skip\"]"))));
     // a layer with no meta has none of them
     let d = doc("name = \"x\"\n");
     let m = Meta::<Toy>::read(&d);

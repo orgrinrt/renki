@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{Said, Toy, doc, layer};
+use common::{Said, Toy, ToyList, doc, layer};
 use notko::{Maybe, Outcome};
 use renki_config::{BadPredicate, Kind, Predicate, PredicateName, Predicates, holds, truthy};
 
@@ -56,11 +56,11 @@ fn the_table_reads_each_kind_of_definition() {
     );
     assert_eq!(
         table.get("both"),
-        Outcome::Ok(Maybe::Is(Predicate::All("[\"cloud\", \"built\"]")))
+        Outcome::Ok(Maybe::Is(Predicate::All(ToyList("[\"cloud\", \"built\"]"))))
     );
     assert_eq!(
         table.get("either"),
-        Outcome::Ok(Maybe::Is(Predicate::Any("[\"cloud\", \"built\"]")))
+        Outcome::Ok(Maybe::Is(Predicate::Any(ToyList("[\"cloud\", \"built\"]"))))
     );
     assert_eq!(table.get("nope"), Outcome::Ok(Maybe::Isnt));
 }

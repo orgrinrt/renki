@@ -13,6 +13,7 @@
 
 use core::fmt;
 
+use notko::lend::{Exhausted, Lend};
 use notko::{Maybe, Outcome};
 use renki_config::{
     Answers,
@@ -45,7 +46,12 @@ fn lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
         .filter_map(|l| l.split_once('=').map(|(k, v)| (k.trim(), v.trim())))
 }
 
-fn literal(raw: &str) -> Literal<'_> {
+/// The toy store's handle on a list: the list's own text, which only the toy
+/// store reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToyList<'d>(pub &'d str);
+
+fn literal(raw: &str) -> Literal<'_, Toy> {
     if raw == "true" {
         Literal::Bool(true)
     } else if raw == "false" {
@@ -53,33 +59,53 @@ fn literal(raw: &str) -> Literal<'_> {
     } else if let Ok(i) = raw.parse::<i64>() {
         Literal::Int(i)
     } else if raw.starts_with('[') {
-        Literal::List(raw)
+        Literal::List(ToyList(raw))
     } else {
         Literal::Str(raw.trim_matches('"'))
     }
 }
 
 impl Store for Toy {
+    /// One cell a key, holding nothing: the toy reads its text again for
+    /// every question, and counts its keys against the index only so the
+    /// contract's refusal of a short one is exercised.
+    type Cell = ();
     type Document<'t> = ToyDoc<'t>;
     type Items<'d> = ToyItems<'d>;
     type Keys<'d> = ToyKeys<'d>;
+    type List<'d> = ToyList<'d>;
 
     const EXTENSION: &'static str = "toy";
     const NAME: &'static str = "toy";
 
-    fn parse<'t>(text: &'t str) -> Outcome<ToyDoc<'t>, BadDocument> {
+    fn parse<'t, L: Lend<()> + ?Sized>(
+        text: &'t str,
+        index: &'t mut L,
+    ) -> Outcome<Outcome<ToyDoc<'t>, BadDocument>, Exhausted> {
+        let had = index.lend().len();
+        let mut used = 0;
         for (i, l) in text.lines().enumerate() {
             let l = l.split_once('#').map_or(l, |(a, _)| a).trim();
-            if !l.is_empty() && !l.contains('=') {
-                return Outcome::Err(BadDocument::at(Maybe::Is(i as u32 + 1)));
+            if l.is_empty() {
+                continue;
             }
+            if !l.contains('=') {
+                return Outcome::Ok(Outcome::Err(BadDocument::at(Maybe::Is(i as u32 + 1))));
+            }
+            if used == had {
+                return Outcome::Err(Exhausted {
+                    wanted: had + 1,
+                    had,
+                });
+            }
+            used += 1;
         }
-        Outcome::Ok(ToyDoc {
+        Outcome::Ok(Outcome::Ok(ToyDoc {
             text,
-        })
+        }))
     }
 
-    fn get<'d>(doc: &'d ToyDoc<'_>, key: &str) -> Maybe<Literal<'d>> {
+    fn get<'d>(doc: &'d ToyDoc<'_>, key: &str) -> Maybe<Literal<'d, Toy>> {
         match lines(doc.text).find(|(k, _)| *k == key) {
             Some((_, v)) => Maybe::Is(literal(v)),
             None => Maybe::Isnt,
@@ -90,8 +116,8 @@ impl Store for Toy {
         ToyKeys(Box::new(lines(doc.text).map(|(k, _)| k)))
     }
 
-    fn items<'d>(list: &'d str) -> ToyItems<'d> {
-        ToyItems(TextItems::over(list).unwrap())
+    fn items<'d>(list: ToyList<'d>) -> ToyItems<'d> {
+        ToyItems(TextItems::over(list.0).unwrap())
     }
 
     fn shape(doc: &ToyDoc<'_>, key: &str) -> Maybe<Shape> {
@@ -155,15 +181,19 @@ impl<'d> Iterator for ToyKeys<'d> {
 
 pub struct ToyItems<'d>(TextItems<'d>);
 impl<'d> Iterator for ToyItems<'d> {
-    type Item = Literal<'d>;
+    type Item = Literal<'d, Toy>;
 
-    fn next(&mut self) -> Option<Literal<'d>> {
+    fn next(&mut self) -> Option<Literal<'d, Toy>> {
         self.0.next().map(literal)
     }
 }
 
+/// A document the test knows to be one, over an index of a cell a line,
+/// which is never short for the toy. The cells hold nothing, so leaking them
+/// takes no memory.
 pub fn doc(text: &str) -> ToyDoc<'_> {
-    Toy::parse(text).unwrap()
+    let index: &mut [()] = Box::leak(vec![(); text.lines().count()].into_boxed_slice());
+    Toy::parse(text, index).unwrap().unwrap()
 }
 
 /// The part a file is of the manifest `app`, which every test names.

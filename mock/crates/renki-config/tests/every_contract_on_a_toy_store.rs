@@ -11,7 +11,8 @@
 
 mod common;
 
-use common::{Cli, Toy, ToyDoc, doc, layer, sound};
+use common::{Cli, Toy, ToyDoc, ToyList, doc, layer, sound};
+use notko::lend::{Exhausted, Lend};
 use notko::{Maybe, Outcome};
 use renki_config::{
     BadDocument,
@@ -135,7 +136,7 @@ fn every_kind_reads_its_literal_and_refuses_another_shape_by_name() {
     );
     assert_eq!(Text::from_literal::<Toy>(Literal::Str("a")).unwrap(), "a");
     assert_eq!(
-        Text::from_literal::<Toy>(Literal::List("[]"))
+        Text::from_literal::<Toy>(Literal::List(ToyList("[]")))
             .unwrap_err()
             .got(),
         Got::List
@@ -198,7 +199,7 @@ fn a_list_parses_item_by_item_from_text_and_from_a_store() {
     assert_eq!(ints.next().unwrap().unwrap_err().got(), Got::Text("x"));
     assert_eq!(ints.next().unwrap().unwrap(), 3);
     // and from a store's literal, through the store's own walk
-    let items: Vec<i64> = List::<Int>::from_literal::<Toy>(Literal::List("[4, 5]"))
+    let items: Vec<i64> = List::<Int>::from_literal::<Toy>(Literal::List(ToyList("[4, 5]")))
         .unwrap()
         .map(|i| i.unwrap())
         .collect();
@@ -427,10 +428,60 @@ fn a_store_writes_one_key_and_keeps_every_other_byte() {
 
 #[test]
 fn a_document_that_is_not_one_is_refused_at_its_line() {
-    let e = Toy::parse("a = 1\nnot a line\n").unwrap_err();
+    let mut index = [(); 4];
+    let e = Toy::parse("a = 1\nnot a line\n", &mut index)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(e.line(), Maybe::Is(2));
     assert_eq!(e.to_string(), "not a document, at line 2");
     assert_eq!(BadDocument::at(Maybe::Isnt).to_string(), "not a document");
+}
+
+#[test]
+fn a_short_index_is_refused_with_its_numbers_apart_from_a_wrong_document() {
+    // the toy keeps one cell a key
+    let text = "a = 1\nb = 2\nc = 3\n";
+    let mut one = [(); 1];
+    assert_eq!(Toy::parse(text, &mut one).unwrap_err(), Exhausted {
+        wanted: 2,
+        had:    1,
+    });
+    let mut none: [(); 0] = [];
+    assert_eq!(Toy::parse(text, &mut none).unwrap_err(), Exhausted {
+        wanted: 1,
+        had:    0,
+    });
+    // the size it was told it wants at the least is not always the whole
+    // need, so a caller grows it until the text fits
+    let mut three = [(); 3];
+    let d = Toy::parse(text, &mut three).unwrap().unwrap();
+    assert_eq!(Toy::get(&d, "c"), Maybe::Is(Literal::Int(3)));
+}
+
+#[test]
+fn any_lend_of_the_index_reads_a_document() {
+    struct Tail(Vec<()>);
+    impl Lend<()> for Tail {
+        fn lend(&mut self) -> &mut [()] {
+            &mut self.0[1 ..]
+        }
+    }
+    let text = "a = 1\nb = [1, 2]\n";
+    let mut array = [(); 2];
+    let mut vec = vec![(); 2];
+    let mut slice: &mut [()] = vec.as_mut_slice();
+    let mut tail = Tail(vec![(); 3]);
+    let docs = [
+        Toy::parse(text, &mut array).unwrap().unwrap(),
+        Toy::parse(text, &mut slice).unwrap().unwrap(),
+        Toy::parse(text, &mut tail).unwrap().unwrap(),
+    ];
+    for d in &docs {
+        assert_eq!(
+            Toy::get(d, "b"),
+            Maybe::Is(Literal::List(ToyList("[1, 2]")))
+        );
+    }
 }
 
 #[test]
