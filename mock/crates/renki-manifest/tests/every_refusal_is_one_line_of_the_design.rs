@@ -17,8 +17,9 @@ use std::ffi::CStr;
 use std::fs;
 
 use common::{Fixture, suite};
+use notko::lend::Exhausted;
 use renki_config::{BadLayer, BadMerge, BadPredicate, Got, MetaList, Shape};
-use renki_manifest::BadRead;
+use renki_manifest::{BadRead, Shelf};
 use tomlfuse_parse::{Node, Options, Version, nodes_for, parse};
 
 const CONTRACTS: &str = "../renki-config/DESIGN.md.tmpl";
@@ -239,7 +240,7 @@ fn host_line(e: &BadRead<'_>) -> &'static str {
     match e {
         BadRead::Room {
             ..
-        } => "<file> needs a room of <need> bytes",
+        } => "<file>: the room's <shelf> shelf holds <had>, and the read wants at least <wanted>",
         BadRead::Os {
             ..
         } => "<file> cannot be read",
@@ -259,7 +260,11 @@ fn every_display_of_the_host_is_its_line_of_the_table() {
     for e in [
         BadRead::Room {
             file,
-            need: 7,
+            shelf: Shelf::Text,
+            exhausted: Exhausted {
+                wanted: 7,
+                had:    3,
+            },
         },
         BadRead::Os {
             file,
@@ -281,7 +286,9 @@ fn every_display_of_the_host_is_its_line_of_the_table() {
             "{line} is no line of the reader's table"
         );
         let filled = fill(line)
-            .replace("<need>", "7")
+            .replace("<shelf>", "text")
+            .replace("<had>", "3")
+            .replace("<wanted>", "7")
             .replace("<dir>", "app.x.toml");
         assert_eq!(e.to_string(), filled, "{e:?}");
     }
@@ -312,7 +319,8 @@ fn instance(template: &str, text: &str) -> bool {
 /// Whether `held` may stand for the placeholder `hole`.
 fn fits(hole: &str, held: &str) -> bool {
     match hole {
-        "<line>" | "<code>" | "<need>" => held.bytes().all(|b| b.is_ascii_digit()),
+        "<line>" | "<code>" | "<had>" | "<wanted>" => held.bytes().all(|b| b.is_ascii_digit()),
+        "<shelf>" => ["text", "decode", "node", "path"].contains(&held),
         "<higher>" | "<lower>" => SHAPES.iter().any(|s| s.name() == held),
         "<got>" => GOTS.iter().any(|g| g.to_string() == held),
         "<form>" => FORMS.contains(&held),
@@ -333,7 +341,12 @@ fn parser_refusals(fixture: &Fixture) -> Vec<String> {
         }
         let bytes = fs::read(&path).expect("a fixture's file is read");
         let mut nodes = vec![Node::EMPTY; nodes_for(bytes.len())];
-        if let Err(e) = parse(&bytes, Options::new(Version::V1_1_0), &mut nodes, &mut ()) {
+        if let Err(e) = parse(
+            &bytes,
+            Options::new(Version::V1_1_0),
+            &mut nodes[..],
+            &mut (),
+        ) {
             let line = 1 + bytes[.. e.at.min(bytes.len())]
                 .iter()
                 .filter(|b| **b == b'\n')

@@ -10,7 +10,9 @@
 
 use core::ffi::CStr;
 
-use renki_manifest::{BadRead, Host, Unix};
+use notko::lend::Exhausted;
+use notko::{Maybe, Outcome};
+use renki_manifest::{BadRead, Host, Shelf, Unix};
 
 const ELEVEN: &CStr = c"tests/host/eleven_bytes";
 const LISTED: &CStr = c"tests/host/listed";
@@ -49,9 +51,13 @@ fn fstat_answers_the_size_before_a_byte_is_read_so_a_short_buffer_is_told_what_i
     let mut into = [0u8; 4];
     assert_eq!(
         Unix::read(ELEVEN, &mut into),
-        Err(BadRead::Room {
-            file: ELEVEN,
-            need: 11,
+        Outcome::Err(BadRead::Room {
+            file:      ELEVEN,
+            shelf:     Shelf::Text,
+            exhausted: Exhausted {
+                wanted: 11,
+                had:    4,
+            },
         })
     );
     assert_eq!(
@@ -59,7 +65,7 @@ fn fstat_answers_the_size_before_a_byte_is_read_so_a_short_buffer_is_told_what_i
         "nothing is read into a buffer that is refused"
     );
     let mut exact = [0u8; 11];
-    assert_eq!(Unix::read(ELEVEN, &mut exact), Ok(11));
+    assert_eq!(Unix::read(ELEVEN, &mut exact), Outcome::Ok(11));
 }
 
 #[test]
@@ -67,7 +73,7 @@ fn open_refuses_a_missing_file_with_its_errno() {
     let mut into = [0u8; 8];
     assert_eq!(
         Unix::read(MISSING, &mut into),
-        Err(BadRead::Os {
+        Outcome::Err(BadRead::Os {
             file:  MISSING,
             call:  "open",
             errno: libc::ENOENT,
@@ -79,7 +85,7 @@ fn open_refuses_a_missing_file_with_its_errno() {
 fn close_gives_every_descriptor_back_so_reads_outlast_the_descriptor_limit() {
     let mut into = [0u8; 16];
     for _ in 0 .. past_the_descriptor_limit() {
-        assert_eq!(Unix::read(ELEVEN, &mut into), Ok(11));
+        assert_eq!(Unix::read(ELEVEN, &mut into), Outcome::Ok(11));
     }
 }
 
@@ -104,7 +110,7 @@ fn opendir_and_readdir_list_every_entry_but_dot_and_dot_dot() {
 fn opendir_refuses_a_missing_directory_and_closedir_gives_every_handle_back() {
     assert_eq!(
         Unix::list(MISSING, |_| {}),
-        Err(BadRead::Os {
+        Outcome::Err(BadRead::Os {
             file:  MISSING,
             call:  "opendir",
             errno: libc::ENOENT,
@@ -123,7 +129,7 @@ fn realpath_resolves_dots_into_the_buffer_given() {
     assert_eq!(got.to_bytes(), want.as_os_str().as_encoded_bytes());
     assert_eq!(
         Unix::canonical(MISSING, &mut into),
-        Err(BadRead::Os {
+        Outcome::Err(BadRead::Os {
             file:  MISSING,
             call:  "realpath",
             errno: libc::ENOENT,
@@ -136,9 +142,13 @@ fn realpath_refuses_a_buffer_shorter_than_the_longest_path_with_the_size_it_need
     let mut into = [0u8; 8];
     assert_eq!(
         Unix::canonical(ELEVEN, &mut into),
-        Err(BadRead::Room {
-            file: ELEVEN,
-            need: libc::PATH_MAX as usize,
+        Outcome::Err(BadRead::Room {
+            file:      ELEVEN,
+            shelf:     Shelf::Path,
+            exhausted: Exhausted {
+                wanted: libc::PATH_MAX as usize,
+                had:    8,
+            },
         })
     );
 }
@@ -148,11 +158,11 @@ fn getenv_copies_a_set_variable_and_answers_nothing_for_an_unset_one() {
     let path = std::env::var_os("PATH").expect("a test runs with a PATH");
     let path = path.as_encoded_bytes();
     let mut into = vec![0u8; path.len()];
-    assert_eq!(Unix::var(c"PATH", &mut into), Ok(Some(path)));
+    assert_eq!(Unix::var(c"PATH", &mut into), Outcome::Ok(Maybe::Is(path)));
     let mut none = [0u8; 0];
     assert_eq!(
         Unix::var(c"RENKI_MANIFEST_NO_SUCH_VARIABLE", &mut none),
-        Ok(None)
+        Outcome::Ok(Maybe::Isnt)
     );
 }
 
@@ -162,9 +172,13 @@ fn getenv_refuses_a_buffer_too_short_for_the_value_with_the_size_it_needs() {
     let mut short = vec![0u8; path.len() - 1];
     assert_eq!(
         Unix::var(c"PATH", &mut short),
-        Err(BadRead::Room {
-            file: c"PATH",
-            need: path.len(),
+        Outcome::Err(BadRead::Room {
+            file:      c"PATH",
+            shelf:     Shelf::Path,
+            exhausted: Exhausted {
+                wanted: path.len(),
+                had:    path.len() - 1,
+            },
         })
     );
 }
@@ -188,7 +202,7 @@ fn a_directory_given_as_a_file_is_refused_as_no_regular_file() {
     let mut into = [0u8; 8192];
     assert_eq!(
         Unix::read(LISTED, &mut into),
-        Err(BadRead::NotAFile {
+        Outcome::Err(BadRead::NotAFile {
             file: LISTED,
         })
     );
@@ -196,7 +210,7 @@ fn a_directory_given_as_a_file_is_refused_as_no_regular_file() {
     let mut small = [0u8; 4];
     assert_eq!(
         Unix::read(LISTED, &mut small),
-        Err(BadRead::NotAFile {
+        Outcome::Err(BadRead::NotAFile {
             file: LISTED,
         })
     );
@@ -215,7 +229,10 @@ fn a_fifo_named_like_a_layer_is_refused_and_never_waited_on() {
     let (send, got) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut into = [0u8; 64];
-        let refused = matches!(Unix::read(&path, &mut into), Err(BadRead::NotAFile { .. }));
+        let refused = matches!(
+            Unix::read(&path, &mut into),
+            Outcome::Err(BadRead::NotAFile { .. })
+        );
         send.send(refused).unwrap();
     });
     let answer = got.recv_timeout(std::time::Duration::from_secs(5));
@@ -235,9 +252,13 @@ fn a_file_that_holds_more_than_fstat_said_is_refused_with_more_room() {
     let mut none = [0u8; 0];
     assert_eq!(
         Unix::read(status, &mut none),
-        Err(BadRead::Room {
-            file: status,
-            need: 1,
+        Outcome::Err(BadRead::Room {
+            file:      status,
+            shelf:     Shelf::Text,
+            exhausted: Exhausted {
+                wanted: 1,
+                had:    0,
+            },
         })
     );
 }
@@ -290,7 +311,7 @@ fn a_listing_readdir_ends_with_an_error_is_refused_after_the_entries_it_gave() {
     assert!(seen >= 1, "the entries before the error were given");
     assert_eq!(
         got,
-        Err(BadRead::Os {
+        Outcome::Err(BadRead::Os {
             file:  &path,
             call:  "readdir",
             errno: libc::ENOTDIR,
@@ -305,28 +326,31 @@ mod spawned {
 
     #[test]
     fn posix_spawn_and_waitpid_answer_the_exit_of_the_command() {
-        assert_eq!(Unix::shell(LISTED, c"exit 0"), Ok(Some(0)));
-        assert_eq!(Unix::shell(LISTED, c"exit 1"), Ok(Some(1)));
-        assert_eq!(Unix::shell(LISTED, c"exit 2"), Ok(Some(2)));
+        assert_eq!(Unix::shell(LISTED, c"exit 0"), Outcome::Ok(Maybe::Is(0)));
+        assert_eq!(Unix::shell(LISTED, c"exit 1"), Outcome::Ok(Maybe::Is(1)));
+        assert_eq!(Unix::shell(LISTED, c"exit 2"), Outcome::Ok(Maybe::Is(2)));
     }
 
     #[test]
     fn the_command_runs_in_the_directory_given() {
         assert_eq!(
             Unix::shell(LISTED, c"test -f one && test -f three"),
-            Ok(Some(0))
+            Outcome::Ok(Maybe::Is(0))
         );
-        assert_eq!(Unix::shell(c"tests/host", c"test -f one"), Ok(Some(1)));
+        assert_eq!(
+            Unix::shell(c"tests/host", c"test -f one"),
+            Outcome::Ok(Maybe::Is(1))
+        );
     }
 
     #[test]
     fn a_command_ended_by_a_signal_has_no_exit() {
-        assert_eq!(Unix::shell(LISTED, c"kill -9 $$"), Ok(None));
+        assert_eq!(Unix::shell(LISTED, c"kill -9 $$"), Outcome::Ok(Maybe::Isnt));
     }
 
     #[test]
     fn a_directory_that_is_not_there_is_the_wrapper_s_failure_and_not_a_hang() {
-        let Ok(Some(exit)) = Unix::shell(MISSING, c"exit 0") else {
+        let Outcome::Ok(Maybe::Is(exit)) = Unix::shell(MISSING, c"exit 0") else {
             panic!("the wrapper ran and answered");
         };
         assert_ne!(exit, 0);
@@ -334,7 +358,7 @@ mod spawned {
 
     #[test]
     fn a_directory_the_shell_cannot_enter_exits_125() {
-        assert_eq!(Unix::shell(MISSING, c"exit 0"), Ok(Some(125)));
+        assert_eq!(Unix::shell(MISSING, c"exit 0"), Outcome::Ok(Maybe::Is(125)));
     }
 
     #[cfg(target_os = "linux")]
@@ -342,12 +366,12 @@ mod spawned {
     fn what_a_command_prints_goes_to_dev_null() {
         assert_eq!(
             Unix::shell(LISTED, c"test \"$(readlink /proc/$$/fd/1)\" = /dev/null"),
-            Ok(Some(0))
+            Outcome::Ok(Maybe::Is(0))
         );
         // the control: its standard error is still the reader's
         assert_eq!(
             Unix::shell(LISTED, c"test \"$(readlink /proc/$$/fd/2)\" != /dev/null"),
-            Ok(Some(0))
+            Outcome::Ok(Maybe::Is(0))
         );
     }
 }
