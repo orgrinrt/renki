@@ -116,7 +116,7 @@ impl Store for Toy {
         ToyKeys(Box::new(lines(doc.text).map(|(k, _)| k)))
     }
 
-    fn items<'d>(list: ToyList<'d>) -> ToyItems<'d> {
+    fn items<'d>(list: Self::List<'d>) -> ToyItems<'d> {
         ToyItems(TextItems::over(list.0).unwrap())
     }
 
