@@ -116,12 +116,15 @@ a directory where it ends in `/`, relative to the file that names it),
 `local`, `secret` and `private`), `when` (a predicate's name), `predicates`,
 `replace` and `unset` (dotted keys of this layer). `Meta::defect` refuses a
 `meta` key that is none of these, an `order`, `untracked` or `predicates` in a
-layer above the base, and a `when` on the base or on `defaults`, each by name.
+layer above the base, a `when` on the base or on `defaults`, and an item of
+`include`, `replace` or `unset` that is not a string, each by name.
 `unknown_keys` and the resolver never see a key under `meta`.
 
 `glob_matches` is the one glob rule both readers keep: `*`, `?` and `[...]`
 within one path segment, with `!` negating a bracket, which is the POSIX
-shell's pattern rule, and no `**`.
+shell's pattern rule, and no `**`. As in that rule, none of `*`, `?` and
+`[...]` matches a `.` that begins a name, so a hidden file beside an
+include's glob, an editor's swap file among them, is never matched.
 
 ## Merging
 
@@ -165,7 +168,11 @@ over a stack `Stack::new` answered, `stacked` refuses nothing.
 variable's name, `Shell` over a command, and `Not`, `All` and `Any` over other
 predicates' names. `Predicates<'d, St>` is the table read from the base and
 `defaults`, the two layers always read, so no predicate depends on a layer it
-decides; a definition in an overlay is refused by name.
+decides; a definition in an overlay is refused by name. The table is checked
+whole when it is read, whether anything uses a definition or not: one that
+holds no kind, two kinds, or a kind over a value of the wrong shape, and a
+`Not`, `All` or `Any` naming what the table does not define, is refused then,
+by name.
 
 `Answers` is what only the caller can give: a variable's value, and a shell
 command's exit, run in the manifest's directory. `holds` evaluates a name over

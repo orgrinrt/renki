@@ -8,11 +8,14 @@ through the C library, the text goes into memory the caller gives, and TOML is
 read by `tomlfuse-parse`. A tool that only reads its manifest takes this crate
 and the contracts, and nothing of the launcher.
 
-It implements the contracts' store, so it speaks notko and the stack's string
-and number types as `renki-config` does, and passes the stack's lints with no
-marker. Its reading, its store and its deserialiser wait, with the contracts'
-port, on those crates being on the registry; the host, the one unsafe module
-and the POSIX reader do not.
+Its reading implements the contracts' store, so it will speak notko and the
+stack's string and number types as `renki-config` does. Its reading, its store
+and its deserialiser wait, with the contracts' port, on those crates being on
+the registry; the host, the one unsafe module and the POSIX reader do not.
+Until the stack is on the registry the crate is outside the reach of the
+stack's bare-type lints, which read no crate of it, and nothing in it is
+called passing them: the host speaks `core`'s `Result` and `Option` and the C
+library's integers, and is ported with the rest.
 
 ## Reading a manifest
 
@@ -62,16 +65,28 @@ so a decode shelf as long as the text never runs out either.
 
 `Host` is the i/o a read needs, one trait over the operating system: read a
 whole file into the room, list a directory's entries, resolve a path to its
-canonical form into a buffer, read one environment variable, and, with the
-feature `processes`, run `sh -c <command>` in a directory and answer its exit.
-Every path it takes is a NUL-terminated one from the room's path shelf, and a
-`BadRead` names the file by its place there. `Unix` implements it
-over the C library through the `libc` crate with its default features off,
-for linux, macOS, freebsd, netbsd, openbsd and illumos; a target with no
-implementation does not build. A shell runs in its directory through a
-wrapping `sh -c 'cd -- "$1" && exec sh -c "$2"'`, so no target needs a
-spawn call some C libraries lack. Every `unsafe` block of the crate is in
-this module.
+canonical form into a buffer, copy one environment variable's value into
+memory the caller gives, and, with the feature `processes`, run
+`sh -c <command>` in a directory and answer its exit. Every path it takes is
+a NUL-terminated one from the room's path shelf, and a `BadRead` names the
+file by its place there. `Unix` implements it over the C library through the
+`libc` crate with its default features off, for linux, macOS, freebsd,
+netbsd, openbsd and illumos; a target with no implementation does not build.
+Every `unsafe` block of the crate is in this module.
+
+A file is opened without blocking and refused with `BadRead::NotAFile` unless
+it is a regular file, so a directory or a FIFO named like a layer is refused
+and never read or waited on. A directory listing the C library ends with an
+error is refused, so no layer goes missing in silence. A variable's value is
+copied, never borrowed from the process's environment, which a thread of the
+program may change while a manifest is read.
+
+A shell runs in its directory through a wrapping
+`sh -c 'cd -- "$1" || exit 125; exec sh -c "$2" >/dev/null'`, so no target
+needs a spawn call some C libraries lack. Its standard output goes to
+`/dev/null` and its standard error is the reader's, in both readers, so what a
+predicate prints never reaches a dump. A directory the shell cannot enter
+exits 125, which a predicate neither holds nor fails on, so it is refused.
 
 ## Finding the layers
 
@@ -82,7 +97,12 @@ base and `defaults`, it reads `meta` first and follows `meta.overlays.include`:
 each entry relative to the file that names it, a directory where it ends in
 `/` (its files listed, the layers among them kept), else a glob matched with
 `renki_config::glob_matches` against the entries of its directory. A file an
-entry matches that is no layer of this manifest is refused by name.
+entry matches that is no layer of this manifest is refused by name. A
+directory entry naming no directory is refused, naming the entry and the
+file; a glob that matches nothing reads nothing. An entry is joined to its
+file's directory and resolved by the file system, a link and a `..` after it
+included, never as text. A path holding a newline is refused, since neither
+reader can name it on a line.
 The `defaults` layer is read from beside the base only: its predicates decide
 which layers are read, so it is found before any include is followed, and one
 an include reaches is refused by name.
@@ -92,11 +112,15 @@ not read, and its includes are not followed. A file reached twice, by any
 path, is read once, by its canonical path, so an include cycle ends by itself.
 Two files carrying one layer word are refused, naming both. The layers then
 take their places by `renki_config::Order`, lowest first: `defaults`, the
-base, the rest by `Order::rank`.
+base, the rest by `Order::rank`. Every layer found takes a place, read or not,
+so a layer the order has no place for is refused whether or not its
+`meta.when` holds.
 
 A layer in `meta.overlays.untracked` is checked against git where the
-manifest's directory is in a work tree, once per file: one that git tracks is
-refused, naming the file and saying `git rm --cached <file>`. The check is
+manifest's directory is in a work tree, once per file, for every layer found,
+read or not, since a tracked secret is tracked whatever decides its reading:
+one that git tracks is refused, naming the file and saying
+`git rm --cached <file>`. The check is
 `git ls-files --error-unmatch -- <file>` through the host's shell. Nothing is
 written to `.gitignore`. Git is no requirement of reading a manifest: where the
 directory is in no work tree, where no `git` is on the path, or where `git`
@@ -174,7 +198,8 @@ Under `posix/` at the repository's root, beside the crates, and reading
 nothing outside it: `posix/manifest.sh`, a library of POSIX `sh` to source,
 and the `awk` it runs. It answers `dump <file>` and `get <file> <key>` in the
 dump's bytes, and applies the same layers, include rule, order, merge, meta
-and predicates.
+and predicates. A `shell` predicate runs its command on every `dump` and
+`get` that reads a use of it, as the Rust reader does; nothing is kept.
 
 It reads a stated subset of TOML and refuses, with file and line, anything
 outside it, so it reads a manifest right or says it cannot. In: comments,
@@ -182,7 +207,9 @@ trailing ones included; `[table]`, `[dotted.table]` and `[[array.of.tables]]`
 headers; bare and dotted keys; basic strings with `\"`, `\\`, `\n` and `\t`;
 literal strings; integers; booleans; arrays of those, on one line or several.
 Out: multi-line strings, inline tables, nested arrays, quoted keys, floats,
-dates and times, and `\u` escapes.
+dates and times, and `\u` escapes. What is not TOML inside the subset's own
+forms is refused the same: a control byte in a string or a comment, and bytes
+that are no UTF-8.
 
 A consumer that cannot link Rust adds the repository as a git submodule at a
 pinned revision, checks out `posix/` alone, and sources `posix/manifest.sh`;
@@ -194,17 +221,27 @@ the same revision is what its Rust side pins.
 with their layers, a `dump` file with the expected dump, or a `refused` file
 with the expected refusal's line. A fixture outside the POSIX subset holds
 both: the dump the Rust reader answers and the refusal the POSIX reader gives.
-One test of this crate runs every fixture through `Manifest::dump` and through
-`posix/manifest.sh`, and compares each with what the fixture holds. Each
-reader is checked against the fixture, and both against the same bytes, so a
-behaviour lands in both readers or the fixture that pins it is red for the
-one that lacks it. The fixtures sit under `posix/` so a consumer's sparse
-checkout carries them too.
+A file of a fixture that is not TOML is kept as `<name>.toml.in` and copied to
+its name when the fixture is run, so the repository's TOML lint, which reads
+every `*.toml`, never meets it. One test of this crate runs every fixture
+through `Manifest::dump` and through `posix/manifest.sh`, and compares each
+with what the fixture holds. Each reader is checked against the fixture, and
+both against the same bytes, so a behaviour lands in both readers or the
+fixture that pins it is red for the one that lacks it. The fixtures sit under
+`posix/` so a consumer's sparse checkout carries them too.
+
+Every refusal either reader gives has a fixture: each layer and include rule,
+each form outside the subset and each invalid one inside it. Paths that hold a
+space or a quote, an include through a link, and a dot file beside an include's
+glob have fixtures too, and so does each of the three ways the untracked check
+is skipped. A broken copy of the POSIX reader, run over the suite, turns it
+red, which shows the suite can fail.
 
 Both readers evaluate the same predicate kinds, `env`, `shell`, `not`, `all`
 and `any`, and the suite holds a fixture for each: one where it holds and one
 where it does not, `env` with each truthy and falsy word and a refused one.
-The `shell` fixtures run through the Rust reader where `processes` is on; the POSIX reader runs them always, through the same `sh -c`.
+The `shell` fixtures run through the Rust reader where `processes` is on; the
+POSIX reader runs them always, through the same `sh -c`.
 
 TOML itself is held by `tomlfuse-parse`'s own run of the toml-test suite;
-this crate's suite holds the layers, not the syntax.
+this crate's suite holds the layers and the POSIX reader's subset.
