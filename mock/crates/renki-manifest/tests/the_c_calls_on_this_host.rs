@@ -255,6 +255,35 @@ fn readdir_lists_every_entry_of_a_large_directory_then_ends() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_listing_readdir_ends_with_an_error_is_refused_after_the_entries_it_gave() {
+    // `/proc/<pid>/fd` answers the next read of its entries with `ENOENT`
+    // once the process is gone, which is an error `readdir` ends a listing on
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let dir = std::ffi::CString::new(format!("/proc/{}/fd", child.id())).unwrap();
+    let mut seen = 0;
+    let got = Unix::list(&dir, |_| {
+        if seen == 0 {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        seen += 1;
+    });
+    assert!(seen >= 1, "the entries before the error were given");
+    assert_eq!(
+        got,
+        Err(BadRead::Os {
+            file:  &dir,
+            call:  "readdir",
+            errno: libc::ENOENT,
+        })
+    );
+}
+
 #[cfg(feature = "processes")]
 mod spawned {
     use super::*;

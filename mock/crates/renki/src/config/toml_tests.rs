@@ -245,3 +245,19 @@ fn every_shape_a_key_can_hold_is_told_apart() {
     }
     assert_eq!(Toml::shape(&d, "nope"), Maybe::Isnt);
 }
+
+#[test]
+fn an_inline_array_is_an_array_of_tables_only_where_every_item_is_an_inline_table() {
+    let d = doc(concat!(
+        "first_a_table = [{ run = \"a\" }, 2]\n",
+        "first_a_value = [2, { run = \"a\" }]\n",
+        "all_tables = [{ run = \"a\" }, { run = \"b\" }]\n",
+    ));
+    for (key, shape) in [
+        ("first_a_table", Shape::List),
+        ("first_a_value", Shape::List),
+        ("all_tables", Shape::Tables),
+    ] {
+        assert_eq!(Toml::shape(&d, key), Maybe::Is(shape), "{key}");
+    }
+}

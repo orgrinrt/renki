@@ -10,30 +10,58 @@ mod common;
 
 use common::{Toy, doc, part};
 use notko::Maybe;
-use renki_config::{BadLayer, Meta, glob_matches};
+use renki_config::{BadLayer, Got, Meta, glob_matches};
 
 fn defect(text: &str) -> Maybe<BadLayer<'_>> {
     let d = Box::leak(Box::new(doc(text)));
     Meta::<Toy>::read(d).defect(part("app.local.toy"))
 }
 
+fn defect_in<'t>(text: &'t str, file: &str) -> Maybe<BadLayer<'t>> {
+    let d = Box::leak(Box::new(doc(text)));
+    Meta::<Toy>::read(d).defect(part(file))
+}
+
 #[test]
-fn an_item_of_include_replace_or_unset_that_is_not_a_string_is_refused_by_name() {
-    for (text, key) in [
+fn an_item_of_include_replace_or_unset_that_is_not_a_string_is_refused_naming_what_it_holds() {
+    for (text, want) in [
         (
             "meta.overlays.include = [\"a/\", 1]\n",
-            "meta.overlays.include",
+            BadLayer::NotAString("meta.overlays.include", Got::Int),
         ),
-        ("meta.replace = [true]\n", "meta.replace"),
-        ("meta.unset = [\"port\", 2]\nport = 1\n", "meta.unset"),
+        (
+            "meta.replace = [true]\n",
+            BadLayer::NotAString("meta.replace", Got::Bool),
+        ),
+        (
+            "meta.unset = [\"port\", 2]\nport = 1\n",
+            BadLayer::NotAString("meta.unset", Got::Int),
+        ),
     ] {
-        assert_eq!(defect(text), Maybe::Is(BadLayer::MetaShape(key)), "{text}");
+        assert_eq!(defect(text), Maybe::Is(want), "{text}");
     }
     // the control: lists of strings only stand
     assert_eq!(
         defect("meta.overlays.include = [\"a/\"]\nmeta.unset = [\"port\"]\n"),
         Maybe::Isnt
     );
+}
+
+#[test]
+fn an_item_of_untracked_that_is_not_a_string_is_refused_as_no_word() {
+    for file in ["app.toy", "app.defaults.toy"] {
+        assert_eq!(
+            defect_in("meta.overlays.untracked = [\"local\", true]\n", file),
+            Maybe::Is(BadLayer::NotAWord("meta.overlays.untracked", Got::Bool)),
+            "{file}"
+        );
+        // the control: words only stand
+        assert_eq!(
+            defect_in("meta.overlays.untracked = [\"local\"]\n", file),
+            Maybe::Isnt,
+            "{file}"
+        );
+    }
 }
 
 #[test]

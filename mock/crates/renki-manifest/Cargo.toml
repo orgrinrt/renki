@@ -34,3 +34,11 @@ libc = { version = "0.2", default-features = false }
 # Spawning a process: a predicate answered by `sh -c` and the untracked-layer
 # check through git. Off by default; the launcher turns it on.
 processes = []
+
+[dev-dependencies]
+# The design's refusals are held to the contracts' `Display` and to the
+# parser's own words for a document that is no TOML.
+renki-config = { path = "../renki-config" }
+tomlfuse-parse = { git = "https://github.com/orgrinrt/tomlfuse", branch = "work/tomlfuse-parse" }
+# A plain test run takes the shell too, so its tests run without asking.
+renki-manifest = { path = ".", features = ["processes"] }

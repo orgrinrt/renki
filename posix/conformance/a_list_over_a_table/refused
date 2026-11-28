@@ -1,1 +1,1 @@
-app.local.toml:1: a list at a over a table in app.toml:1 does not merge; name the key in meta.replace to replace it
+app.local.toml:1: a list of values at a over a table in app.toml does not merge; name the key in meta.replace to replace it

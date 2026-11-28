@@ -1,1 +1,1 @@
-app.toml:3: t is defined twice
+app.toml:3: a table defined twice
