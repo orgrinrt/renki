@@ -1,1 +1,1 @@
-app.cloud.toml:1: the predicate a is reached again from b, a loop
+app.toml:9: the predicate a is reached again from b, a loop

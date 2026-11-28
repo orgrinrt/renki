@@ -108,12 +108,12 @@ fn a_shell_predicate_holds_on_zero_not_on_one_and_refuses_any_other_exit() {
     );
     let answers = said(&[], &[("test -e built", 2)]);
     let e = holds("built", &table, &answers).unwrap_err();
-    assert_eq!(e, BadPredicate::Exit("test -e built", Maybe::Is(2)));
+    assert_eq!(e, BadPredicate::Exit("test -e built", 2));
     assert!(e.to_string().contains("test -e built") && e.to_string().contains('2'));
     // a command that did not start is refused the same, with no exit
     assert_eq!(
         holds("built", &table, &said(&[], &[])).err(),
-        Maybe::Is(BadPredicate::Exit("test -e built", Maybe::Isnt))
+        Maybe::Is(BadPredicate::NoExit("test -e built"))
     );
 }
 
@@ -170,21 +170,32 @@ fn a_name_the_table_does_not_define_is_refused_by_name() {
 }
 
 #[test]
-fn a_loop_among_not_all_and_any_is_refused_naming_it() {
+fn a_loop_among_not_all_and_any_is_refused_when_the_table_is_read_used_or_not() {
     let b = doc(
         "meta.predicates.a.all = [\"b\"]\nmeta.predicates.b.any = [\"c\"]\n\
-         meta.predicates.c.not = \"a\"\nmeta.predicates.s.not = \"s\"\n",
+         meta.predicates.c.not = \"a\"\n",
     );
     let base = layer("app.toy", &b);
-    let table = Predicates::read(&base, Maybe::Isnt).unwrap();
-    let none = said(&[], &[]);
-    let e = holds("a", &table, &none).unwrap_err();
+    let e = Predicates::read(&base, Maybe::Isnt).unwrap_err();
     assert_eq!(e, BadPredicate::Loop("a", "c"));
     let shown = e.to_string();
     assert!(shown.contains("a") && shown.contains("c"), "{shown}");
+    let b = doc("meta.predicates.s.not = \"s\"\n");
+    let base = layer("app.toy", &b);
     assert_eq!(
-        holds("s", &table, &said(&[], &[])).err(),
+        Predicates::read(&base, Maybe::Isnt).err(),
         Maybe::Is(BadPredicate::Loop("s", "s"))
+    );
+    // a loop through defaults, which nothing uses, is refused all the same,
+    // the base's definitions walked first
+    let (d, b) = (
+        doc("meta.predicates.y.not = \"x\"\n"),
+        doc("meta.predicates.x.any = [\"y\"]\nmeta.predicates.used.env = \"U\"\n"),
+    );
+    let (defaults, base) = (layer("app.defaults.toy", &d), layer("app.toy", &b));
+    assert_eq!(
+        Predicates::read(&base, Maybe::Is(&defaults)).err(),
+        Maybe::Is(BadPredicate::Loop("x", "y"))
     );
     // the control: a name reached twice by two branches is no loop
     let b = doc("meta.predicates.x.env = \"X\"\nmeta.predicates.d.all = [\"x\", \"x\"]\n");
@@ -259,4 +270,18 @@ fn a_predicate_name_is_text_that_can_name_one() {
         "cloud"
     );
     assert!(PredicateName::from_literal::<Toy>(renki_config::Literal::Int(1)).is_err());
+}
+
+#[test]
+fn a_refused_value_is_written_as_a_basic_string_as_the_dump_writes_one() {
+    let e = BadPredicate::Value("V", "a\"b\\c\nd\te\rf\u{1}g\u{7f}h\u{e9}");
+    assert_eq!(
+        e.to_string(),
+        "V is \"a\\\"b\\\\c\\nd\\te\\rf\\u0001g\\u007Fh\u{e9}\", which is neither true nor false"
+    );
+    // the control: plain text is only quoted
+    assert_eq!(
+        BadPredicate::Value("CLOUD", "maybe").to_string(),
+        "CLOUD is \"maybe\", which is neither true nor false"
+    );
 }

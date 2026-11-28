@@ -51,12 +51,6 @@ fn a_meta_key_that_is_none_of_renkis_is_refused_by_name_in_every_layer() {
             Maybe::Is(BadLayer::UnknownMeta("meta.overlays.orders")),
             "{file}"
         );
-        let d = doc("meta = 1\n");
-        assert_eq!(
-            defect(&d, file),
-            Maybe::Is(BadLayer::UnknownMeta("meta")),
-            "{file}"
-        );
     }
     let d = doc("meta.colour = \"red\"\n");
     assert!(
@@ -139,6 +133,28 @@ fn a_meta_key_of_the_wrong_shape_is_refused_by_name() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn a_meta_overlays_or_predicates_that_is_no_table_is_of_the_wrong_shape_in_every_layer() {
+    // each is a key of the reader's, so what is wrong is its value, not its name
+    for (text, key) in [
+        ("meta = 1\n", "meta"),
+        ("meta.overlays = \"x\"\n", "meta.overlays"),
+        ("meta.predicates = [\"a\"]\n", "meta.predicates"),
+    ] {
+        for file in ["app.toy", "app.defaults.toy", "app.local.toy"] {
+            let d = doc(text);
+            assert_eq!(
+                defect(&d, file),
+                Maybe::Is(BadLayer::MetaShape(key)),
+                "{text} in {file}"
+            );
+        }
+    }
+    // the control: tables under them stand
+    let d = doc("meta.overlays.order = [\"*\"]\nmeta.predicates.a.env = \"A\"\n");
+    assert_eq!(defect(&d, "app.toy"), Maybe::Isnt);
 }
 
 trait OrEmpty {

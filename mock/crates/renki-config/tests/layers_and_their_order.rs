@@ -164,7 +164,10 @@ fn an_order_naming_defaults_or_base_a_word_twice_or_two_stars_is_refused_when_re
             BadLayer::OrderTwice("local"),
         ),
         ("[\"*\", \"local\", \"*\"]", BadLayer::OrderTwice("*")),
-        ("[\"*\", 3]", BadLayer::OrderItem(Got::Int)),
+        (
+            "[\"*\", 3]",
+            BadLayer::NotAWord("meta.overlays.order", Got::Int),
+        ),
     ] {
         let line = format!("meta.overlays.order = {text}\n");
         let base = doc(&line);

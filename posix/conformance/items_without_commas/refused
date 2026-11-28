@@ -1,1 +1,1 @@
-app.toml:1: the items of an array are not separated by commas
+app.toml:1: expected , or ]

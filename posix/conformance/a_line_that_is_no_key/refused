@@ -1,1 +1,1 @@
-app.toml:1: this line is no key, table header or comment
+app.toml:1: expected =

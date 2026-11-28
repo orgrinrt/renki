@@ -12,7 +12,7 @@ mod common;
 
 use common::{doc, layer};
 use notko::Maybe;
-use renki_config::{BadMerge, Shape, Stack};
+use renki_config::{BadMerge, Clash, Shape, Stack};
 
 #[test]
 fn an_unset_of_a_key_no_layer_holds_is_refused_for_a_reader_that_never_asks_it() {
@@ -27,14 +27,22 @@ fn a_shape_over_another_above_the_leaves_is_refused_for_a_reader_asking_only_lea
     let stack = [layer("app.toy", &b), layer("app.local.toy", &l)];
     assert_eq!(
         Stack::new(&stack).err(),
-        Maybe::Is(BadMerge::Shapes(Shape::Scalar, Shape::Table))
+        Maybe::Is(BadMerge::Shapes(
+            "server",
+            "app.toy",
+            Clash::new(Shape::Scalar, Shape::Table)
+        ))
     );
     // and a deeper one, the higher layer's leaf two tables below the clash
     let (b, l) = (doc("a.b = 1\n"), doc("a.b.c.d = 2\n"));
     let stack = [layer("app.toy", &b), layer("app.local.toy", &l)];
     assert_eq!(
         Stack::new(&stack).err(),
-        Maybe::Is(BadMerge::Shapes(Shape::Scalar, Shape::Table))
+        Maybe::Is(BadMerge::Shapes(
+            "a.b",
+            "app.toy",
+            Clash::new(Shape::Scalar, Shape::Table)
+        ))
     );
     // and one where no layer holds the key the shapes meet at, only keys
     // under it: a table under an array of tables
@@ -42,7 +50,11 @@ fn a_shape_over_another_above_the_leaves_is_refused_for_a_reader_asking_only_lea
     let stack = [layer("app.toy", &b), layer("app.local.toy", &l)];
     assert_eq!(
         Stack::new(&stack).err(),
-        Maybe::Is(BadMerge::Shapes(Shape::Table, Shape::Tables))
+        Maybe::Is(BadMerge::Shapes(
+            "hooks",
+            "app.toy",
+            Clash::new(Shape::Table, Shape::Tables)
+        ))
     );
 }
 

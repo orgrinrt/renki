@@ -1,1 +1,1 @@
-app.toml:1: 9223372036854775808 is outside the range of a 64-bit integer
+app.toml:1: an integer outside the 64-bit range
