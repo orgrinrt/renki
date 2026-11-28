@@ -29,11 +29,11 @@ pub enum BadRead<'p> {
     /// a caller that asks, and the `Display` writes neither, as the POSIX
     /// reader cannot know them.
     Os {
-        /// The file, or for a shell the directory it was to run in.
+        /// The file.
         file:  &'p CStr,
         /// The C function that refused.
         call:  &'static str,
-        /// What it set `errno` to, or for `posix_spawn` what it returned.
+        /// What it set `errno` to.
         errno: c_int,
     },
     /// `file` is no regular file: a directory, a FIFO, a device or a socket
@@ -41,6 +41,16 @@ pub enum BadRead<'p> {
     NotAFile {
         /// What was named.
         file: &'p CStr,
+    },
+    /// A shell could not be started in `dir`, or not waited on: `call` is
+    /// `posix_spawn` or `waitpid`, and `errno` what it answered.
+    Shell {
+        /// The directory the shell was to run in.
+        dir:   &'p CStr,
+        /// The C function that refused.
+        call:  &'static str,
+        /// What it answered.
+        errno: c_int,
     },
 }
 
@@ -78,6 +88,13 @@ impl fmt::Display for BadRead<'_> {
                 named(file, f)?;
                 f.write_str(" is not a regular file")
             },
+            BadRead::Shell {
+                dir,
+                ..
+            } => {
+                named(dir, f)?;
+                f.write_str(": no shell could be run there")
+            },
         }
     }
 }
@@ -114,8 +131,9 @@ pub trait Host {
     /// thread while another reads a manifest has that race.
     fn var<'n, 'b>(name: &'n CStr, into: &'b mut [u8]) -> Result<Option<&'b [u8]>, BadRead<'n>>;
 
-    /// Runs `sh -c <command>` in the directory `dir` and answers its exit, or
-    /// `None` where it ended with no exit, by a signal.
+    /// Runs `/bin/sh -c <command>` in the directory `dir` and answers its
+    /// exit, or `None` where it ended with no exit, by a signal, or
+    /// [`BadRead::Shell`] where no shell could be started or waited on.
     #[cfg(feature = "processes")]
     fn shell<'p>(dir: &'p CStr, command: &CStr) -> Result<Option<c_int>, BadRead<'p>>;
 }

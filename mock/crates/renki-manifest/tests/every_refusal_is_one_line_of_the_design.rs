@@ -246,6 +246,9 @@ fn host_line(e: &BadRead<'_>) -> &'static str {
         BadRead::NotAFile {
             ..
         } => "<file> is not a regular file",
+        BadRead::Shell {
+            ..
+        } => "<dir>: no shell could be run there",
     }
 }
 

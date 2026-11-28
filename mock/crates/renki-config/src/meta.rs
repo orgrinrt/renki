@@ -80,13 +80,10 @@ pub struct Meta<'d, St: Store> {
     when:      Maybe<Literal<'d>>,
     replace:   Maybe<Literal<'d>>,
     unset:     Maybe<Literal<'d>>,
-    // lint:allow(no-bare-string) reason: a dotted key of the document. FIXME: port to Str.
-    stray:     Maybe<&'d str>,
-    // lint:allow(no-bare-string) reason: a dotted key of the document. FIXME: port to Str.
-    defines:   Maybe<&'d str>,
-    // lint:allow(no-bare-string) reason: a dotted key of the document. FIXME: port to Str.
-    unheld:    Maybe<&'d str>,
-    mixed:     Maybe<BadLayer<'d>>,
+    /// The first defect where the layer is always read.
+    always:    Maybe<BadLayer<'d>>,
+    /// The first defect where the layer is an overlay.
+    overlay:   Maybe<BadLayer<'d>>,
     _store:    PhantomData<St>,
 }
 
@@ -117,68 +114,102 @@ impl<'d, St: Store> Meta<'d, St> {
     // lint:allow(no-bare-static-str) reason: the default's static words. FIXME: port to Str.
     pub const UNTRACKED: [&'static str; 3] = ["local", "secret", "private"];
 
-    /// The `meta` table of `doc`.
+    /// The `meta` table of `doc`, and its first defect for a layer that is
+    /// always read and for an overlay: each key in the order the file holds
+    /// them, asked for its shape, then its place, then its items.
     pub fn read(doc: &'d St::Document<'_>) -> Self {
-        let mut stray = Maybe::Isnt;
-        let mut defines = Maybe::Isnt;
-        // the first thing found wrong while the table is read: a table of the
-        // reader's that is no table, else a list holding an item of the wrong kind
-        let mut mixed = Maybe::Isnt;
+        // the list keys, which list each is, and whether its items are words
+        let lists = [
+            (INCLUDE, MetaList::Include, false),
+            (ORDER, MetaList::Order, true),
+            (UNTRACKED, MetaList::Untracked, true),
+            (REPLACE, MetaList::Replace, false),
+            (UNSET, MetaList::Unset, false),
+        ];
+        let (mut always, mut overlay) = (Maybe::Isnt, Maybe::Isnt);
         for key in St::keys(doc) {
             if !is_meta(key) {
                 continue;
             }
-            if ["meta", "meta.overlays", "meta.predicates"].contains(&key) {
-                if mixed.isnt() && !matches!(St::shape(doc, key), Maybe::Is(Shape::Table)) {
-                    mixed = Maybe::Is(BadLayer::MetaShape(key));
-                }
-                continue;
-            }
-            if key.starts_with(PREDICATES) {
-                if defines.isnt() {
-                    defines = Maybe::Is(key);
-                }
-                continue;
-            }
-            let known = [INCLUDE, ORDER, UNTRACKED, WHEN, REPLACE, UNSET].contains(&key);
-            if !known && stray.isnt() {
-                stray = Maybe::Is(key);
-            }
-        }
-        let replace = St::get(doc, REPLACE);
-        // the first list holding an item that is no string, or of the words
-        // no word; `meta.overlays.order`'s own are read by `Order`
-        let lists = [
-            (MetaList::Include, INCLUDE, false),
-            (MetaList::Untracked, UNTRACKED, true),
-            (MetaList::Replace, REPLACE, false),
-            (MetaList::Unset, UNSET, false),
-        ];
-        for (list, key, words) in lists {
-            if mixed.is() {
-                break;
-            }
-            let Maybe::Is(Literal::List(items)) = St::get(doc, key) else {
-                continue;
-            };
-            if let Some(item) = St::items(items).find(|item| !matches!(item, Literal::Str(_))) {
-                let got = got_of(item);
-                mixed = Maybe::Is(if words {
-                    BadLayer::NotAWord(list, got)
+            // what is wrong with this key in a layer always read, and in an overlay
+            let (a, o) = if ["meta", "meta.overlays", "meta.predicates"].contains(&key) {
+                if matches!(St::shape(doc, key), Maybe::Is(Shape::Table)) {
+                    (Maybe::Isnt, Maybe::Isnt)
                 } else {
-                    BadLayer::NotAString(list, got)
-                });
-            }
-        }
-        let mut unheld = Maybe::Isnt;
-        if let Maybe::Is(Literal::List(list)) = replace {
-            for item in St::items(list) {
-                if let Literal::Str(key) = item
-                    && St::shape(doc, key).isnt()
-                {
-                    unheld = Maybe::Is(key);
-                    break;
+                    (
+                        Maybe::Is(BadLayer::MetaShape(key)),
+                        Maybe::Is(BadLayer::MetaShape(key)),
+                    )
                 }
+            } else if key.starts_with(PREDICATES) {
+                // the definitions are `Predicates`' to check, where they may stand
+                (Maybe::Isnt, Maybe::Is(BadLayer::AboveBase(key)))
+            } else if key == WHEN {
+                if matches!(St::get(doc, WHEN), Maybe::Is(Literal::Str(_))) {
+                    (Maybe::Is(BadLayer::AlwaysRead(WHEN)), Maybe::Isnt)
+                } else {
+                    (
+                        Maybe::Is(BadLayer::MetaShape(WHEN)),
+                        Maybe::Is(BadLayer::MetaShape(WHEN)),
+                    )
+                }
+            } else if let Some(leaf) = [WHEN, INCLUDE, ORDER, UNTRACKED, REPLACE, UNSET]
+                .into_iter()
+                .find(|leaf| {
+                    key.strip_prefix(leaf)
+                        .is_some_and(|rest| rest.starts_with('.'))
+                })
+            {
+                // a value under a key the reader holds as a leaf
+                (
+                    Maybe::Is(BadLayer::MetaShape(leaf)),
+                    Maybe::Is(BadLayer::MetaShape(leaf)),
+                )
+            } else if let Some((name, list, words)) =
+                lists.into_iter().find(|(name, ..)| *name == key)
+            {
+                match St::get(doc, name) {
+                    Maybe::Is(Literal::List(items)) => {
+                        let wrong_item = St::items(items).find(|i| !matches!(i, Literal::Str(_)));
+                        let item = match wrong_item {
+                            Some(i) if words => Maybe::Is(BadLayer::NotAWord(list, got_of(i))),
+                            Some(i) => Maybe::Is(BadLayer::NotAString(list, got_of(i))),
+                            None => Maybe::Isnt,
+                        };
+                        // a name `meta.replace` lists that this layer does not hold
+                        let unheld = if name == REPLACE {
+                            match St::items(items)
+                                .find(|i| matches!(i, Literal::Str(k) if St::shape(doc, k).isnt()))
+                            {
+                                Some(Literal::Str(k)) => Maybe::Is(BadLayer::ReplaceNotHeld(k)),
+                                _ => Maybe::Isnt,
+                            }
+                        } else {
+                            Maybe::Isnt
+                        };
+                        let content = if item.is() { item } else { unheld };
+                        let place =
+                            if words { Maybe::Is(BadLayer::AboveBase(name)) } else { content };
+                        (content, place)
+                    },
+                    _ => {
+                        (
+                            Maybe::Is(BadLayer::MetaShape(name)),
+                            Maybe::Is(BadLayer::MetaShape(name)),
+                        )
+                    },
+                }
+            } else {
+                (
+                    Maybe::Is(BadLayer::UnknownMeta(key)),
+                    Maybe::Is(BadLayer::UnknownMeta(key)),
+                )
+            };
+            if always.isnt() {
+                always = a;
+            }
+            if overlay.isnt() {
+                overlay = o;
             }
         }
         Meta {
@@ -186,12 +217,10 @@ impl<'d, St: Store> Meta<'d, St> {
             order: St::get(doc, ORDER),
             untracked: St::get(doc, UNTRACKED),
             when: St::get(doc, WHEN),
-            replace,
+            replace: St::get(doc, REPLACE),
             unset: St::get(doc, UNSET),
-            stray,
-            defines,
-            unheld,
-            mixed,
+            always,
+            overlay,
             _store: PhantomData,
         }
     }
@@ -233,59 +262,14 @@ impl<'d, St: Store> Meta<'d, St> {
         self.unset
     }
 
-    /// The first thing wrong with this table, for a layer that is `at`: a
-    /// key that is none of the reader's, a key of the wrong shape, a list of
-    /// entries or keys holding an item that is no string, an order,
-    /// an untracked list or a predicate in a layer above the base, a `when`
-    /// on the base or on `defaults`, and a key `meta.replace` names that this
-    /// layer does not hold.
+    /// The first thing wrong with this table, for a layer that is `at`, in
+    /// the order the file holds its keys: a key that is none of the reader's,
+    /// a key of the wrong shape, an order, an untracked list or a predicate in
+    /// a layer above the base, a `when` on the base or on `defaults`, a list
+    /// holding an item of the wrong kind, and a key `meta.replace` names that
+    /// this layer does not hold.
     pub const fn defect(&self, at: Part<'_>) -> Maybe<BadLayer<'d>> {
-        if let Maybe::Is(key) = self.stray {
-            return Maybe::Is(BadLayer::UnknownMeta(key));
-        }
-        let lists = [
-            (INCLUDE, self.include),
-            (ORDER, self.order),
-            (UNTRACKED, self.untracked),
-            (REPLACE, self.replace),
-            (UNSET, self.unset),
-        ];
-        let mut i = 0;
-        while i < lists.len() {
-            if let (key, Maybe::Is(l)) = lists[i]
-                && !matches!(l, Literal::List(_))
-            {
-                return Maybe::Is(BadLayer::MetaShape(key));
-            }
-            i += 1;
-        }
-        if let Maybe::Is(bad) = self.mixed {
-            return Maybe::Is(bad);
-        }
-        if let Maybe::Is(l) = self.when
-            && !matches!(l, Literal::Str(_))
-        {
-            return Maybe::Is(BadLayer::MetaShape(WHEN));
-        }
-        if at.always_read() {
-            if self.when.is() {
-                return Maybe::Is(BadLayer::AlwaysRead(WHEN));
-            }
-        } else {
-            if self.order.is() {
-                return Maybe::Is(BadLayer::AboveBase(ORDER));
-            }
-            if self.untracked.is() {
-                return Maybe::Is(BadLayer::AboveBase(UNTRACKED));
-            }
-            if let Maybe::Is(key) = self.defines {
-                return Maybe::Is(BadLayer::AboveBase(key));
-            }
-        }
-        if let Maybe::Is(key) = self.unheld {
-            return Maybe::Is(BadLayer::ReplaceNotHeld(key));
-        }
-        Maybe::Isnt
+        if at.always_read() { self.always } else { self.overlay }
     }
 }
 
