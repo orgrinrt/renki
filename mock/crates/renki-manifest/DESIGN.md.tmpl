@@ -209,7 +209,8 @@ read view and the keys a document holds by walking what it spelled. A list is
 the store's handle on its node, which `items` walks, so an array of tables is
 a list like any other.
 
-Its writer edits the text at the key's value span into a `core::fmt::Write`
+Its writer takes the document the store read and edits its text at the key's
+value span into a `core::fmt::Write`
 sink rather than reserialising, so a person's comments survive every
 `config set`. A key inside an inline table is edited inside its braces, a
 multi-line value is replaced whole, a line inside a multi-line string is never

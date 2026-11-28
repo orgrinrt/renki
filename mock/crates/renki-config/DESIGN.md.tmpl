@@ -94,8 +94,10 @@ whole need where it read that far, and one more read with shelves of that
 size is enough. It answers
 a dotted key as a `Literal` or `Isnt`, walks the keys a document holds so an
 unknown one is refused by name, tells what shape a key holds (`Shape`), and
-writes one key into text it is given, into a `core::fmt::Write` sink, keeping
-everything else in that text byte for byte, comments included. Its keys and a
+writes one key into the text of a document it parsed, into a
+`core::fmt::Write` sink, keeping everything else in that text byte for byte,
+comments included, so writing needs no memory beyond what the parse was
+given. Its keys and a
 list's items are walked through `Walk`, this crate's own trait, which answers
 each next one as a `Maybe`, so no store implements a trait whose signature
 fixes a type of `core` the stack replaces. An array of
