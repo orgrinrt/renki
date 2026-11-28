@@ -163,7 +163,7 @@ version = "0.0.1"
 dependencies = [
  "libc",
  "renki-config",
- "serde",
+ "renki-manifest",
  "tomlfuse-parse",
 ]
 

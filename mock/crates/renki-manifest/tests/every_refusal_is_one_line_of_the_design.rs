@@ -158,8 +158,8 @@ fn predicate_id(e: &BadPredicate<'_>) -> &'static str {
         BadPredicate::Undefined(_) => "BadPredicate::Undefined",
         BadPredicate::Loop(..) => "BadPredicate::Loop",
         BadPredicate::Value(..) => "BadPredicate::Value",
-        BadPredicate::Exit(..) => "BadPredicate::Exit",
-        BadPredicate::NoExit(_) => "BadPredicate::NoExit",
+        BadPredicate::Exit(_, code) if Option::<i32>::from(*code).is_some() => "BadPredicate::Exit",
+        BadPredicate::Exit(..) => "BadPredicate::Exit(none)",
         BadPredicate::Malformed(_) => "BadPredicate::Malformed",
     }
 }
@@ -188,8 +188,8 @@ fn contract_samples() -> Vec<(&'static str, String)> {
         BadPredicate::Undefined("n4me"),
         BadPredicate::Loop("n4me", "fr0m"),
         BadPredicate::Value("V4R", "v"),
-        BadPredicate::Exit("c0mmand", 7),
-        BadPredicate::NoExit("c0mmand"),
+        BadPredicate::Exit("c0mmand", Some(7).into()),
+        BadPredicate::Exit("c0mmand", None.into()),
         BadPredicate::Malformed("n4me"),
     ];
     layers
