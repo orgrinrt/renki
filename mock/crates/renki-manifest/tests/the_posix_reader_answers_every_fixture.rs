@@ -403,8 +403,12 @@ fn awks() -> Vec<(String, PathBuf)> {
         let bin = dir.join(name);
         fs::create_dir_all(&bin).expect("a directory for an awk");
         let link = bin.join("awk");
-        if link.symlink_metadata().is_err() {
-            std::os::unix::fs::symlink(&program, &link).expect("an awk is linked");
+        // the tests of this binary run at once and make the same links
+        match std::os::unix::fs::symlink(&program, &link) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+                panic!("an awk is linked: {e}")
+            },
+            _ => {},
         }
         found.push((name.to_owned(), bin));
     }

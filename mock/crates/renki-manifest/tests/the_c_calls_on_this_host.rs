@@ -258,18 +258,32 @@ fn readdir_lists_every_entry_of_a_large_directory_then_ends() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_listing_readdir_ends_with_an_error_is_refused_after_the_entries_it_gave() {
-    // `/proc/<pid>/fd` answers the next read of its entries with `ENOENT`
-    // once the process is gone, which is an error `readdir` ends a listing on
-    let mut child = std::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .unwrap();
-    let dir = std::ffi::CString::new(format!("/proc/{}/fd", child.id())).unwrap();
+    // the listing's own descriptor is turned into `/dev/null` while it is
+    // read, so the next read of entries fails with `ENOTDIR`, an error
+    // `readdir` ends a listing on; nothing else's descriptor is touched
+    let dir = scratch("unreadable-listing");
+    for i in 0 .. 3 {
+        std::fs::write(dir.join(format!("f{i}")), b"").unwrap();
+    }
+    let path = c_path(&dir);
+    let canonical = std::fs::canonicalize(&dir).unwrap();
     let mut seen = 0;
-    let got = Unix::list(&dir, |_| {
+    let got = Unix::list(&path, |_| {
         if seen == 0 {
-            child.kill().unwrap();
-            child.wait().unwrap();
+            let fd: libc::c_int = std::fs::read_dir("/proc/self/fd")
+                .unwrap()
+                .flatten()
+                .find(|e| std::fs::read_link(e.path()).ok().as_deref() == Some(canonical.as_path()))
+                .and_then(|e| e.file_name().to_str()?.parse().ok())
+                .expect("the listing's descriptor is found");
+            // SAFETY: `null` is opened here and closed once; `dup2` puts it
+            // over the listing's descriptor, which `closedir` closes after.
+            unsafe {
+                let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+                assert!(null >= 0);
+                assert_eq!(libc::dup2(null, fd), fd);
+                libc::close(null);
+            }
         }
         seen += 1;
     });
@@ -277,11 +291,12 @@ fn a_listing_readdir_ends_with_an_error_is_refused_after_the_entries_it_gave() {
     assert_eq!(
         got,
         Err(BadRead::Os {
-            file:  &dir,
+            file:  &path,
             call:  "readdir",
-            errno: libc::ENOENT,
+            errno: libc::ENOTDIR,
         })
     );
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[cfg(feature = "processes")]

@@ -108,12 +108,12 @@ fn a_shell_predicate_holds_on_zero_not_on_one_and_refuses_any_other_exit() {
     );
     let answers = said(&[], &[("test -e built", 2)]);
     let e = holds("built", &table, &answers).unwrap_err();
-    assert_eq!(e, BadPredicate::Exit("test -e built", 2));
+    assert_eq!(e, BadPredicate::Exit("test -e built", Maybe::Is(2)));
     assert!(e.to_string().contains("test -e built") && e.to_string().contains('2'));
     // a command that did not start is refused the same, with no exit
     assert_eq!(
         holds("built", &table, &said(&[], &[])).err(),
-        Maybe::Is(BadPredicate::NoExit("test -e built"))
+        Maybe::Is(BadPredicate::Exit("test -e built", Maybe::Isnt))
     );
 }
 

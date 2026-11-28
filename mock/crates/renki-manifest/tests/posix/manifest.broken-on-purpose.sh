@@ -15,7 +15,7 @@
 # where there is one, and the answer is exit 1. A key no layer holds is exit 1
 # with nothing written.
 #
-# A shell predicate runs its command, through sh -c in the base's directory,
+# A shell predicate runs its command, through /bin/sh -c in the base's directory,
 # on every dump and every get that reads a layer it decides. Nothing is kept
 # between calls, so a command with effects has them on each read. What the
 # command prints goes to /dev/null; what it writes on its error stream is the
@@ -53,9 +53,25 @@ BEGIN {
 	ARGC = 1
 	Q = "\047"
 	SUBSET = " is outside the POSIX reader\047s TOML subset"
+	# Byte classes built from the bytes themselves, since an awk may read an
+	# octal escape inside a bracket expression its own way.
+	CTRL = "[" byte(1) "-" byte(8) byte(10) "-" byte(31) byte(127) "]"
+	for (i = 1; i < 32; i++) ORD[byte(i)] = i
+	ORD[byte(127)] = 127
+	HIGH = "[" byte(128) "-" byte(255) "]"
+	CONT = "[" byte(128) "-" byte(191) "]"
+	UTF8 = "[" byte(194) "-" byte(223) "]" CONT "|" \
+		byte(224) "[" byte(160) "-" byte(191) "]" CONT "|" \
+		"[" byte(225) "-" byte(236) byte(238) byte(239) "]" CONT CONT "|" \
+		byte(237) "[" byte(128) "-" byte(159) "]" CONT "|" \
+		byte(240) "[" byte(144) "-" byte(191) "]" CONT CONT "|" \
+		"[" byte(241) "-" byte(243) "]" CONT CONT CONT "|" \
+		byte(244) "[" byte(128) "-" byte(143) "]" CONT CONT
 	main()
 	exit 0
 }
+
+function byte(n) { return sprintf("%c", n) }
 
 function refuse(msg) {
 	print msg | "cat 1>&2"
@@ -127,7 +143,7 @@ function canonical(label) {
 	return output("f=" q(fpath(label)) "; n=0; " \
 		"while [ -h \"$f\" ]; do n=$((n + 1)); [ $n -le 40 ] || { echo -missing; exit 0; }; " \
 		"case $f in */*) d=${f%/*}/ ;; *) d= ;; esac; " \
-		"t=$(ls -ld -- \"$f\" && echo x) || { echo -missing; exit 0; }; t=${t%??}; t=${t#*\" $f -> \"}; " \
+		"t=$(unset QUOTING_STYLE; ls -ld -- \"$f\" && echo x) || { echo -missing; exit 0; }; t=${t%??}; t=${t#*\" $f -> \"}; " \
 		"case $t in /*) f=$t ;; *) f=$d$t ;; esac; done; " \
 		"[ -e \"$f\" ] || { echo -missing; exit 0; }; [ -f \"$f\" ] || { echo -notregular; exit 0; }; " \
 		"case $f in */*) d=${f%/*}; [ -n \"$d\" ] || d=/ ;; *) d=. ;; esac; " \
@@ -209,27 +225,50 @@ function here() { return PLAB ":" LNUM ": " }
 
 function beyond(what) { refuse(here() what SUBSET) }
 
-function badline() { refuse(here() "this line is no key, table header or comment") }
+# The refusals of a document that is no TOML are in the words of the parser.
+function expected(what) { refuse(here() "expected " what) }
 
-function twice(p) { refuse(here() p " is defined twice") }
+function extend() { refuse(here() "a key path through something it may not extend") }
 
-function nextline(   r) {
-	r = (getline S < PPATH)
-	if (r < 0) refuse(PLAB ": cannot be read")
-	if (r == 0) return 0
-	LNUM++
+# The whole file into FL, its lines without their newlines, with FN of them
+# and FEND the line its end is on. The file is read through tr, which gives a
+# NUL byte as another control byte, so no awk ever holds one, and its exit is
+# read after the last line, so a file that cannot be read is told from an
+# empty one. The parser refuses bytes that are no UTF-8 before anything else,
+# and so does this.
+function load(   cmd, l, n, st) {
+	cmd = "{ tr " q("\\000") " " q("\\001") " < " q(PPATH) " 2>/dev/null && echo; } ; echo \"/$?\""
+	n = 0
+	while ((cmd | getline l) > 0) FL[++n] = l
+	close(cmd)
+	st = n ? FL[n] : ""
+	if (st != "/0") refuse(PLAB " cannot be read")
+	n--
+	# the echo ends the last line; where the file ended in a newline, it adds
+	# an empty one of its own
+	FEND = n
+	if (n > 0 && FL[n] == "") { n--; FEND = n + 1 }
+	FN = n
+	for (l = 1; l <= FN; l++)
+		if (FL[l] ~ HIGH && !utf8(FL[l])) { LNUM = l; refuse(here() "the text is not UTF-8") }
+	FI = 0
+}
+
+function nextline() {
+	if (FI >= FN) { LNUM = FEND; S = ""; I = 1; return 0 }
+	S = FL[++FI]
+	LNUM = FI
 	sub(/\r$/, "", S)
 	I = 1
-	if (S ~ /\000/ || S ~ /[\001-\010\012-\037\177]/) refuse(here() "a control byte other than a tab is no TOML")
-	if (S ~ /[\200-\377]/ && !utf8(S)) refuse(here() "the bytes of this line are no UTF-8")
+	if (S ~ CTRL) refuse(here() "a control character")
 	return 1
 }
 
 # Whether every byte above 127 of s is part of a UTF-8 sequence: no stray
 # continuation, no overlong form, no surrogate and nothing above U+10FFFF.
 function utf8(s) {
-	gsub(/[\302-\337][\200-\277]|\340[\240-\277][\200-\277]|[\341-\354\356\357][\200-\277][\200-\277]|\355[\200-\237][\200-\277]|\360[\220-\277][\200-\277][\200-\277]|[\361-\363][\200-\277][\200-\277][\200-\277]|\364[\200-\217][\200-\277][\200-\277]/, "", s)
-	return s !~ /[\200-\377]/
+	gsub(UTF8, "", s)
+	return s !~ HIGH
 }
 
 function ch() { return substr(S, I, 1) }
@@ -248,13 +287,13 @@ function node(L, p, shape) {
 
 function parse(L,   cur) {
 	PLAB = LAB[L]; PPATH = fpath(PLAB); LNUM = 0; NN[L] = 0; cur = ""
+	load()
 	while (nextline()) {
 		ws()
 		if (I > length(S) || ch() == "#") continue
 		if (ch() == "[") cur = header(L)
 		else keyval(L, cur)
 	}
-	close(PPATH)
 }
 
 function keypath(K,   n, c, start) {
@@ -265,7 +304,7 @@ function keypath(K,   n, c, start) {
 		if (c == "\"" || c == Q) beyond("a quoted key")
 		start = I
 		while (substr(S, I, 1) ~ /^[A-Za-z0-9_-]$/) I++
-		if (I == start) badline()
+		if (I == start) expected("key")
 		K[++n] = substr(S, start, I - start)
 		ws()
 		if (ch() != ".") return n
@@ -281,7 +320,7 @@ function prefix(L, K, nk, how,   p, i) {
 		p = join(p, K[i])
 		if (!((L, p) in SH)) { node(L, p, "t"); DEF[L, p] = how }
 		else if (SH[L, p] == "a" && how != "d") p = p "[" (NI[L, p] - 1) "]"
-		else if (SH[L, p] != "t" || (how == "d" && DEF[L, p] != "d")) twice(p)
+		else if (SH[L, p] != "t" || (how == "d" && DEF[L, p] != "d")) extend()
 	}
 	return join(p, K[nk])
 }
@@ -292,19 +331,20 @@ function header(L,   arr, K, nk, p, e) {
 	split("", K)
 	nk = keypath(K)
 	ws()
-	if (arr) { if (substr(S, I, 2) != "]]") badline(); I += 2 }
-	else { if (ch() != "]") badline(); I++ }
+	if (arr) { if (substr(S, I, 2) != "]]") expected("]]"); I += 2 }
+	else { if (ch() != "]") expected("]"); I++ }
 	ws()
-	if (I <= length(S) && ch() != "#") badline()
+	if (I <= length(S) && ch() != "#") expected("newline")
 	p = prefix(L, K, nk, "i")
 	if (!arr) {
 		if (!((L, p) in SH)) { node(L, p, "t"); DEF[L, p] = "h" }
 		else if (SH[L, p] == "t" && DEF[L, p] == "i") { DEF[L, p] = "h"; LN[L, p] = LNUM }
-		else twice(p)
+		else if (SH[L, p] == "t" && DEF[L, p] == "h") refuse(here() "a table defined twice")
+		else extend()
 		return p
 	}
 	if (!((L, p) in SH)) { node(L, p, "a"); NI[L, p] = 0 }
-	else if (SH[L, p] != "a") twice(p)
+	else if (SH[L, p] != "a") extend()
 	e = p "[" NI[L, p] "]"
 	NI[L, p]++
 	node(L, e, "t")
@@ -316,20 +356,20 @@ function keyval(L, cur,   K, nk, i, p) {
 	split("", K)
 	nk = keypath(K)
 	ws()
-	if (ch() != "=") badline()
+	if (ch() != "=") expected("=")
 	I++
 	for (i = 1; i <= nk; i++) K[i] = (i == 1 && cur != "") ? cur "." K[i] : K[i]
 	p = prefix(L, K, nk, "d")
-	if ((L, p) in SH) twice(p)
+	if ((L, p) in SH) refuse(here() "a key defined twice")
 	value(L, p)
 	ws()
-	if (I <= length(S) && ch() != "#") refuse(here() "text follows the value")
+	if (I <= length(S) && ch() != "#") expected("newline")
 }
 
 function value(L, p,   c) {
 	ws()
 	c = ch()
-	if (c == "") refuse(here() "a value is missing")
+	if (c == "") expected("value")
 	if (c == "[") { list(L, p); return }
 	if (c == "{") beyond("an inline table")
 	scalar()
@@ -337,21 +377,22 @@ function value(L, p,   c) {
 	VAL[L, p] = SV; TY[L, p] = ST; STR[L, p] = SS
 }
 
-function fill(line0) {
+# The rest of an array, across lines, up to what follows; at the end of the
+# file it is refused as the parser does, wanting what stands next.
+function fill(want) {
 	while (1) {
 		ws()
 		if (I <= length(S) && ch() != "#") return
-		if (!nextline()) refuse(PLAB ":" line0 ": an array is not closed")
+		if (!nextline()) expected(want)
 	}
 }
 
-function list(L, p,   line0, n, c) {
-	line0 = LNUM
+function list(L, p,   n, c) {
 	node(L, p, "l")
 	I++
 	n = 0
 	while (1) {
-		fill(line0)
+		fill("value")
 		c = ch()
 		if (c == "]") { I++; break }
 		if (c == "[") beyond("a nested array")
@@ -359,11 +400,11 @@ function list(L, p,   line0, n, c) {
 		scalar()
 		n++
 		IT[L, p, n] = SV; ITY[L, p, n] = ST; ISTR[L, p, n] = SS
-		fill(line0)
+		fill(", or ]")
 		c = ch()
 		if (c == ",") { I++; continue }
 		if (c == "]") { I++; break }
-		refuse(here() "the items of an array are not separated by commas")
+		expected(", or ]")
 	}
 	NI[L, p] = n
 }
@@ -379,6 +420,7 @@ function canon(s,   out, i, c) {
 		else if (c == "\n") c = "\\n"
 		else if (c == "\t") c = "\\t"
 		else if (c == "\r") c = "\\r"
+		else if (c in ORD) c = sprintf("\\u%04X", ORD[c])
 		out = out c
 	}
 	return "\"" out "\""
@@ -402,7 +444,7 @@ function scalar(   c, start, tok) {
 	while (I <= length(S) && (c = ch()) != " " && c != "\t" && c != "," && c != "]" && c != "#") I++
 	tok = substr(S, start, I - start)
 	SS = ""
-	if (tok == "") refuse(here() "a value is missing")
+	if (tok == "") expected("value")
 	if (tok == "true" || tok == "false") { ST = "bool"; SV = tok; return }
 	if (tok ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ || tok ~ /^[0-9][0-9]:[0-9][0-9]/) beyond("a date or time")
 	if (tok ~ /^[+-]?(inf|nan)$/) beyond("a float")
@@ -415,7 +457,7 @@ function basic(   out, c, e) {
 	I++
 	out = ""
 	while (1) {
-		if (I > length(S)) refuse(here() "a string is not closed")
+		if (I > length(S)) refuse(here() "a string with no end")
 		c = ch()
 		if (c == "\"") { I++; break }
 		if (c == "\\") {
@@ -424,9 +466,9 @@ function basic(   out, c, e) {
 			else if (e == "\\") out = out "\\"
 			else if (e == "n") out = out "\n"
 			else if (e == "t") out = out "\t"
-			else if (e == "") refuse(here() "a string is not closed")
+			else if (e == "") refuse(here() "an escape TOML does not have")
 			else if (index("bfreuUx", e)) beyond("a \\" e " escape")
-			else refuse(here() "\\" e " is no escape of TOML")
+			else refuse(here() "an escape TOML does not have")
 			I += 2
 			continue
 		}
@@ -438,7 +480,7 @@ function basic(   out, c, e) {
 
 function literal(   j) {
 	j = index(substr(S, I + 1), Q)
-	if (j == 0) refuse(here() "a string is not closed")
+	if (j == 0) refuse(here() "a string with no end")
 	SS = substr(S, I + 1, j - 1)
 	I += j + 1
 	ST = "str"; SV = canon(SS)
@@ -455,9 +497,9 @@ function integer(tok,   neg, d, max) {
 	else if (tok ~ /^0x[0-9a-fA-F](_?[0-9a-fA-F])*$/) d = based(substr(tok, 3), 16)
 	else if (tok ~ /^0o[0-7](_?[0-7])*$/) d = based(substr(tok, 3), 8)
 	else if (tok ~ /^0b[01](_?[01])*$/) d = based(substr(tok, 3), 2)
-	else refuse(here() tok " is no TOML value")
+	else refuse(here() "not a TOML value")
 	max = neg ? "9223372036854775808" : "9223372036854775807"
-	if (length(d) > 19 || (length(d) == 19 && d "" > max)) refuse(here() tok " is outside the range of a 64-bit integer")
+	if (length(d) > 19 || (length(d) == 19 && d "" > max)) refuse(here() "an integer outside the 64-bit range")
 	return (neg ? "-" : "") d
 }
 
@@ -512,7 +554,7 @@ function defect(L, part,   i, p, k, j, seen, defines) {
 		if (p == "meta" || p == "meta.overlays") { if (SH[L, p] != "t") wrong(L, p); continue }
 		if (p == "meta.predicates" || substr(p, 1, 16) == "meta.predicates.") {
 			if (part == "layer" && (defines == "" || (leaf(L, p) && !leaf(L, defines)))) defines = p
-			if (part != "layer" && p == "meta.predicates" && SH[L, p] != "t") wrong(L, p)
+			if (p == "meta.predicates" && SH[L, p] != "t") wrong(L, p)
 			continue
 		}
 		if (p == "meta.when") {
@@ -585,6 +627,41 @@ function predicates(   s, L, i, p, name, j) {
 					refuse(at(L, p) "no predicate " ISTR[L, PKEY, j] " is defined under meta.predicates")
 		}
 	}
+	loops()
+}
+
+# Then a loop, walking each definition in turn, its names depth first in the
+# order written, answering no variable and running nothing: the first name
+# met again on the path that reached it is refused at the definition that
+# named it.
+function loops(   s, L, i, p, name) {
+	for (s = 1; s <= 2; s++) {
+		L = s == 1 ? B : DF
+		if (!L) continue
+		for (i = 1; i <= NN[L]; i++) {
+			p = NODES[L, i]
+			if (substr(p, 1, 16) != "meta.predicates.") continue
+			name = substr(p, 17)
+			if (index(name, ".") || index(name, "[")) continue
+			PDEPTH = 0
+			walk(name)
+		}
+	}
+}
+
+function walk(name,   i, from, pf, kind, dd, dk, j) {
+	for (i = 1; i <= PDEPTH; i++) {
+		if (CHAIN[i] != name) continue
+		from = CHAIN[PDEPTH]
+		pf = "meta.predicates." from
+		refuse(at(((B, pf) in SH) ? B : DF, pf) "the predicate " name " is reached again from " from ", a loop")
+	}
+	definition(name)
+	kind = DKIND; dd = DDOC; dk = DKEY
+	CHAIN[++PDEPTH] = name
+	if (kind == "not") walk(STR[dd, dk])
+	else if (kind == "all" || kind == "any") for (j = 1; j <= NI[dd, dk]; j++) walk(ISTR[dd, dk, j])
+	PDEPTH--
 }
 
 # --- finding the layers -----------------------------------------------------------
@@ -623,8 +700,8 @@ function two(a, b) { return a < b ? a " and " b : b " and " a }
 # be read.
 function readable(label,   c) {
 	c = canonical(label)
-	if (c == "-notregular") refuse(label ": is not a regular file")
-	if (substr(c, 1, 1) != "/") refuse(label ": cannot be read")
+	if (c == "-notregular") refuse(label " is not a regular file")
+	if (substr(c, 1, 1) != "/") refuse(label " cannot be read")
 	if (nl(c)) newline(label ": its path holds")
 	return c
 }
@@ -770,16 +847,19 @@ function answer(name,   i, kind, dd, dk, v, set, t, r, cmd, st, j, b) {
 			r += 0
 		}
 	} else if (kind == "shell") {
-		# The LC_ALL of the caller is given back, and the shell is the process
-		# system() waits on, so a signal that ends it reads as no exit.
+		# The LC_ALL of the caller is given back, and /bin/sh runs the command
+		# whatever sh the path finds. The shell that waits on it says its
+		# status, as system() says none alike in every awk, and what it says of
+		# its own goes nowhere, while the error stream of the command goes to the
+		# caller: past 128 a shell says a signal ended it, which is no exit.
 		v = STR[dd, dk]
 		cmd = (LCSET == "set" ? "LC_ALL=" q(LCVAL) "; export LC_ALL; " : "unset LC_ALL; ") \
-			"exec sh -c " q("cd -- \"$1\" || exit 125; exec sh -c \"$2\" >/dev/null") \
-			" sh " q(dirof(CAN[B])) " " q(v)
-		st = system(cmd)
-		if (st == 0) r = 1
-		else if (st == 1) r = 0
-		else if (st < 0 || st > 255) prefuse("`" v "` gave no exit")
+			"/bin/sh -c " q("cd -- \"$1\" || { echo /125; exit; }; (exec /bin/sh -c \"$2\" >/dev/null 2>&3 3>&-); echo \"/$?\"") \
+			" sh " q(dirof(CAN[B])) " " q(v) " 3>&2 2>/dev/null"
+		st = substr(output(cmd), 2)
+		if (st == "0") r = 1
+		else if (st == "1") r = 0
+		else if (st + 0 > 128) prefuse("`" v "` gave no exit")
 		else prefuse("`" v "` exited " st ", which is neither 0 nor 1")
 	} else if (kind == "not") {
 		r = !answer(STR[dd, dk])
@@ -797,7 +877,17 @@ function answer(name,   i, kind, dd, dk, v, set, t, r, cmd, st, j, b) {
 
 # --- the merge ----------------------------------------------------------------------
 
-function shapename(s) { return s == "t" ? "a table" : (s == "s" ? "a scalar" : "a list") }
+# A shape by its name, a list told apart by n, how many items it holds.
+function shapename(s, n) {
+	return s == "t" ? "a table" : s == "s" ? "a scalar" : s == "a" ? "an array of tables" : \
+		n == 0 ? "an empty list" : "a list of values"
+}
+
+# One shape over another that nothing replaces, at the key of the higher layer.
+function clash(d, p, sh, n, lo, m) {
+	refuse(LAB[d] ":" LN[d, p] ": " shapename(sh, n) " over " shapename(lo, m) \
+		" does not merge; name the key in meta.replace to replace it")
+}
 
 function kindof(s) { return s == "a" ? "l" : s }
 
@@ -851,8 +941,7 @@ function merge(s,   d, k, j, u, t, held, i, p, tp, sh, lo) {
 		}
 		lo = MSH[tp]
 		if (kindof(lo) != kindof(sh))
-			refuse(LAB[d] ":" LN[d, p] ": " shapename(sh) " at " tp " over " shapename(lo) " in " \
-				MLAB[tp] ":" MLN[tp] " does not merge; name the key in meta.replace to replace it")
+			clash(d, p, sh, NI[d, p], lo, MNI[tp])
 		if (sh == "t") continue
 		if (sh == "s") { MVAL[tp] = VAL[d, p]; MLN[tp] = LN[d, p]; MLAB[tp] = LAB[d]; continue }
 		if (lo == "l" && sh == "l") {
@@ -864,8 +953,7 @@ function merge(s,   d, k, j, u, t, held, i, p, tp, sh, lo) {
 		} else if (lo == "l" && MNI[tp] == 0) {
 			MSH[tp] = "a"; MNI[tp] = NI[d, p]; OFF[p] = 0
 		} else if (!(lo == "a" && NI[d, p] == 0)) {
-			refuse(LAB[d] ":" LN[d, p] ": a list of " (sh == "a" ? "tables" : "values") " at " tp \
-				" does not append to a list of " (lo == "a" ? "tables" : "values") " in " MLAB[tp] ":" MLN[tp])
+			clash(d, p, sh, NI[d, p], lo, MNI[tp])
 		}
 		MLN[tp] = LN[d, p]; MLAB[tp] = LAB[d]
 	}
@@ -874,7 +962,6 @@ function merge(s,   d, k, j, u, t, held, i, p, tp, sh, lo) {
 # --- the whole manifest ---------------------------------------------------------------
 
 function main(   i, n, ent, lab, d, qi, m, key, keys, sorted, j, t, p, line, lines) {
-	if (VERB != "dump" && VERB != "get") refuse("manifest: no verb " VERB)
 	lists()
 	BDIR = dirof(BASE)
 	lab = baseof(BASE)
