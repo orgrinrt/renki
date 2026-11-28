@@ -108,8 +108,10 @@ pub trait Host {
 
     /// The value of the environment variable `name`, where it is set, copied
     /// into `into`, or refused with [`BadRead::Room`] and the length it needs.
-    /// Nothing borrows the process's environment past the call, since a
-    /// thread of the program may set a variable while a manifest is read.
+    /// Nothing borrows the process's environment past the call. The copy does
+    /// not guard the read itself: the C library guards `getenv` against no
+    /// `setenv` on another thread, so a program that sets variables from one
+    /// thread while another reads a manifest has that race.
     fn var<'n, 'b>(name: &'n CStr, into: &'b mut [u8]) -> Result<Option<&'b [u8]>, BadRead<'n>>;
 
     /// Runs `sh -c <command>` in the directory `dir` and answers its exit, or

@@ -212,7 +212,9 @@ impl Host for Unix {
         }
         // SAFETY: a non-null answer is a NUL-terminated string in the
         // environment block. It is copied out at once and nothing of it is
-        // kept, so no borrow of the block outlives this call.
+        // kept, so no borrow of the block outlives this call; the block is
+        // read unguarded, so a `setenv` on another thread meanwhile is a race
+        // this does not close, as no reader of the environment can.
         let value = unsafe { CStr::from_ptr(value) }.to_bytes();
         let Some(into) = into.get_mut(.. value.len()) else {
             return Err(BadRead::Room {
