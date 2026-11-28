@@ -122,8 +122,13 @@ value of the wrong shape, as the wrong shape; an `order`, `untracked` or
 `defaults`; and an item that is not a string, of `include`, `replace` or
 `unset` as no string and of `order` or `untracked` as no word, naming what it
 holds and which list it is of by its `MetaList`. Each is refused by name.
-`unknown_keys` and the resolver never see a
-key under `meta`.
+Where a layer's `meta` holds several of these, the one refused is the first
+in the order the file holds its keys, each key asked in turn for its shape,
+then its place, then its items; a value under a key the reader holds as a
+leaf is that key's wrong shape; a definition in an overlay is refused at its
+first leaf; and a name `meta.replace` lists that the layer does not hold is
+refused at `meta.replace`'s own place in that order. Both readers refuse the
+same one first. `unknown_keys` and the resolver never see a key under `meta`.
 
 `glob_matches` is the one glob rule both readers keep: `*`, `?` and `[...]`
 within one path segment, with `!` negating a bracket, which is the POSIX
