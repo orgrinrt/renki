@@ -15,7 +15,8 @@ use core::marker::PhantomData;
 
 use notko::{Maybe, Outcome};
 
-use crate::{Got, Literal, Meta, Store};
+use crate::meta::ORDER;
+use crate::{Got, Literal, Meta, MetaList, Store};
 
 /// The word of a layer, `local` in `name.local.ext`, borrowed from the file
 /// name it was read from. Only [`layer_of`] makes one, so every word is one
@@ -81,8 +82,12 @@ pub enum BadLayer<'a> {
     /// An order naming a word, or `*`, twice.
     // lint:allow(no-bare-string) reason: a word of the order. FIXME: port to Str.
     OrderTwice(&'a str),
-    /// An order item that is no word.
-    OrderItem(Got<'a>),
+    /// An item of `meta.overlays.order` or `meta.overlays.untracked` that is
+    /// no word: the list, and what the item holds.
+    NotAWord(MetaList, Got<'a>),
+    /// An item of `meta.overlays.include`, `meta.replace` or `meta.unset`
+    /// that is no string: the list, and what the item holds.
+    NotAString(MetaList, Got<'a>),
     /// A key under `meta` that is none of the reader's.
     // lint:allow(no-bare-string) reason: a dotted key of the document. FIXME: port to Str.
     UnknownMeta(&'a str),
@@ -122,9 +127,8 @@ impl fmt::Display for BadLayer<'_> {
                 )
             },
             BadLayer::OrderTwice(word) => write!(f, "meta.overlays.order names {word} twice"),
-            BadLayer::OrderItem(got) => {
-                write!(f, "meta.overlays.order holds {got}, which is no word")
-            },
+            BadLayer::NotAWord(key, got) => write!(f, "{key} holds {got}, which is no word"),
+            BadLayer::NotAString(key, got) => write!(f, "{key} holds {got}, which is no string"),
             BadLayer::UnknownMeta(key) => write!(f, "{key} is no key of the meta table"),
             BadLayer::MetaShape(key) => write!(f, "{key} holds a value of the wrong shape"),
             BadLayer::AboveBase(key) => {
@@ -286,14 +290,20 @@ impl<'a, St: Store> Order<'a, St> {
         let list = match set {
             Maybe::Isnt => return Outcome::Ok(Self::DEFAULT),
             Maybe::Is(Literal::List(text)) => text,
-            Maybe::Is(_) => return Outcome::Err(BadLayer::MetaShape("meta.overlays.order")),
+            Maybe::Is(_) => return Outcome::Err(BadLayer::MetaShape(ORDER)),
         };
         for (i, item) in St::items(list).enumerate() {
             let word = match item {
                 Literal::Str(w) => w,
-                Literal::Bool(_) => return Outcome::Err(BadLayer::OrderItem(Got::Bool)),
-                Literal::Int(_) => return Outcome::Err(BadLayer::OrderItem(Got::Int)),
-                Literal::List(_) => return Outcome::Err(BadLayer::OrderItem(Got::List)),
+                Literal::Bool(_) => {
+                    return Outcome::Err(BadLayer::NotAWord(MetaList::Order, Got::Bool));
+                },
+                Literal::Int(_) => {
+                    return Outcome::Err(BadLayer::NotAWord(MetaList::Order, Got::Int));
+                },
+                Literal::List(_) => {
+                    return Outcome::Err(BadLayer::NotAWord(MetaList::Order, Got::List));
+                },
             };
             if same(word, DEFAULTS) || same(word, BASE) {
                 return Outcome::Err(BadLayer::OrderNames(word));

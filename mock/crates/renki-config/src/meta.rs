@@ -15,12 +15,13 @@ use core::marker::PhantomData;
 
 use notko::Maybe;
 
-use crate::{BadLayer, Literal, Part, Store};
+use crate::kind::got_of;
+use crate::{BadLayer, Literal, Part, Shape, Store};
 
 // lint:allow(no-bare-string, no-bare-static-str) reason: the reader's static key names. FIXME: port to Str.
 const INCLUDE: &str = "meta.overlays.include";
 // lint:allow(no-bare-string, no-bare-static-str) reason: the reader's static key names. FIXME: port to Str.
-const ORDER: &str = "meta.overlays.order";
+pub(crate) const ORDER: &str = "meta.overlays.order";
 // lint:allow(no-bare-string, no-bare-static-str) reason: the reader's static key names. FIXME: port to Str.
 const UNTRACKED: &str = "meta.overlays.untracked";
 // lint:allow(no-bare-string, no-bare-static-str) reason: the reader's static key names. FIXME: port to Str.
@@ -37,6 +38,34 @@ pub(crate) const PREDICATES: &str = "meta.predicates.";
 // lint:allow(no-bare-string, no-bare-numeric, arvo-types-only) reason: a dotted key and a predicate over it. FIXME: port to Str and arvo's Bool.
 pub(crate) fn is_meta(key: &str) -> bool {
     key == "meta" || key.starts_with("meta.")
+}
+
+/// One of the lists the `meta` table holds, which a refusal of an item of it
+/// names by its dotted key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetaList {
+    /// `meta.overlays.include`, of entries.
+    Include,
+    /// `meta.overlays.order`, of words.
+    Order,
+    /// `meta.overlays.untracked`, of words.
+    Untracked,
+    /// `meta.replace`, of keys.
+    Replace,
+    /// `meta.unset`, of keys.
+    Unset,
+}
+
+impl fmt::Display for MetaList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            MetaList::Include => INCLUDE,
+            MetaList::Order => ORDER,
+            MetaList::Untracked => UNTRACKED,
+            MetaList::Replace => REPLACE,
+            MetaList::Unset => UNSET,
+        })
+    }
 }
 
 /// The `meta` table of one layer, read out of its document through the
@@ -92,8 +121,17 @@ impl<'d, St: Store> Meta<'d, St> {
     pub fn read(doc: &'d St::Document<'_>) -> Self {
         let mut stray = Maybe::Isnt;
         let mut defines = Maybe::Isnt;
+        // the first thing found wrong while the table is read: a table of the
+        // reader's that is no table, else a list holding an item of the wrong kind
+        let mut mixed = Maybe::Isnt;
         for key in St::keys(doc) {
             if !is_meta(key) {
+                continue;
+            }
+            if ["meta", "meta.overlays", "meta.predicates"].contains(&key) {
+                if mixed.isnt() && !matches!(St::shape(doc, key), Maybe::Is(Shape::Table)) {
+                    mixed = Maybe::Is(BadLayer::MetaShape(key));
+                }
                 continue;
             }
             if key.starts_with(PREDICATES) {
@@ -108,14 +146,28 @@ impl<'d, St: Store> Meta<'d, St> {
             }
         }
         let replace = St::get(doc, REPLACE);
-        // the first list of keys or entries holding an item that is no string
-        let mut mixed = Maybe::Isnt;
-        for key in [INCLUDE, REPLACE, UNSET] {
-            if let Maybe::Is(Literal::List(list)) = St::get(doc, key)
-                && St::items(list).any(|item| !matches!(item, Literal::Str(_)))
-            {
-                mixed = Maybe::Is(BadLayer::MetaShape(key));
+        // the first list holding an item that is no string, or of the words
+        // no word; `meta.overlays.order`'s own are read by `Order`
+        let lists = [
+            (MetaList::Include, INCLUDE, false),
+            (MetaList::Untracked, UNTRACKED, true),
+            (MetaList::Replace, REPLACE, false),
+            (MetaList::Unset, UNSET, false),
+        ];
+        for (list, key, words) in lists {
+            if mixed.is() {
                 break;
+            }
+            let Maybe::Is(Literal::List(items)) = St::get(doc, key) else {
+                continue;
+            };
+            if let Some(item) = St::items(items).find(|item| !matches!(item, Literal::Str(_))) {
+                let got = got_of(item);
+                mixed = Maybe::Is(if words {
+                    BadLayer::NotAWord(list, got)
+                } else {
+                    BadLayer::NotAString(list, got)
+                });
             }
         }
         let mut unheld = Maybe::Isnt;

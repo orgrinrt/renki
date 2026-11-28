@@ -7,12 +7,14 @@
 //! read is refused.
 
 use core::ffi::{CStr, c_int};
-use core::fmt;
+use core::fmt::{self, Write};
 
 /// Why a read is refused.
 ///
 /// Every refusal names the file it is about, so a caller reading several
-/// layers knows which one to look at.
+/// layers knows which one to look at, and its `Display` is the line the
+/// design's table of refusals gives it, the same bytes the POSIX reader
+/// writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadRead<'p> {
     /// `file` does not fit in the memory given, or for a variable, its value.
@@ -23,7 +25,9 @@ pub enum BadRead<'p> {
         /// The size the memory needs.
         need: usize,
     },
-    /// The C library refused `call` on `file` with `errno`.
+    /// The C library refused `call` on `file` with `errno`. Both are kept for
+    /// a caller that asks, and the `Display` writes neither, as the POSIX
+    /// reader cannot know them.
     Os {
         /// The file, or for a shell the directory it was to run in.
         file:  &'p CStr,
@@ -38,13 +42,17 @@ pub enum BadRead<'p> {
         /// What was named.
         file: &'p CStr,
     },
-    /// `file` is not UTF-8 text from byte `at` on.
-    NotText {
-        /// The file.
-        file: &'p CStr,
-        /// The offset of the first byte that is not.
-        at:   usize,
-    },
+}
+
+/// `file` as a refusal names it: its bytes, each that is no UTF-8 as U+FFFD.
+fn named(file: &CStr, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    for chunk in file.to_bytes().utf8_chunks() {
+        f.write_str(chunk.valid())?;
+        if !chunk.invalid().is_empty() {
+            f.write_char(char::REPLACEMENT_CHARACTER)?;
+        }
+    }
+    Ok(())
 }
 
 impl fmt::Display for BadRead<'_> {
@@ -53,19 +61,23 @@ impl fmt::Display for BadRead<'_> {
             BadRead::Room {
                 file,
                 need,
-            } => write!(f, "{file:?} needs a room of {need} bytes"),
+            } => {
+                named(file, f)?;
+                write!(f, " needs a room of {need} bytes")
+            },
             BadRead::Os {
                 file,
-                call,
-                errno,
-            } => write!(f, "{file:?}: {call} failed with errno {errno}"),
-            BadRead::NotText {
-                file,
-                at,
-            } => write!(f, "{file:?} is not UTF-8 from byte {at}"),
+                ..
+            } => {
+                named(file, f)?;
+                f.write_str(" cannot be read")
+            },
             BadRead::NotAFile {
                 file,
-            } => write!(f, "{file:?} is not a regular file"),
+            } => {
+                named(file, f)?;
+                f.write_str(" is not a regular file")
+            },
         }
     }
 }

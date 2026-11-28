@@ -123,10 +123,14 @@ impl Store for Toml {
         if item.is_array_of_tables() {
             Maybe::Is(renki_config::Shape::Tables)
         } else if let Some(array) = item.as_array() {
-            Maybe::Is(match array.iter().next() {
-                None => renki_config::Shape::Empty,
-                Some(first) if first.is_inline_table() => renki_config::Shape::Tables,
-                Some(_) => renki_config::Shape::List,
+            // an array of tables only where every item is one; a mixed array
+            // holds values too, so it is a list of values
+            Maybe::Is(if array.is_empty() {
+                renki_config::Shape::Empty
+            } else if array.iter().all(|item| item.is_inline_table()) {
+                renki_config::Shape::Tables
+            } else {
+                renki_config::Shape::List
             })
         } else if item.is_table_like() {
             Maybe::Is(renki_config::Shape::Table)
