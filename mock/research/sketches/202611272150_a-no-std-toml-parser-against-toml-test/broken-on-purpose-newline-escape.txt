@@ -1,0 +1,45 @@
+   Compiling a-no-std-toml-parser-against-toml-test v0.0.0 (<path>)
+    Finished `test` profile [unoptimized] target(s) in 0.29s
+     Running tests/toml_test.rs (<target>/debug/deps/toml_test-6a0510a6ba5f9d20)
+
+running 1 test
+FAIL 1.0.0 valid/key/escapes.toml: decoded differently: {   "backsp\b\b": {},   "N": {     "type": "string",     "value": "newline"   },   "\b": {     "type": "string",     "value": "bell"   },   "\"": {     "type": "string",     "value": "just a quote"   },   "a.b": {     "À": {}   },   "À": {     "type": "string",     "value": "latin capital letter A with grave"   },   "\"quoted\"": {     "quote": {       "type": "bool",       "value": "true"     }   } }
+FAIL 1.0.0 valid/key/space.toml: decoded differently: {   " c d ": {     "type": "integer",     "value": "2"   },   "a b": {     "type": "integer",     "value": "1"   },   "  much \t\t  whitespace  \tN  \rN  ": {     "type": "integer",     "value": "3"   },   " tbl ": {     "\ttab\ttab\t": {       "type": "string",       "value": "tab"     }   } }
+FAIL 1.0.0 valid/spec-1.0.0/string-0.toml: decoded differently: {   "str": {     "type": "string",     "value": "I'm a string. \"You can quote me\". Name\tJoséNLocation\tSF."   } }
+FAIL 1.0.0 valid/spec-1.0.0/string-2.toml: decoded differently: {   "str3": {     "type": "string",     "value": "Roses are red\rNViolets are blue"   },   "str2": {     "type": "string",     "value": "Roses are redNViolets are blue"   } }
+FAIL 1.0.0 valid/string/escapes.toml: decoded differently: {   "backslash": {     "type": "string",     "value": "|\\."   },   "notunicode2": {     "type": "string",     "value": "|\\u."   },   "formfeed": {     "type": "string",     "value": "|\f."   },   "notunicode3": {     "type": "string",     "value": "|\\u0075."   },   "carriage": {     "type": "string",     "value": "|\r."   },   "notunicode4": {     "type": "string",     "value": "|\\u."   },   "backspace": {     "type": "string",     "value": "|\b."   },   "unitseparator": {     "type": "string",     "value": "|\u001f."   },   "newline": {     "type": "string",     "value": "|N."   },   "tab": {     "type": "string",     "value": "|\t."   },   "delete": {     "type": "string",     "value": "|."   },   "quote": {     "type": "string",     "value": "|\"."   },   "notunicode1": {     "type": "string",     "value": "|\\u."   } }
+FAIL 1.0.0 valid/string/nl.toml: decoded differently: {   "lit_nl_end": {     "type": "string",     "value": "value\\n"   },   "nl_mid": {     "type": "string",     "value": "valNue"   },   "nl_end": {     "type": "string",     "value": "valueN"   },   "lit_nl_mid": {     "type": "string",     "value": "val\\nue"   },   "lit_nl_uni": {     "type": "string",     "value": "val\\ue"   } }
+TOTAL 1.0.0: valid 202/208 passed, invalid 501/501 refused
+NODES 1.0.0: most held at once 26 (by valid/table/names-with-values.toml, 160 bytes), most per byte of text 0.333
+FAIL 1.1.0 valid/key/escapes.toml: decoded differently: {   "À": {     "type": "string",     "value": "latin capital letter A with grave"   },   "\"": {     "type": "string",     "value": "just a quote"   },   "a.b": {     "À": {}   },   "N": {     "type": "string",     "value": "newline"   },   "\b": {     "type": "string",     "value": "bell"   },   "backsp\b\b": {},   "\"quoted\"": {     "quote": {       "type": "bool",       "value": "true"     }   } }
+FAIL 1.1.0 valid/key/space.toml: decoded differently: {   "  much \t\t  whitespace  \tN  \rN  ": {     "type": "integer",     "value": "3"   },   " tbl ": {     "\ttab\ttab\t": {       "type": "string",       "value": "tab"     }   },   "a b": {     "type": "integer",     "value": "1"   },   " c d ": {     "type": "integer",     "value": "2"   } }
+FAIL 1.1.0 valid/spec-1.1.0/common-12.toml: decoded differently: {   "str": {     "type": "string",     "value": "I'm a string. \"You can quote me\". Name\tJoséNLocation\tSF."   } }
+FAIL 1.1.0 valid/spec-1.1.0/common-14.toml: decoded differently: {   "str3": {     "type": "string",     "value": "Roses are red\rNViolets are blue"   },   "str2": {     "type": "string",     "value": "Roses are redNViolets are blue"   } }
+FAIL 1.1.0 valid/string/escapes.toml: decoded differently: {   "backslash": {     "type": "string",     "value": "|\\."   },   "delete": {     "type": "string",     "value": "|."   },   "notunicode2": {     "type": "string",     "value": "|\\u."   },   "notunicode3": {     "type": "string",     "value": "|\\u0075."   },   "notunicode4": {     "type": "string",     "value": "|\\u."   },   "backspace": {     "type": "string",     "value": "|\b."   },   "tab": {     "type": "string",     "value": "|\t."   },   "newline": {     "type": "string",     "value": "|N."   },   "quote": {     "type": "string",     "value": "|\"."   },   "formfeed": {     "type": "string",     "value": "|\f."   },   "carriage": {     "type": "string",     "value": "|\r."   },   "unitseparator": {     "type": "string",     "value": "|\u001f."   },   "notunicode1": {     "type": "string",     "value": "|\\u."   } }
+FAIL 1.1.0 valid/string/nl.toml: decoded differently: {   "nl_mid": {     "type": "string",     "value": "valNue"   },   "lit_nl_end": {     "type": "string",     "value": "value\\n"   },   "lit_nl_uni": {     "type": "string",     "value": "val\\ue"   },   "lit_nl_mid": {     "type": "string",     "value": "val\\nue"   },   "nl_end": {     "type": "string",     "value": "valueN"   } }
+TOTAL 1.1.0: valid 212/218 passed, invalid 494/494 refused
+NODES 1.1.0: most held at once 26 (by valid/table/names-with-values.toml, 160 bytes), most per byte of text 0.333
+
+thread 'every_case_of_every_version' (28131) panicked at tests/toml_test.rs:266:5:
+assertion `left == right` failed
+  left: [("1.0.0", 202, 208, 501, 501), ("1.1.0", 212, 218, 494, 494)]
+ right: [("1.0.0", 208, 208, 501, 501), ("1.1.0", 218, 218, 494, 494)]
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::panicking::assert_failed_inner
+   3: core::panicking::assert_failed::<alloc::vec::Vec<(&str, usize, usize, usize, usize)>, alloc::vec::Vec<(&str, usize, usize, usize, usize)>>
+   4: toml_test::every_case_of_every_version
+   5: toml_test::every_case_of_every_version::{closure#0}
+   6: <toml_test::every_case_of_every_version::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+test every_case_of_every_version ... FAILED
+
+failures:
+
+failures:
+    every_case_of_every_version
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.08s
+
+error: test failed, to rerun pass `--test toml_test`
