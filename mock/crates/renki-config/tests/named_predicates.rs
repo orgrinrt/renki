@@ -115,6 +115,19 @@ fn a_shell_predicate_holds_on_zero_not_on_one_and_refuses_any_other_exit() {
         holds("built", &table, &said(&[], &[])).err(),
         Maybe::Is(BadPredicate::Exit("test -e built", Maybe::Isnt))
     );
+    // an exit above 128 is how a shell says a signal ended the command, so
+    // it is no exit; 128 itself is one
+    for exit in [129, 137, 255] {
+        assert_eq!(
+            holds("built", &table, &said(&[], &[("test -e built", exit)])).err(),
+            Maybe::Is(BadPredicate::Exit("test -e built", Maybe::Isnt)),
+            "{exit}"
+        );
+    }
+    assert_eq!(
+        holds("built", &table, &said(&[], &[("test -e built", 128)])).err(),
+        Maybe::Is(BadPredicate::Exit("test -e built", Maybe::Is(128)))
+    );
 }
 
 #[test]
