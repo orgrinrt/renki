@@ -15,11 +15,23 @@
 # where there is one, and the answer is exit 1. A key no layer holds is exit 1
 # with nothing written.
 #
+# A shell predicate runs its command, through sh -c in the base's directory,
+# on every dump and every get that reads a layer it decides. Nothing is kept
+# between calls, so a command with effects has them on each read. What the
+# command prints goes to /dev/null; what it writes on its error stream is the
+# caller's.
+#
 # The TOML it reads: comments, trailing ones included; [table], [dotted.table]
 # and [[array.of.tables]] headers; bare and dotted keys; basic strings with
 # \", \\, \n and \t; literal strings; integers; booleans; arrays of those, on
 # one line or several. It refuses multi-line strings, inline tables, nested
-# arrays, quoted keys, floats, dates and times, and every other escape.
+# arrays, quoted keys, floats, dates and times, and every other escape, and
+# what is no TOML inside those forms: a control byte other than a tab, and
+# bytes that are no UTF-8.
+#
+# Every path is resolved by the file system, a link and a .. after it
+# included, never as text. A path holding a newline is refused, since no line
+# can name it.
 
 manifest() {
 	case ${1-} in
@@ -69,26 +81,11 @@ function baseof(p) { return substr(p, lastslash(p) + 1) }
 
 function join2(dir, name) { return dir == "" ? name : (dir == "/" ? "/" name : dir "/" name) }
 
-# A path relative to the directory of the base, with . and .. taken out.
-function norm(p,   abs, n, seg, st, k, i, s, out) {
-	abs = substr(p, 1, 1) == "/"
-	n = split(p, seg, "/")
-	k = 0
-	for (i = 1; i <= n; i++) {
-		s = seg[i]
-		if (s == "" || s == ".") continue
-		if (s == ".." && k > 0 && st[k] != "..") { k--; continue }
-		if (s == ".." && abs) continue
-		st[++k] = s
-	}
-	out = ""
-	for (i = 1; i <= k; i++) out = out (i > 1 ? "/" : "") st[i]
-	return abs ? "/" out : out
-}
-
+# An include entry joined to the directory of the file naming it, as text. A
+# . or .. in it is left for the file system to resolve, after any link.
 function joinlabel(dir, rel) {
-	if (substr(rel, 1, 1) == "/") return norm(rel)
-	return norm(dir == "" ? rel : dir "/" rel)
+	if (substr(rel, 1, 1) == "/") return rel
+	return join2(dir, rel)
 }
 
 # Where a label is opened from: labels are relative to the base.
@@ -112,37 +109,60 @@ function q(s,   out, i) {
 	return Q out s Q
 }
 
-function line1(cmd,   l, r) {
-	l = ""
-	r = (cmd | getline l)
+function nl(s) { return index(s, "\n") > 0 }
+
+# Everything a command prints, its lines joined again by newlines.
+function output(cmd,   l, out, n) {
+	out = ""; n = 0
+	while ((cmd | getline l) > 0) out = (n++ ? out "\n" : "") l
 	close(cmd)
-	return r > 0 ? l : ""
+	return out
 }
 
-# The canonical path of a file, its links followed, or the empty text.
+# The canonical path of a file, its links followed and its directory resolved
+# by cd -P; or "-missing" where there is no file to read, and "-notregular"
+# where what is there is no regular file. A path holding a newline comes back
+# holding it.
 function canonical(label) {
-	return line1("f=" q(fpath(label)) "; n=0; " \
-		"while [ -h \"$f\" ] && [ $n -lt 40 ]; do t=$(ls -ld -- \"$f\"); t=${t#* -> }; " \
-		"case $t in /*) f=$t ;; *) f=$(dirname -- \"$f\")/$t ;; esac; n=$((n + 1)); done; " \
-		"[ -f \"$f\" ] && d=$(cd -P -- \"$(dirname -- \"$f\")\" 2>/dev/null && pwd -P) && " \
-		"printf \"%s/%s\\n\" \"$d\" \"$(basename -- \"$f\")\"")
+	return output("f=" q(fpath(label)) "; n=0; " \
+		"while [ -h \"$f\" ]; do n=$((n + 1)); [ $n -le 40 ] || { echo -missing; exit 0; }; " \
+		"case $f in */*) d=${f%/*}/ ;; *) d= ;; esac; " \
+		"t=$(ls -ld -- \"$f\" && echo x) || { echo -missing; exit 0; }; t=${t%??}; t=${t#*\" $f -> \"}; " \
+		"case $t in /*) f=$t ;; *) f=$d$t ;; esac; done; " \
+		"[ -e \"$f\" ] || { echo -missing; exit 0; }; [ -f \"$f\" ] || { echo -notregular; exit 0; }; " \
+		"case $f in */*) d=${f%/*}; [ -n \"$d\" ] || d=/ ;; *) d=. ;; esac; " \
+		"d=$(cd -P -- \"$d\" && pwd -P && echo x) || { echo -missing; exit 0; }; d=${d%??}; " \
+		"printf \"%s/%s\\n\" \"${d%/}\" \"${f##*/}\"")
 }
 
-# The files of a directory, in byte order, into ent; -1 where it cannot be listed.
-function listdir(dirlabel, ent,   cmd, l, n) {
-	cmd = "cd -- " q(dpath(dirlabel)) " 2>/dev/null && ls -ap || echo /"
-	n = 0
+# Every entry of a directory but . and .., in byte order, into ent; -2 where
+# the directory is none, and -1 where it cannot be listed. Each name is
+# followed by a line holding only /, which no name holds, so a name holding a
+# newline comes back whole.
+function listdir(dirlabel, ent,   cmd, l, n, acc, lines, i, j, t) {
+	cmd = "d=" q(dpath(dirlabel)) "; [ -d \"$d\" ] || { echo -nodir; exit 0; }; " \
+		"cd -P -- \"$d\" 2>/dev/null && ls -a . >/dev/null 2>&1 || { echo -unlistable; exit 0; }; " \
+		"for f in .* *; do case $f in .|..) continue ;; esac; " \
+		"[ -e \"$f\" ] || [ -h \"$f\" ] || continue; printf \"%s\\n/\\n\" \"$f\"; done"
+	n = 0; lines = 0; acc = ""
 	while ((cmd | getline l) > 0) {
-		if (l == "/" && n == 0) { close(cmd); return -1 }
-		if (l ~ /\/$/) continue
-		ent[++n] = l
+		if (l == "/" && lines) { ent[++n] = acc; acc = ""; lines = 0; continue }
+		acc = (lines++ ? acc "\n" : "") l
 	}
 	close(cmd)
+	if (lines) return acc == "-nodir" ? -2 : -1
+	for (i = 2; i <= n; i++) {
+		t = ent[i]
+		for (j = i - 1; j > 0 && (ent[j] "") > (t ""); j--) ent[j + 1] = ent[j]
+		ent[j + 1] = t
+	}
 	return n
 }
 
-# The shell rule: * and ? within one segment, [...] with ! negating it.
+# The shell rule: * and ? within one segment, [...] with ! negating it, and a
+# . that begins the name matched by a . in the pattern alone.
 function glob(p, n,   lp, ln, pi, ni, back, bstar, btaken, c, step, r) {
+	if (substr(n, 1, 1) == "." && substr(p, 1, 1) != ".") return 0
 	lp = length(p); ln = length(n); pi = 1; ni = 1; back = 0
 	while (ni <= ln) {
 		step = 0
@@ -200,7 +220,16 @@ function nextline(   r) {
 	LNUM++
 	sub(/\r$/, "", S)
 	I = 1
+	if (S ~ /\000/ || S ~ /[\001-\010\012-\037\177]/) refuse(here() "a control byte other than a tab is no TOML")
+	if (S ~ /[\200-\377]/ && !utf8(S)) refuse(here() "the bytes of this line are no UTF-8")
 	return 1
+}
+
+# Whether every byte above 127 of s is part of a UTF-8 sequence: no stray
+# continuation, no overlong form, no surrogate and nothing above U+10FFFF.
+function utf8(s) {
+	gsub(/[\302-\337][\200-\277]|\340[\240-\277][\200-\277]|[\341-\354\356\357][\200-\277][\200-\277]|\355[\200-\237][\200-\277]|\360[\220-\277][\200-\277][\200-\277]|[\361-\363][\200-\277][\200-\277][\200-\277]|\364[\200-\217][\200-\277][\200-\277]/, "", s)
+	return s !~ /[\200-\377]/
 }
 
 function ch() { return substr(S, I, 1) }
@@ -339,6 +368,8 @@ function list(L, p,   line0, n, c) {
 	NI[L, p] = n
 }
 
+# A text as a basic string, in the dump and in a refusal alike. A string the
+# subset reads never holds a carriage return; the value of a variable may.
 function canon(s,   out, i, c) {
 	out = ""
 	for (i = 1; i <= length(s); i++) {
@@ -347,6 +378,7 @@ function canon(s,   out, i, c) {
 		else if (c == "\"") c = "\\\""
 		else if (c == "\n") c = "\\n"
 		else if (c == "\t") c = "\\t"
+		else if (c == "\r") c = "\\r"
 		out = out c
 	}
 	return "\"" out "\""
@@ -393,7 +425,8 @@ function basic(   out, c, e) {
 			else if (e == "n") out = out "\n"
 			else if (e == "t") out = out "\t"
 			else if (e == "") refuse(here() "a string is not closed")
-			else beyond("a \\" e " escape")
+			else if (index("bfreuUx", e)) beyond("a \\" e " escape")
+			else refuse(here() "\\" e " is no escape of TOML")
 			I += 2
 			continue
 		}
@@ -458,36 +491,100 @@ function leaf(L, p) { return SH[L, p] == "s" || SH[L, p] == "l" }
 
 function at(L, k) { return LAB[L] ":" LN[L, k] ": " }
 
+function wrong(L, p) { refuse(at(L, p) p " holds a value of the wrong shape") }
+
+function overlay(L, p) { refuse(at(L, p) p " is read from the base and defaults only, not from an overlay") }
+
+# The meta keys that hold a list, each with what its items must be.
+function lists(   n, ks, i) {
+	n = split("meta.overlays.include string meta.overlays.order word meta.overlays.untracked word meta.replace string meta.unset string", ks, " ")
+	for (i = 1; i < n; i += 2) ITEM[ks[i]] = ks[i + 1]
+}
+
 # The first thing wrong with the meta table of L, a part that is "base",
-# "defaults" or "layer", in the order the contracts check it.
-function defect(L, part,   i, p, stray, defines, ks, nk, k, w, j) {
-	stray = ""; defines = ""
+# "defaults" or "layer", taken key by key in the order the file holds them.
+# The predicates are checked whole once the base and defaults are read.
+function defect(L, part,   i, p, k, j, seen, defines) {
+	defines = ""
 	for (i = 1; i <= NN[L]; i++) {
 		p = NODES[L, i]
-		if (!leaf(L, p) || !ismeta(p)) continue
-		if (substr(p, 1, 16) == "meta.predicates.") { if (defines == "") defines = p; continue }
-		if (p == "meta.overlays.include" || p == "meta.overlays.order" || p == "meta.overlays.untracked" \
-			|| p == "meta.when" || p == "meta.replace" || p == "meta.unset") continue
-		if (stray == "") stray = p
+		if (!ismeta(p)) continue
+		if (p == "meta" || p == "meta.overlays") { if (SH[L, p] != "t") wrong(L, p); continue }
+		if (p == "meta.predicates" || substr(p, 1, 16) == "meta.predicates.") {
+			if (part == "layer" && (defines == "" || (leaf(L, p) && !leaf(L, defines)))) defines = p
+			if (part != "layer" && p == "meta.predicates" && SH[L, p] != "t") wrong(L, p)
+			continue
+		}
+		if (p == "meta.when") {
+			if (!(SH[L, p] == "s" && TY[L, p] == "str")) wrong(L, p)
+			if (part != "layer") refuse(at(L, p) p " is refused on the base and defaults, which are always read")
+			continue
+		}
+		if (p in ITEM) {
+			if (SH[L, p] != "l") wrong(L, p)
+			if (part == "layer" && ITEM[p] == "word") overlay(L, p)
+			for (j = 1; j <= NI[L, p]; j++)
+				if (ITY[L, p, j] != "str") refuse(at(L, p) p " holds " got(ITY[L, p, j]) ", which is no " ITEM[p])
+			continue
+		}
+		seen = 0
+		for (k in ITEM) if (index(p, k "[") == 1 || index(p, k ".") == 1) seen = 1
+		if (index(p, "meta.when.") == 1 || index(p, "meta.when[") == 1) seen = 1
+		if (seen) continue
+		refuse(at(L, p) p " is no key of the meta table")
 	}
-	if (stray != "") refuse(at(L, stray) stray " is no key of the meta table")
-	nk = split("meta.overlays.include meta.overlays.order meta.overlays.untracked meta.replace meta.unset", ks, " ")
-	for (i = 1; i <= nk; i++) {
-		k = ks[i]
-		if ((L, k) in SH && SH[L, k] != "l") refuse(at(L, k) k " holds a value of the wrong shape")
-	}
-	w = "meta.when"
-	if ((L, w) in SH && !(SH[L, w] == "s" && TY[L, w] == "str")) refuse(at(L, w) w " holds a value of the wrong shape")
-	if (part != "layer") {
-		if ((L, w) in SH) refuse(at(L, w) w " is refused on the base and defaults, which are always read")
-	} else {
-		for (i = 2; i <= 3; i++) if ((L, ks[i]) in SH) refuse(at(L, ks[i]) ks[i] " is read from the base and defaults only, not from an overlay")
-		if (defines != "") refuse(at(L, defines) defines " is read from the base and defaults only, not from an overlay")
-	}
+	# A definition in an overlay is named by its first value, or by the
+	# table where it holds none.
+	if (defines != "") overlay(L, defines)
 	k = "meta.replace"
 	if ((L, k) in SH) for (j = 1; j <= NI[L, k]; j++)
-		if (ITY[L, k, j] == "str" && !((L, ISTR[L, k, j]) in SH))
+		if (!((L, ISTR[L, k, j]) in SH))
 			refuse(at(L, k) "meta.replace names " ISTR[L, k, j] ", which this layer does not hold")
+}
+
+# The predicate defined at node p of L: its one kind into PKIND, at PKEY;
+# refused by name where it holds no kind, two, or one over the wrong shape.
+function define(L, p, name,   i, c, kind, n, j, bad) {
+	n = 0; bad = SH[L, p] != "t"
+	for (i = 1; i <= NN[L] && !bad; i++) {
+		c = NODES[L, i]
+		if (index(c, p ".") != 1) continue
+		kind = substr(c, length(p) + 2)
+		if (index(kind, ".") || index(kind, "[")) continue
+		n++
+		PKIND = kind; PKEY = c
+		if ((kind == "env" || kind == "shell" || kind == "not") && SH[L, c] == "s" && TY[L, c] == "str") continue
+		if ((kind == "all" || kind == "any") && SH[L, c] == "l") {
+			for (j = 1; j <= NI[L, c]; j++) if (ITY[L, c, j] != "str") bad = 1
+			continue
+		}
+		bad = 1
+	}
+	if (bad || n != 1) refuse(at(L, p) "the predicate " name " is not one of env, shell, not, all or any of its shape")
+}
+
+function defined(name) { return (B, "meta.predicates." name) in SH || (DF && (DF, "meta.predicates." name) in SH) }
+
+# The table of predicates, of the base and of defaults, checked whole: every
+# definition one kind of its shape, and every name a not, all or any gives
+# defined.
+function predicates(   s, L, i, p, name, j) {
+	for (s = 1; s <= 2; s++) {
+		L = s == 1 ? B : DF
+		if (!L) continue
+		for (i = 1; i <= NN[L]; i++) {
+			p = NODES[L, i]
+			if (substr(p, 1, 16) != "meta.predicates.") continue
+			name = substr(p, 17)
+			if (index(name, ".") || index(name, "[")) continue
+			define(L, p, name)
+			if (PKIND == "not" && !defined(STR[L, PKEY]))
+				refuse(at(L, p) "no predicate " STR[L, PKEY] " is defined under meta.predicates")
+			if (PKIND == "all" || PKIND == "any") for (j = 1; j <= NI[L, PKEY]; j++)
+				if (!defined(ISTR[L, PKEY, j]))
+					refuse(at(L, p) "no predicate " ISTR[L, PKEY, j] " is defined under meta.predicates")
+		}
+	}
 }
 
 # --- finding the layers -----------------------------------------------------------
@@ -499,12 +596,17 @@ function adddoc(label, word) {
 	return ND
 }
 
+function newline(what) { refuse(what " a newline, which no line can name") }
+
 # What a file is of this manifest, into LO ("isnt", "base", "layer") and
-# LOWORD, refusing a file of its shape that cannot be a layer.
-function layerof(file, label,   rest, word) {
+# LOWORD, refusing a file of its shape that cannot be a layer. A name of that
+# shape holding a newline is refused as where says.
+function layerof(file, label, where,   rest, word) {
 	LO = "isnt"
 	if (substr(file, 1, length(MNAME) + 1) != MNAME ".") return
 	rest = substr(file, length(MNAME) + 2)
+	if (length(rest) < length(MEXT) || substr(rest, length(rest) - length(MEXT) + 1) != MEXT) return
+	if (nl(file)) newline(where)
 	if (rest == MEXT) { LO = "base"; return }
 	if (length(rest) <= length(MEXT) || substr(rest, length(rest) - length(MEXT)) != "." MEXT) return
 	word = substr(rest, 1, length(rest) - length(MEXT) - 1)
@@ -517,12 +619,21 @@ function layerof(file, label,   rest, word) {
 
 function two(a, b) { return a < b ? a " and " b : b " and " a }
 
+# The canonical path of the file at label, or a refusal saying why it cannot
+# be read.
+function readable(label,   c) {
+	c = canonical(label)
+	if (c == "-notregular") refuse(label ": is not a regular file")
+	if (substr(c, 1, 1) != "/") refuse(label ": cannot be read")
+	if (nl(c)) newline(label ": its path holds")
+	return c
+}
+
 # A file found as the part LO says: read once by its canonical path, its word
 # carried by it alone. Answers the new document, or 0 where it was read before.
 function found(label, beside,   word, c, d) {
 	word = LO == "base" ? "" : LOWORD
-	c = canonical(label)
-	if (c == "") refuse(label ": cannot be read")
+	c = readable(label)
 	if (c in SEEN) return 0
 	if (word == "") refuse(two(LAB[B], label) " are both the base")
 	if (word in HOLDER) refuse(two(LAB[HOLDER[word]], label) " carry the same layer word " word)
@@ -538,8 +649,8 @@ function includes(d,   k, j, e, dl, dir, pat, full, n, ent, i, lab, nd) {
 	if (!((d, k) in SH)) return
 	dl = dirof(LAB[d])
 	for (j = 1; j <= NI[d, k]; j++) {
-		if (ITY[d, k, j] != "str") refuse(at(d, k) k " holds a value of the wrong shape")
 		e = ISTR[d, k, j]
+		if (nl(e)) newline(at(d, k) k " names a path holding")
 		if (e ~ /\/$/) {
 			dir = joinlabel(dl, substr(e, 1, length(e) - 1))
 			pat = "*"
@@ -550,11 +661,13 @@ function includes(d,   k, j, e, dl, dir, pat, full, n, ent, i, lab, nd) {
 		}
 		split("", ent)
 		n = listdir(dir, ent)
-		if (n < 0) refuse(at(d, k) k " names " e ", which cannot be listed")
+		if (n == -2 && e ~ /\/$/) refuse(at(d, k) k " names " e ", which is no directory")
+		if (n == -1) refuse(at(d, k) k " names " e ", which cannot be listed")
 		for (i = 1; i <= n; i++) {
 			if (!glob(pat, ent[i])) continue
+			if (nl(ent[i]) && e !~ /\/$/) newline(at(d, k) k " matches a path holding")
 			lab = join2(dir, ent[i])
-			layerof(ent[i], lab)
+			layerof(ent[i], lab, at(d, k) k " matches a path holding")
 			if (LO == "isnt") {
 				if (e ~ /\/$/) continue
 				refuse(at(d, k) k " matches " lab ", which is no layer of " LAB[B])
@@ -574,7 +687,6 @@ function readorder(   k, src, j, w, i) {
 	if (!src) { ORDN = split("* local secret private", ORD, " "); return }
 	ORDN = 0
 	for (j = 1; j <= NI[src, k]; j++) {
-		if (ITY[src, k, j] != "str") refuse(at(src, k) k " holds " got(ITY[src, k, j]) ", which is no word")
 		w = ISTR[src, k, j]
 		if (w == "defaults" || w == "base") refuse(at(src, k) k " names " w ", which stays below every overlay")
 		for (i = 1; i <= ORDN; i++) if (ORD[i] == w) refuse(at(src, k) k " names " w " twice")
@@ -598,17 +710,14 @@ function untracked(   k, src, j, n, un, d, cmd) {
 	src = ((B, k) in SH) ? B : ((DF && (DF, k) in SH) ? DF : 0)
 	if (!src) n = split("local secret private", un, " ")
 	else {
-		n = 0
-		for (j = 1; j <= NI[src, k]; j++) {
-			if (ITY[src, k, j] != "str") refuse(at(src, k) k " holds a value of the wrong shape")
-			un[++n] = ISTR[src, k, j]
-		}
+		n = NI[src, k]
+		for (j = 1; j <= n; j++) un[j] = ISTR[src, k, j]
 	}
 	for (d = 1; d <= ND; d++) {
 		if (WORD[d] == "") continue
 		for (j = 1; j <= n; j++) if (un[j] == WORD[d]) break
 		if (j > n) continue
-		cmd = "cd -- " q(dpath(dirof(LAB[d]))) " && git ls-files --error-unmatch -- " \
+		cmd = "cd -P -- " q(dpath(dirof(LAB[d]))) " && git ls-files --error-unmatch -- " \
 			q(baseof(LAB[d])) " >/dev/null 2>&1"
 		if (system(cmd) == 0)
 			refuse(LAB[d] ": the layer " WORD[d] " is tracked by git and must not be; git rm --cached " LAB[d])
@@ -624,43 +733,18 @@ function truthy(v,   l) {
 	return ""
 }
 
-function debug(s,   out, i, c) {
-	out = ""
-	for (i = 1; i <= length(s); i++) {
-		c = substr(s, i, 1)
-		if (c == "\\") c = "\\\\"
-		else if (c == "\"") c = "\\\""
-		else if (c == "\n") c = "\\n"
-		else if (c == "\t") c = "\\t"
-		else if (c == "\r") c = "\\r"
-		out = out c
-	}
-	return "\"" out "\""
-}
-
 function prefuse(msg) { refuse(at(PD, "meta.when") msg) }
 
 # The definition of name, from the base and else from defaults, into DKIND,
-# DDOC and DKEY; 0 where neither defines it.
-function definition(name,   s, L, i, p, lead, kind, n) {
-	lead = "meta.predicates." name "."
-	for (s = 1; s <= 2; s++) {
-		L = s == 1 ? B : DF
-		if (!L) continue
-		n = 0
-		for (i = 1; i <= NN[L]; i++) {
-			p = NODES[L, i]
-			if (!leaf(L, p) || substr(p, 1, length(lead)) != lead) continue
-			kind = substr(p, length(lead) + 1)
-			if ((kind == "env" || kind == "shell" || kind == "not") && SH[L, p] == "s" && TY[L, p] == "str") ;
-			else if ((kind == "all" || kind == "any") && SH[L, p] == "l") ;
-			else prefuse("the predicate " name " is not one of env, shell, not, all or any of its shape")
-			if (n++) prefuse("the predicate " name " is not one of env, shell, not, all or any of its shape")
-			DKIND = kind; DDOC = L; DKEY = p
-		}
-		if (n) return 1
-	}
-	return 0
+# DDOC and DKEY, from the table checked whole when it was read; 0 where
+# neither defines it.
+function definition(name,   p, L) {
+	p = "meta.predicates." name
+	L = ((B, p) in SH) ? B : ((DF && (DF, p) in SH) ? DF : 0)
+	if (!L) return 0
+	define(L, p, name)
+	DKIND = PKIND; DDOC = L; DKEY = PKEY
+	return 1
 }
 
 function holds(name, d) {
@@ -682,13 +766,16 @@ function answer(name,   i, kind, dd, dk, v, set, t, r, cmd, st, j, b) {
 		if (!set) r = 0
 		else {
 			r = truthy(t)
-			if (r == "") prefuse(v " is " debug(t) ", which is neither true nor false")
+			if (r == "") prefuse(v " is " canon(t) ", which is neither true nor false")
 			r += 0
 		}
 	} else if (kind == "shell") {
+		# The LC_ALL of the caller is given back, and the shell is the process
+		# system() waits on, so a signal that ends it reads as no exit.
 		v = STR[dd, dk]
 		cmd = (LCSET == "set" ? "LC_ALL=" q(LCVAL) "; export LC_ALL; " : "unset LC_ALL; ") \
-			"sh -c " q("cd -- \"$1\" && exec sh -c \"$2\"") " sh " q(dirof(CAN[B])) " " q(v) " >/dev/null"
+			"exec sh -c " q("cd -- \"$1\" || exit 125; exec sh -c \"$2\" >/dev/null") \
+			" sh " q(dirof(CAN[B])) " " q(v)
 		st = system(cmd)
 		if (st == 0) r = 1
 		else if (st == 1) r = 0
@@ -699,7 +786,6 @@ function answer(name,   i, kind, dd, dk, v, set, t, r, cmd, st, j, b) {
 	} else {
 		r = kind == "all"
 		for (j = 1; j <= NI[dd, dk]; j++) {
-			if (ITY[dd, dk, j] != "str") prefuse("the predicate " name " is not one of env, shell, not, all or any of its shape")
 			b = answer(ISTR[dd, dk, j])
 			if (kind == "all") r = r && b
 			else r = r || b
@@ -789,16 +875,17 @@ function merge(s,   d, k, j, u, t, held, i, p, tp, sh, lo) {
 
 function main(   i, n, ent, lab, d, qi, m, key, keys, sorted, j, t, p, line, lines) {
 	if (VERB != "dump" && VERB != "get") refuse("manifest: no verb " VERB)
+	lists()
 	BDIR = dirof(BASE)
 	lab = baseof(BASE)
+	if (nl(BASE)) newline((nl(lab) ? "the base" : lab) ": its path holds")
 	for (i = length(lab); i > 0 && substr(lab, i, 1) != "."; i--);
 	if (i <= 1 || i == length(lab)) refuse(lab ": a manifest is name.ext")
 	MNAME = substr(lab, 1, i - 1)
 	MEXT = substr(lab, i + 1)
 	ND = 0; QN = 0; DF = 0
 	B = adddoc(lab, "")
-	CAN[B] = canonical(lab)
-	if (CAN[B] == "") refuse(lab ": cannot be read")
+	CAN[B] = readable(lab)
 	SEEN[CAN[B]] = B
 	parse(B)
 	defect(B, "base")
@@ -806,17 +893,18 @@ function main(   i, n, ent, lab, d, qi, m, key, keys, sorted, j, t, p, line, lin
 	n = listdir("", ent)
 	if (n < 0) refuse(lab ": its directory cannot be listed")
 	for (i = 1; i <= n; i++) {
-		layerof(ent[i], ent[i])
+		layerof(ent[i], ent[i], lab ": its directory holds a layer whose name holds")
 		if (LO == "layer" && LOWORD == "defaults") {
 			DF = found(ent[i], 1)
 			parse(DF)
 			defect(DF, "defaults")
 		}
 	}
+	predicates()
 	QU[++QN] = B
 	if (DF) QU[++QN] = DF
 	for (i = 1; i <= n; i++) {
-		layerof(ent[i], ent[i])
+		layerof(ent[i], ent[i], lab ": its directory holds a layer whose name holds")
 		if (LO == "layer" && LOWORD != "defaults" && (d = found(ent[i], 1)) > 0) QU[++QN] = d
 	}
 	readorder()
@@ -833,8 +921,9 @@ function main(   i, n, ent, lab, d, qi, m, key, keys, sorted, j, t, p, line, lin
 	untracked()
 	m = 0
 	for (d = 1; d <= ND; d++) {
-		if (!READ[d] || d == B || d == DF) continue
+		if (d == B || d == DF) continue
 		key = sprintf("%06d", rank(d)) " " WORD[d]
+		if (!READ[d]) continue
 		for (j = m; j > 0 && keys[j] > key; j--) { keys[j + 1] = keys[j]; sorted[j + 1] = sorted[j] }
 		keys[j + 1] = key; sorted[j + 1] = d
 		m++

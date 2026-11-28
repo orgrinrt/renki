@@ -46,7 +46,7 @@ const BROKEN_ON_PURPOSE: &str = "tests/posix/manifest.broken-on-purpose.sh";
 
 /// The fixtures the copy broken on purpose turns red: it no longer takes
 /// `yes` for true.
-const RED_WHEN_BROKEN: [&str; 1] = ["env_truthy_yes"];
+const RED_WHEN_BROKEN: [&str; 2] = ["env_truthy_in_any_case", "env_truthy_yes"];
 
 /// The files of a fixture that are about it and not part of its manifest.
 const ABOUT: [&str; 3] = ["dump", "refused", "context"];
@@ -516,6 +516,14 @@ fn refuses_a_newline_in_a_path<R: Reader>(reader: &R) {
                 ("odd\nplace/app.local.toml", "a = 2\n"),
             ]),
             "app.local.toml: its path holds a newline, which no line can name\n",
+        ),
+        (
+            written(&root, "a_name", &[
+                ("app.toml", "a = 1\n"),
+                ("app.odd\nword.toml", "a = 2\n"),
+            ]),
+            "app.toml: its directory holds a layer whose name holds a newline, which no line can \
+             name\n",
         ),
     ];
     std::os::unix::fs::symlink(
