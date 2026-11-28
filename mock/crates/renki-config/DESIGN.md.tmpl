@@ -11,6 +11,13 @@ nothing, borrows every string from text the caller holds, and speaks notko's
 `Outcome` and `Maybe`. What reads the disk is `renki-manifest`, which
 implements the store and asks this crate every question of rule.
 
+Its strings and numbers are the stack's own types, the string crate's for
+borrowed text and the number crate's for integers and sizes, in every
+signature, with no lint marker anywhere in the crate. That needs both crates
+on the registry at a version this crate can publish against, so it waits on
+their publishing; until then the contract stays as it is and is not ported to
+a stand-in.
+
 ## Kinds, as types
 
 `Kind` is a trait over marker types, with a borrowed associated value type

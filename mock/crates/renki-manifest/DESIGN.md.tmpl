@@ -8,6 +8,12 @@ through the C library, the text goes into memory the caller gives, and TOML is
 read by `tomlfuse-parse`. A tool that only reads its manifest takes this crate
 and the contracts, and nothing of the launcher.
 
+It implements the contracts' store, so it speaks notko and the stack's string
+and number types as `renki-config` does, and passes the stack's lints with no
+marker. Its reading, its store and its deserialiser wait, with the contracts'
+port, on those crates being on the registry; the host, the one unsafe module
+and the POSIX reader do not.
+
 ## Reading a manifest
 
 One call reads a manifest with everything below: its layers, their includes,
