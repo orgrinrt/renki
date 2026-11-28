@@ -1,0 +1,1 @@
+app.local.toml:1: a list of values at hooks does not append to a list of tables in app.toml:1

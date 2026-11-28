@@ -1,0 +1,1 @@
+app.toml:1: meta.overlays.include matches conf/.app.hidden.toml, which is no layer of app.toml

@@ -1,0 +1,5 @@
+x = 0
+
+[meta.predicates.unused]
+env = "UNUSED"
+shell = "true"

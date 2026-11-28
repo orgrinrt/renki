@@ -1,0 +1,4 @@
+x = 0
+
+[meta.predicates.here]
+env = "HERE"

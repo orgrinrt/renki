@@ -1,0 +1,3 @@
+x = 0
+meta.predicates.a.env = "A"
+meta.predicates.unused.any = ["a", 1]
