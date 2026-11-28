@@ -3,19 +3,19 @@ name = "renki-manifest"
 version = "0.0.1"
 edition = "2024"
 publish = true
-description = "A manifest read off the disk with its layers: the overlays found and ordered, the meta table, named predicates, one merged view, and the TOML store."
+description = "A manifest read off the disk with its layers, through the C library and into memory the caller gives. no_std, no alloc, unix."
 license = "MPL-2.0"
 homepage = "https://github.com/orgrinrt/renki"
 repository = "https://github.com/orgrinrt/renki"
 readme = "README.md"
 # The same floor as `renki`, for the same reason: the let-chains.
 rust-version = "1.88"
-categories = ["config", "command-line-interface"]
+categories = ["no-std", "config", "command-line-interface"]
 keywords = ["config", "manifest", "overlays", "toml", "layers"]
 # The writer and host tests read their fixtures, so the fixtures ship with them.
 # The POSIX reader's test reads `posix/` at the repository root, which the
 # package does not carry, so it stays out.
-include = ["src/**/*.rs", "tests/the_c_calls_on_this_host.rs", "tests/every_target_unix_names_builds.rs", "tests/writer/*/*", "tests/host/**", "README.md", "LICENSE"]
+include = ["src/**/*.rs", "tests/the_c_calls_on_this_host.rs", "tests/the_readme_tells_the_truth_about_the_package.rs", "tests/every_target_unix_names_builds.rs", "tests/writer/*/*", "tests/host/**", "README.md", "LICENSE"]
 
 [dependencies]
 # The rules a manifest is read by, and the parser it is read with. Neither
