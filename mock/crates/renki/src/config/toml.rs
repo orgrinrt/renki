@@ -119,8 +119,15 @@ impl Store for Toml {
                 None => return Maybe::Isnt,
             };
         }
-        if item.is_array_of_tables() || item.is_array() {
-            Maybe::Is(renki_config::Shape::List)
+        // an inline array of inline tables is the same data as `[[name]]`
+        if item.is_array_of_tables() {
+            Maybe::Is(renki_config::Shape::Tables)
+        } else if let Some(array) = item.as_array() {
+            Maybe::Is(match array.iter().next() {
+                None => renki_config::Shape::Empty,
+                Some(first) if first.is_inline_table() => renki_config::Shape::Tables,
+                Some(_) => renki_config::Shape::List,
+            })
         } else if item.is_table_like() {
             Maybe::Is(renki_config::Shape::Table)
         } else if item.is_value() {

@@ -4,7 +4,7 @@
 //--------------------------------------------------------------------------------------------------
 
 use notko::Maybe;
-use renki_config::{Literal, Rendered, Store};
+use renki_config::{Literal, Rendered, Shape, Store};
 
 use super::*;
 
@@ -224,4 +224,24 @@ fn a_comment_is_split_off_only_outside_a_string() {
         ("a = \"\\\"#\" ", "# c")
     );
     assert_eq!(split_comment("plain"), ("plain", ""));
+}
+
+#[test]
+fn every_shape_a_key_can_hold_is_told_apart() {
+    let d = doc(concat!(
+        "values = [1, 2]\nnone = []\ninline = [{ run = \"a\" }]\nport = 1\n",
+        "[server]\nhost = \"h\"\n[[hooks]]\nrun = \"b\"\n",
+    ));
+    for (key, shape) in [
+        ("values", Shape::List),
+        ("none", Shape::Empty),
+        ("inline", Shape::Tables),
+        ("hooks", Shape::Tables),
+        ("server", Shape::Table),
+        ("port", Shape::Scalar),
+        ("server.host", Shape::Scalar),
+    ] {
+        assert_eq!(Toml::shape(&d, key), Maybe::Is(shape), "{key}");
+    }
+    assert_eq!(Toml::shape(&d, "nope"), Maybe::Isnt);
 }

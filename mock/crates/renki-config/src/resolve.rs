@@ -15,7 +15,19 @@ use core::fmt;
 use notko::{Maybe, Outcome};
 
 use crate::meta::is_meta;
-use crate::{BadMerge, BadValue, Declared, Layer, ListRun, Literal, Origin, Part, Store, stacked};
+use crate::{
+    BadMerge,
+    BadValue,
+    Declared,
+    Layer,
+    ListRun,
+    Literal,
+    Origin,
+    Part,
+    Stack,
+    Store,
+    stacked,
+};
 
 /// The two answers only the caller can give: what a flag said for a key, and
 /// what the environment holds under a variable's name. The launcher reads
@@ -255,7 +267,8 @@ impl fmt::Display for BadConfig<'_> {
 ///
 /// Precedence, highest first: the flag, the variable, the repository's stack
 /// where the row's scope reads it, the person's stack where it does, the
-/// default. Either stack may be empty. Inside a stack the layers merge at the
+/// default. Either stack may be empty, and each was checked whole when it was
+/// made. Inside a stack the layers merge at the
 /// key by [`stacked`]. The first place holding a value wins and is checked by
 /// the row's kind; a refusal names the place and the layer, since a wrong
 /// value in the repository's file wants a different repair than one in a
@@ -265,8 +278,8 @@ pub fn resolve<'a, St: Store, L: Lookup>(
     rows: &'a [Declared<'a, St>],
     short: &'a str,
     lookup: &'a L,
-    repo: &'a [Layer<'a, St>],
-    user: &'a [Layer<'a, St>],
+    repo: Stack<'a, St>,
+    user: Stack<'a, St>,
 ) -> impl Iterator<Item = Outcome<ResolvedView<'a, St>, BadConfig<'a>>> + 'a {
     rows.iter().map(move |row| {
         let (source, layer, value) = match find(row, short, lookup, repo, user) {
@@ -306,8 +319,8 @@ fn find<'a, St: Store, L: Lookup>(
     row: &'a Declared<'a, St>,
     short: &'a str,
     lookup: &'a L,
-    repo: &'a [Layer<'a, St>],
-    user: &'a [Layer<'a, St>],
+    repo: Stack<'a, St>,
+    user: Stack<'a, St>,
 ) -> Outcome<Found<'a, St>, BadConfig<'a>> {
     if let Maybe::Is(t) = lookup.flag(row.key()) {
         return Outcome::Ok((Origin::Flag, Maybe::Isnt, Value::Text(t)));
@@ -321,7 +334,7 @@ fn find<'a, St: Store, L: Lookup>(
         if !reads {
             continue;
         }
-        match stacked(stack, row.key()) {
+        match stacked(&stack, row.key()) {
             Outcome::Ok(Maybe::Is((layer, value))) => {
                 return Outcome::Ok((source, Maybe::Is(layer.part()), value));
             },

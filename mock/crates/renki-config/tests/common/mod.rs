@@ -24,6 +24,7 @@ use renki_config::{
     Part,
     Rendered,
     Shape,
+    Stack,
     Store,
     TextItems,
     layer_of,
@@ -95,11 +96,23 @@ impl Store for Toy {
 
     fn shape(doc: &ToyDoc<'_>, key: &str) -> Maybe<Shape> {
         if let Some((_, v)) = lines(doc.text).find(|(k, _)| *k == key) {
-            return Maybe::Is(if v.starts_with('[') { Shape::List } else { Shape::Scalar });
+            return Maybe::Is(match v {
+                "[]" => Shape::Empty,
+                _ if v.starts_with('[') => Shape::List,
+                _ => Shape::Scalar,
+            });
         }
-        let under = |k: &str| k.strip_prefix(key).is_some_and(|r| r.starts_with('.'));
-        if lines(doc.text).any(|(k, _)| under(k)) {
-            return Maybe::Is(Shape::Table);
+        // what follows the key and its dot, in each key under it
+        let mut rests = lines(doc.text)
+            .filter_map(|(k, _)| k.strip_prefix(key).and_then(|r| r.strip_prefix('.')))
+            .peekable();
+        if let Some(rest) = rests.peek() {
+            // an array of tables is `name.0.field`, its index the next segment
+            let index = rest
+                .split('.')
+                .next()
+                .is_some_and(|s| s.bytes().all(|b| b.is_ascii_digit()));
+            return Maybe::Is(if index { Shape::Tables } else { Shape::Table });
         }
         Maybe::Isnt
     }
@@ -159,6 +172,11 @@ pub fn part(file: &str) -> Part<'_> {
         Outcome::Ok(Maybe::Is(p)) => p,
         other => panic!("{file} is no layer of app: {other:?}"),
     }
+}
+
+/// A stack the test knows to be sound, checked.
+pub fn sound<'a>(layers: &'a [Layer<'a, Toy>]) -> Stack<'a, Toy> {
+    Stack::new(layers).unwrap()
 }
 
 /// One read layer of the manifest `app` from its file name and document.

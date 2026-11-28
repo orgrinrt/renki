@@ -7,9 +7,9 @@
 
 mod common;
 
-use common::{Toy, doc, layer};
+use common::{Toy, doc, layer, sound};
 use notko::{Maybe, Outcome};
-use renki_config::{BadMerge, Layer, Literal, Meet, Shape, Value, meet, stacked};
+use renki_config::{BadMerge, Layer, Literal, Meet, Shape, Stack, Value, meet, stacked};
 
 #[test]
 fn two_tables_merge_two_lists_append_and_two_scalars_go_over() {
@@ -60,7 +60,7 @@ fn a_shape_over_another_that_nothing_replaces_is_refused_naming_both() {
 // --- the stack ------------------------------------------------------------
 
 fn winner<'a>(stack: &'a [Layer<'a, Toy>], key: &'a str) -> Maybe<(&'a str, Value<'a, Toy>)> {
-    match stacked(stack, key).unwrap() {
+    match stacked(&sound(stack), key).unwrap() {
         Maybe::Is((layer, value)) => Maybe::Is((layer.label(), value)),
         Maybe::Isnt => Maybe::Isnt,
     }
@@ -157,13 +157,13 @@ fn unset_takes_a_key_out_of_the_layers_below() {
 fn unset_of_a_key_no_lower_layer_holds_is_refused() {
     let (b, l) = (doc("port = 1\n"), doc("meta.unset = [\"skip\"]\n"));
     let stack = [layer("app.toy", &b), layer("app.local.toy", &l)];
-    let e = stacked(&stack, "skip").unwrap_err();
+    let e = Stack::new(&stack).unwrap_err();
     assert_eq!(e, BadMerge::Unset("skip"));
     assert!(e.to_string().contains("skip"));
     // the control: unsetting a key the base holds
     let b = doc("skip = [\"a\"]\n");
     let stack = [layer("app.toy", &b), layer("app.local.toy", &l)];
-    assert!(stacked(&stack, "skip").is_ok());
+    assert!(Stack::new(&stack).is_ok());
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn a_shape_over_a_shape_in_the_stack_is_refused_unless_replaced() {
     let (b, l) = (doc("skip = [\"a\"]\n"), doc("skip = \"a\"\n"));
     let stack = [layer("app.toy", &b), layer("app.local.toy", &l)];
     assert_eq!(
-        stacked(&stack, "skip").err(),
+        Stack::new(&stack).err(),
         Maybe::Is(BadMerge::Shapes(Shape::List, Shape::Scalar))
     );
     // the control: the same, replaced

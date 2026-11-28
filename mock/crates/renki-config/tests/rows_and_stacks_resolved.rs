@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{Cli, Toy, doc, layer, part};
+use common::{Cli, Toy, doc, layer, part, sound};
 use notko::Maybe;
 use renki_config::{
     BadTable,
@@ -130,7 +130,7 @@ fn a_value_from_a_layer_names_the_layer_and_one_from_the_base_names_none() {
     let rows = table();
     let (b, l) = (doc("port = 2\nskip = [\"a\"]\n"), doc("port = 3\n"));
     let repo = [layer("app.toy", &b), layer("app.local.toy", &l)];
-    let got: Vec<_> = resolve(&rows, "widget", &NONE, &repo, &[])
+    let got: Vec<_> = resolve(&rows, "widget", &NONE, sound(&repo), sound(&[]))
         .map(|r| r.unwrap())
         .collect();
     assert_eq!(
@@ -153,7 +153,7 @@ fn a_list_resolves_appended_across_the_layers_of_its_stack() {
     let rows = table();
     let (b, l) = (doc("skip = [\"a\", \"b\"]\n"), doc("skip = [\"c\"]\n"));
     let user = [layer("app.toy", &b), layer("app.local.toy", &l)];
-    let skip = resolve(&rows, "widget", &NONE, &[], &user)
+    let skip = resolve(&rows, "widget", &NONE, sound(&[]), sound(&user))
         .map(|r| r.unwrap())
         .find(|r| r.row().key() == "skip")
         .unwrap();
@@ -169,7 +169,7 @@ fn a_refused_value_names_its_origin_and_its_layer() {
     let rows = table();
     let (b, l) = (doc("port = 2\n"), doc("port = \"eighty\"\n"));
     let repo = [layer("app.toy", &b), layer("app.local.toy", &l)];
-    let bad = resolve(&rows, "widget", &NONE, &repo, &[])
+    let bad = resolve(&rows, "widget", &NONE, sound(&repo), sound(&[]))
         .find_map(|r| {
             match r.err() {
                 Maybe::Is(e) => Some(e),
@@ -186,7 +186,7 @@ fn a_refused_value_names_its_origin_and_its_layer() {
     // the control: the base's value refused names no layer
     let b = doc("port = \"eighty\"\n");
     let repo = [layer("app.toy", &b)];
-    let bad = resolve(&rows, "widget", &NONE, &repo, &[])
+    let bad = resolve(&rows, "widget", &NONE, sound(&repo), sound(&[]))
         .find_map(|r| {
             match r.err() {
                 Maybe::Is(e) => Some(e),
@@ -195,24 +195,6 @@ fn a_refused_value_names_its_origin_and_its_layer() {
         })
         .unwrap();
     assert_eq!(bad.to_string(), "port from repo: \"eighty\" is not int");
-}
-
-#[test]
-fn a_merge_the_stack_refuses_is_refused_with_its_origin() {
-    let rows = table();
-    let (b, l) = (doc("skip = [\"a\"]\n"), doc("skip = 1\n"));
-    let repo = [layer("app.toy", &b), layer("app.local.toy", &l)];
-    let bad = resolve(&rows, "widget", &NONE, &repo, &[])
-        .find_map(|r| {
-            match r.err() {
-                Maybe::Is(e) => Some(e),
-                Maybe::Isnt => None,
-            }
-        })
-        .unwrap();
-    assert_eq!((bad.key(), bad.source()), ("skip", Origin::Repo));
-    assert!(bad.merge().is() && bad.why().isnt());
-    assert!(bad.to_string().contains("skip"), "{bad}");
 }
 
 #[test]
@@ -242,7 +224,7 @@ fn a_repo_only_setting_is_not_read_from_the_persons_stack() {
     let rows = [Setting::<Int, Repo>::new("strict", "0", "").row::<Toy>()];
     let u = doc("strict = 1\n");
     let user = [layer("app.toy", &u)];
-    let got = resolve(&rows, "widget", &NONE, &[], &user)
+    let got = resolve(&rows, "widget", &NONE, sound(&[]), sound(&user))
         .next()
         .unwrap()
         .unwrap();
