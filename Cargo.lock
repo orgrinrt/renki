@@ -162,8 +162,10 @@ name = "renki-manifest"
 version = "0.0.1"
 dependencies = [
  "libc",
+ "notko",
  "renki-config",
  "renki-manifest",
+ "serde",
  "tomlfuse-parse",
 ]
 
@@ -363,7 +365,10 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 [[package]]
 name = "tomlfuse-parse"
 version = "0.0.1-rc.1"
-source = "git+https://github.com/orgrinrt/tomlfuse?branch=work%2Ftomlfuse-parse#d84048229f4b74f74460ed2e507ff234b4e824ed"
+source = "git+https://github.com/orgrinrt/tomlfuse?rev=cefd5bddd5489c243e25bd4e89fd07a338f385dd#cefd5bddd5489c243e25bd4e89fd07a338f385dd"
+dependencies = [
+ "notko",
+]
 
 [[package]]
 name = "trybuild"

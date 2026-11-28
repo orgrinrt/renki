@@ -28,8 +28,10 @@ compile_error!(
 );
 
 mod host;
+mod room;
 #[allow(unsafe_code)]
 mod unix;
 
 pub use host::{BadRead, Host};
+pub use room::{Room, Rooms, Shelf};
 pub use unix::Unix;

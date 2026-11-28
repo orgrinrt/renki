@@ -9,6 +9,11 @@
 use core::ffi::{CStr, c_int};
 use core::fmt::{self, Write};
 
+use notko::lend::Exhausted;
+use notko::{Maybe, Outcome};
+
+use crate::Shelf;
+
 /// Why a read is refused.
 ///
 /// Every refusal names the file it is about, so a caller reading several
@@ -17,13 +22,15 @@ use core::fmt::{self, Write};
 /// writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadRead<'p> {
-    /// `file` does not fit in the memory given, or for a variable, its value.
-    /// `need` is the size that memory has to be for it to fit.
+    /// A shelf of the room falls short for `file`: which shelf, and what it
+    /// gave, how much it held and how much the read wanted at the least.
     Room {
-        /// The file that does not fit.
-        file: &'p CStr,
-        /// The size the memory needs.
-        need: usize,
+        /// The file the read was at.
+        file:      &'p CStr,
+        /// The shelf that fell short.
+        shelf:     Shelf,
+        /// What it held, and what the read wanted.
+        exhausted: Exhausted,
     },
     /// The C library refused `call` on `file` with `errno`. Both are kept for
     /// a caller that asks, and the `Display` writes neither, as the POSIX
@@ -70,10 +77,15 @@ impl fmt::Display for BadRead<'_> {
         match self {
             BadRead::Room {
                 file,
-                need,
+                shelf,
+                exhausted,
             } => {
                 named(file, f)?;
-                write!(f, " needs a room of {need} bytes")
+                write!(
+                    f,
+                    ": the room's {shelf} shelf holds {}, and the read wants at least {}",
+                    exhausted.had, exhausted.wanted
+                )
             },
             BadRead::Os {
                 file,
@@ -110,18 +122,18 @@ pub trait Host {
     /// that grows past what it said while it is read is refused the same. It
     /// is opened without blocking, and what is no regular file is refused
     /// with [`BadRead::NotAFile`], so a FIFO is never waited on.
-    fn read<'p>(path: &'p CStr, into: &mut [u8]) -> Result<usize, BadRead<'p>>;
+    fn read<'p>(path: &'p CStr, into: &mut [u8]) -> Outcome<usize, BadRead<'p>>;
 
     /// Calls `each` with the name of every entry of the directory at `dir`,
     /// `.` and `..` left out, in the order the directory gives them. A
     /// listing the C library ends with an error is refused, after the entries
     /// it gave, so no entry goes missing in silence.
-    fn list<'p>(dir: &'p CStr, each: impl FnMut(&CStr)) -> Result<(), BadRead<'p>>;
+    fn list<'p>(dir: &'p CStr, each: impl FnMut(&CStr)) -> Outcome<(), BadRead<'p>>;
 
     /// The canonical form of `path`, every link and every `.` and `..`
     /// resolved, written into `into`. `into` is at least as long as the
     /// longest path the system has, or it is refused with the size it needs.
-    fn canonical<'p, 'b>(path: &'p CStr, into: &'b mut [u8]) -> Result<&'b CStr, BadRead<'p>>;
+    fn canonical<'p, 'b>(path: &'p CStr, into: &'b mut [u8]) -> Outcome<&'b CStr, BadRead<'p>>;
 
     /// The value of the environment variable `name`, where it is set, copied
     /// into `into`, or refused with [`BadRead::Room`] and the length it needs.
@@ -129,11 +141,11 @@ pub trait Host {
     /// not guard the read itself: the C library guards `getenv` against no
     /// `setenv` on another thread, so a program that sets variables from one
     /// thread while another reads a manifest has that race.
-    fn var<'n, 'b>(name: &'n CStr, into: &'b mut [u8]) -> Result<Option<&'b [u8]>, BadRead<'n>>;
+    fn var<'n, 'b>(name: &'n CStr, into: &'b mut [u8]) -> Outcome<Maybe<&'b [u8]>, BadRead<'n>>;
 
     /// Runs `/bin/sh -c <command>` in the directory `dir` and answers its
-    /// exit, or `None` where it ended with no exit, by a signal, or
+    /// exit, or `Isnt` where it ended with no exit, by a signal, or
     /// [`BadRead::Shell`] where no shell could be started or waited on.
     #[cfg(feature = "processes")]
-    fn shell<'p>(dir: &'p CStr, command: &CStr) -> Result<Option<c_int>, BadRead<'p>>;
+    fn shell<'p>(dir: &'p CStr, command: &CStr) -> Outcome<Maybe<c_int>, BadRead<'p>>;
 }

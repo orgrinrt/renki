@@ -12,7 +12,10 @@
 
 use core::ffi::{CStr, c_int};
 
-use crate::{BadRead, Host};
+use notko::lend::Exhausted;
+use notko::{Maybe, Outcome};
+
+use crate::{BadRead, Host, Shelf};
 
 /// The unix targets: linux, macOS, freebsd, netbsd, openbsd and illumos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,37 +66,37 @@ fn os<'p>(file: &'p CStr, call: &'static str) -> BadRead<'p> {
 }
 
 /// What `fstat` says of the open file `fd`: its size, where it is a regular
-/// file, and `None` where it is anything else.
-fn regular_size(fd: c_int) -> Result<Option<usize>, c_int> {
+/// file, and `Isnt` where it is anything else.
+fn regular_size(fd: c_int) -> Outcome<Maybe<usize>, c_int> {
     // SAFETY: `stat` is plain data, and all zeroes is a value of it.
     let mut st: libc::stat = unsafe { core::mem::zeroed() };
     // SAFETY: `fd` is open, and `st` is a `stat` this frame owns.
     if unsafe { libc::fstat(fd, &mut st) } < 0 {
-        return Err(errno());
+        return Outcome::Err(errno());
     }
     if st.st_mode & libc::S_IFMT != libc::S_IFREG {
-        return Ok(None);
+        return Outcome::Ok(Maybe::Isnt);
     }
-    Ok(Some(usize::try_from(st.st_size).unwrap_or(usize::MAX)))
+    Outcome::Ok(Maybe::Is(usize::try_from(st.st_size).unwrap_or(usize::MAX)))
 }
 
 /// One `read` into `into`, retried on `EINTR`.
-fn read_some(fd: c_int, into: &mut [u8]) -> Result<usize, c_int> {
+fn read_some(fd: c_int, into: &mut [u8]) -> Outcome<usize, c_int> {
     loop {
         // SAFETY: `into` is writable for its whole length, which is what is
         // passed.
         let n = unsafe { libc::read(fd, into.as_mut_ptr().cast(), into.len()) };
         if n >= 0 {
-            return Ok(n.unsigned_abs());
+            return Outcome::Ok(n.unsigned_abs());
         }
         let e = errno();
         if e != libc::EINTR {
-            return Err(e);
+            return Outcome::Err(e);
         }
     }
 }
 
-fn read_open<'p>(path: &'p CStr, fd: c_int, into: &mut [u8]) -> Result<usize, BadRead<'p>> {
+fn read_open<'p>(path: &'p CStr, fd: c_int, into: &mut [u8]) -> Outcome<usize, BadRead<'p>> {
     let refused = |call, errno| {
         BadRead::Os {
             file: path,
@@ -101,15 +104,23 @@ fn read_open<'p>(path: &'p CStr, fd: c_int, into: &mut [u8]) -> Result<usize, Ba
             errno,
         }
     };
-    let Some(size) = regular_size(fd).map_err(|e| refused("fstat", e))? else {
-        return Err(BadRead::NotAFile {
-            file: path,
-        });
+    let size = match regular_size(fd) {
+        Outcome::Ok(Maybe::Is(size)) => size,
+        Outcome::Ok(Maybe::Isnt) => {
+            return Outcome::Err(BadRead::NotAFile {
+                file: path,
+            });
+        },
+        Outcome::Err(e) => return Outcome::Err(refused("fstat", e)),
     };
     if size > into.len() {
-        return Err(BadRead::Room {
-            file: path,
-            need: size,
+        return Outcome::Err(BadRead::Room {
+            file:      path,
+            shelf:     Shelf::Text,
+            exhausted: Exhausted {
+                wanted: size,
+                had:    into.len(),
+            },
         });
     }
     let mut at = 0;
@@ -117,27 +128,37 @@ fn read_open<'p>(path: &'p CStr, fd: c_int, into: &mut [u8]) -> Result<usize, Ba
         if at == into.len() {
             // full: one more byte means it grew past what `fstat` said
             let mut probe = [0u8; 1];
-            if read_some(fd, &mut probe).map_err(|e| refused("read", e))? > 0 {
-                let now = regular_size(fd)
-                    .map_err(|e| refused("fstat", e))?
-                    .unwrap_or(0);
-                return Err(BadRead::Room {
-                    file: path,
-                    need: now.max(at + 1),
-                });
+            match read_some(fd, &mut probe) {
+                Outcome::Ok(0) => return Outcome::Ok(at),
+                Outcome::Ok(_) => {},
+                Outcome::Err(e) => return Outcome::Err(refused("read", e)),
             }
-            return Ok(at);
+            let now = match regular_size(fd) {
+                Outcome::Ok(now) => now.unwrap_or(0),
+                Outcome::Err(e) => return Outcome::Err(refused("fstat", e)),
+            };
+            return Outcome::Err(BadRead::Room {
+                file:      path,
+                shelf:     Shelf::Text,
+                exhausted: Exhausted {
+                    wanted: now.max(at + 1),
+                    had:    at,
+                },
+            });
         }
-        let n = read_some(fd, &mut into[at ..]).map_err(|e| refused("read", e))?;
+        let n = match read_some(fd, &mut into[at ..]) {
+            Outcome::Ok(n) => n,
+            Outcome::Err(e) => return Outcome::Err(refused("read", e)),
+        };
         if n == 0 {
-            return Ok(at);
+            return Outcome::Ok(at);
         }
         at += n;
     }
 }
 
 impl Host for Unix {
-    fn read<'p>(path: &'p CStr, into: &mut [u8]) -> Result<usize, BadRead<'p>> {
+    fn read<'p>(path: &'p CStr, into: &mut [u8]) -> Outcome<usize, BadRead<'p>> {
         // without blocking, so a FIFO named like a layer answers at once and is
         // refused by `fstat` below instead of waiting for a writer
         // SAFETY: `path` is NUL-terminated.
@@ -148,7 +169,7 @@ impl Host for Unix {
             )
         };
         if fd < 0 {
-            return Err(os(path, "open"));
+            return Outcome::Err(os(path, "open"));
         }
         let read = read_open(path, fd, into);
         // SAFETY: `fd` was opened above and is closed once, here.
@@ -156,13 +177,13 @@ impl Host for Unix {
         read
     }
 
-    fn list<'p>(dir: &'p CStr, mut each: impl FnMut(&CStr)) -> Result<(), BadRead<'p>> {
+    fn list<'p>(dir: &'p CStr, mut each: impl FnMut(&CStr)) -> Outcome<(), BadRead<'p>> {
         // SAFETY: `dir` is NUL-terminated.
         let handle = unsafe { libc::opendir(dir.as_ptr()) };
         if handle.is_null() {
-            return Err(os(dir, "opendir"));
+            return Outcome::Err(os(dir, "opendir"));
         }
-        let mut ended = Ok(());
+        let mut ended = Outcome::Ok(());
         loop {
             // `readdir` answers null at the end and on an error alike, and
             // sets `errno` only on the error
@@ -171,7 +192,7 @@ impl Host for Unix {
             let entry = unsafe { libc::readdir(handle) };
             if entry.is_null() {
                 if errno() != 0 {
-                    ended = Err(os(dir, "readdir"));
+                    ended = Outcome::Err(os(dir, "readdir"));
                 }
                 break;
             }
@@ -187,28 +208,35 @@ impl Host for Unix {
         ended
     }
 
-    fn canonical<'p, 'b>(path: &'p CStr, into: &'b mut [u8]) -> Result<&'b CStr, BadRead<'p>> {
+    fn canonical<'p, 'b>(path: &'p CStr, into: &'b mut [u8]) -> Outcome<&'b CStr, BadRead<'p>> {
         let longest = usize::try_from(libc::PATH_MAX).unwrap_or(usize::MAX);
         if into.len() < longest {
-            return Err(BadRead::Room {
-                file: path,
-                need: longest,
+            return Outcome::Err(BadRead::Room {
+                file:      path,
+                shelf:     Shelf::Path,
+                exhausted: Exhausted {
+                    wanted: longest,
+                    had:    into.len(),
+                },
             });
         }
         // SAFETY: `path` is NUL-terminated and `into` holds `PATH_MAX` bytes,
         // the most `realpath` writes.
         let got = unsafe { libc::realpath(path.as_ptr(), into.as_mut_ptr().cast()) };
         if got.is_null() {
-            return Err(os(path, "realpath"));
+            return Outcome::Err(os(path, "realpath"));
         }
-        CStr::from_bytes_until_nul(into).map_err(|_| os(path, "realpath"))
+        match CStr::from_bytes_until_nul(into) {
+            Ok(c) => Outcome::Ok(c),
+            Err(_) => Outcome::Err(os(path, "realpath")),
+        }
     }
 
-    fn var<'n, 'b>(name: &'n CStr, into: &'b mut [u8]) -> Result<Option<&'b [u8]>, BadRead<'n>> {
+    fn var<'n, 'b>(name: &'n CStr, into: &'b mut [u8]) -> Outcome<Maybe<&'b [u8]>, BadRead<'n>> {
         // SAFETY: `name` is NUL-terminated.
         let value = unsafe { libc::getenv(name.as_ptr()) };
         if value.is_null() {
-            return Ok(None);
+            return Outcome::Ok(Maybe::Isnt);
         }
         // SAFETY: a non-null answer is a NUL-terminated string in the
         // environment block. It is copied out at once and nothing of it is
@@ -216,18 +244,23 @@ impl Host for Unix {
         // read unguarded, so a `setenv` on another thread meanwhile is a race
         // this does not close, as no reader of the environment can.
         let value = unsafe { CStr::from_ptr(value) }.to_bytes();
+        let had = into.len();
         let Some(into) = into.get_mut(.. value.len()) else {
-            return Err(BadRead::Room {
-                file: name,
-                need: value.len(),
+            return Outcome::Err(BadRead::Room {
+                file:      name,
+                shelf:     Shelf::Path,
+                exhausted: Exhausted {
+                    wanted: value.len(),
+                    had,
+                },
             });
         };
         into.copy_from_slice(value);
-        Ok(Some(into))
+        Outcome::Ok(Maybe::Is(into))
     }
 
     #[cfg(feature = "processes")]
-    fn shell<'p>(dir: &'p CStr, command: &CStr) -> Result<Option<c_int>, BadRead<'p>> {
+    fn shell<'p>(dir: &'p CStr, command: &CStr) -> Outcome<Maybe<c_int>, BadRead<'p>> {
         spawn::shell(dir, command)
     }
 }
@@ -235,6 +268,8 @@ impl Host for Unix {
 #[cfg(feature = "processes")]
 mod spawn {
     use core::ffi::{CStr, c_char, c_int};
+
+    use notko::{Maybe, Outcome};
 
     use super::errno;
     use crate::BadRead;
@@ -252,7 +287,7 @@ mod spawn {
         static environ: *const *mut c_char;
     }
 
-    pub(super) fn shell<'p>(dir: &'p CStr, command: &CStr) -> Result<Option<c_int>, BadRead<'p>> {
+    pub(super) fn shell<'p>(dir: &'p CStr, command: &CStr) -> Outcome<Maybe<c_int>, BadRead<'p>> {
         let argv: [*mut c_char; 7] = [
             SH.as_ptr().cast_mut(),
             DASH_C.as_ptr().cast_mut(),
@@ -276,7 +311,7 @@ mod spawn {
             )
         };
         if spawned != 0 {
-            return Err(BadRead::Shell {
+            return Outcome::Err(BadRead::Shell {
                 dir,
                 call: "posix_spawn",
                 errno: spawned,
@@ -291,13 +326,17 @@ mod spawn {
             }
             let e = errno();
             if e != libc::EINTR {
-                return Err(BadRead::Shell {
+                return Outcome::Err(BadRead::Shell {
                     dir,
                     call: "waitpid",
                     errno: e,
                 });
             }
         }
-        Ok(libc::WIFEXITED(status).then(|| libc::WEXITSTATUS(status)))
+        Outcome::Ok(if libc::WIFEXITED(status) {
+            Maybe::Is(libc::WEXITSTATUS(status))
+        } else {
+            Maybe::Isnt
+        })
     }
 }
