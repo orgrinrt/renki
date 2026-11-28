@@ -50,8 +50,10 @@ const RED_WHEN_BROKEN: [&str; 2] = ["env_truthy_in_any_case", "env_truthy_yes"];
 const SHELLS: [&str; 2] = ["dash", "bash"];
 
 /// The `awk`s the reader runs under, each where this host has it: `busybox`
-/// answers as its `awk` when called by that name.
-const AWKS: [&str; 4] = ["mawk", "gawk", "original-awk", "busybox"];
+/// answers as its `awk` when called by that name, and `awk` and `nawk` are
+/// whatever the path names, as macOS and the BSDs ship theirs; a program met
+/// under two names is run once.
+const AWKS: [&str; 6] = ["mawk", "gawk", "original-awk", "busybox", "awk", "nawk"];
 
 /// Variables a shell reads itself, which no `env` predicate of a fixture may
 /// name: the shell would answer one before the reader does.
@@ -120,7 +122,7 @@ struct Run {
     name:   String,
     base:   String,
     env:    Vec<(String, String)>,
-    locked: Vec<PathBuf>,
+    locked: Vec<(PathBuf, u32)>,
 }
 
 impl Fixture {
@@ -260,10 +262,23 @@ fn stand_up(fixture: &Fixture, root: &Path, name: &str) -> Run {
             failing(root, "path-with-a-failing-sh", "sh").to_string_lossy()
         );
     }
-    let locked: Vec<PathBuf> = fixture.unlistable.iter().map(|d| dir.join(d)).collect();
-    for d in &locked {
-        fs::set_permissions(d, fs::Permissions::from_mode(0o300))
-            .expect("a directory the reader may enter and not list");
+    // a directory the reader may enter and not list, and a file it may find
+    // and not read, each with the permission it is given back
+    let mut locked: Vec<(PathBuf, u32)> = Vec::new();
+    for (at, mode, back) in fixture
+        .unlistable
+        .iter()
+        .map(|d| (dir.join(d), 0o300, 0o755))
+        .chain(
+            fixture
+                .unreadable
+                .iter()
+                .map(|f| (dir.join(f), 0o000, 0o644)),
+        )
+    {
+        fs::set_permissions(&at, fs::Permissions::from_mode(mode))
+            .expect("a permission the test takes away");
+        locked.push((at, back));
     }
     let mut env = vec![("PATH".to_owned(), path)];
     env.extend(fixture.env.iter().cloned());
@@ -276,10 +291,10 @@ fn stand_up(fixture: &Fixture, root: &Path, name: &str) -> Run {
     }
 }
 
-/// The directories a run locked, given their permission back.
+/// What a run took away, given back.
 fn unlock(run: &Run) {
-    for d in &run.locked {
-        let _ = fs::set_permissions(d, fs::Permissions::from_mode(0o755));
+    for (path, back) in &run.locked {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(*back));
     }
 }
 
@@ -350,6 +365,7 @@ fn check<R: Reader>(reader: &R, fixture: &Fixture, run: &Run) -> Option<String> 
 fn conforms(readers: &[Posix], tag: &str, suffix: &str) {
     let mut failed = Vec::new();
     for (i, reader) in readers.iter().enumerate() {
+        println!("reading the suite under {}", reader.label());
         let (red, of) = red(reader, &format!("{tag}-{i}"), suffix);
         if !red.is_empty() {
             failed.push(format!(
@@ -410,7 +426,7 @@ fn awks() -> Vec<(String, PathBuf)> {
             },
             _ => {},
         }
-        found.push((name.to_owned(), bin));
+        found.push((format!("{name} at {}", program.display()), bin));
     }
     assert!(!found.is_empty(), "this host has none of {AWKS:?}");
     found
@@ -646,20 +662,38 @@ fn env_names(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The one variable a shell reads that a fixture's `env` predicate may name,
+/// with the one value it may hold: `POSIX`, which every shell takes.
+const SHELLS_TAKE: (&str, &str) = ("LC_ALL", "POSIX");
+
 #[test]
 fn no_env_predicate_of_a_fixture_names_a_variable_a_shell_reads() {
     let mut named = Vec::new();
+    let mut excepted = 0;
     for fixture in suite() {
+        let set_to = |var: &str| {
+            fixture
+                .env
+                .iter()
+                .find(|(k, _)| k == var)
+                .map(|(_, v)| v.as_str())
+        };
         for (file, path) in fixture.files() {
             let text = fs::read_to_string(&path).unwrap_or_default();
             for var in env_names(&text) {
-                if READ_BY_A_SHELL.contains(&var.as_str()) {
-                    named.push(format!("{}/{file}: {var}", fixture.name));
+                if !READ_BY_A_SHELL.contains(&var.as_str()) {
+                    continue;
                 }
+                if var == SHELLS_TAKE.0 && set_to(&var) == Some(SHELLS_TAKE.1) {
+                    excepted += 1;
+                    continue;
+                }
+                named.push(format!("{}/{file}: {var}", fixture.name));
             }
         }
     }
     assert!(named.is_empty(), "{named:?}");
+    assert_eq!(excepted, 1, "the one fixture over LC_ALL set to POSIX");
     // the control: the scan finds what it looks for
     assert_eq!(
         env_names("[meta.predicates.a]\nenv = \"LC_ALL\"\nmeta.predicates.b.env = \"HOME\"\n"),
