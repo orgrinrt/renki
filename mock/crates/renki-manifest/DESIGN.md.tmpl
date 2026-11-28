@@ -83,6 +83,9 @@ each entry relative to the file that names it, a directory where it ends in
 `/` (its files listed, the layers among them kept), else a glob matched with
 `renki_config::glob_matches` against the entries of its directory. A file an
 entry matches that is no layer of this manifest is refused by name.
+The `defaults` layer is read from beside the base only: its predicates decide
+which layers are read, so it is found before any include is followed, and one
+an include reaches is refused by name.
 
 Following goes to a fixed point. A layer whose `meta.when` does not hold is
 not read, and its includes are not followed. A file reached twice, by any
@@ -113,7 +116,8 @@ time a use site is read; this crate keeps no answer.
 
 ## Merging and the schema
 
-The merged view is not built. `Manifest::view` is the stack of read layers,
+The merged view is not built. `Manifest::view` is the checked
+`renki_config::Stack` of read layers,
 lowest first, each a `renki_config::Layer` over its text in the room, and every
 key of it is answered by `renki_config::stacked`, which applies `meet`,
 `meta.replace` and `meta.unset` as the rule says and names the layer that
@@ -155,7 +159,11 @@ manifest is never parsed two ways.
 `Manifest::dump` writes the view as the one text both readers answer in: one
 line per leaf, `<dotted path> = <value>`, an array of tables indexed as
 `name[0]`, the value in one canonical TOML form (a basic string with `\"`,
-`\\`, `\n` and `\t` escaped, an integer, `true` or `false`, a one-line array),
+`\\`, `\n` and `\t` escaped, an integer, `true` or `false`, a float in the
+shortest form that reads back to the same number with `.0` where that form
+has no point or exponent and `inf`, `-inf` or `nan` as TOML spells them, a
+date, a time or a date-time in its RFC 3339 text with `T` between date and
+time and the fraction of a second as written, a one-line array),
 the lines in byte order of the path. The order is found by walking the
 leaves smallest first through the room's index, and the lines go into a
 `core::fmt::Write` sink. `get <key>` is the dump's line for that key.
