@@ -1,0 +1,41 @@
+# a comment
+title = "a \"quoted\" word\\ with\ta tab and\na newline" # a trailing comment
+path = 'C:\no\escapes "here"'
+count = 1_000
+negative = -17
+plus = +5
+zero = -0
+hex = 0xff
+octal = 0o17
+binary = 0b101
+big = 9223372036854775807
+small = -9223372036854775808
+yes = true
+no = false
+empty = []
+words = ["a", 'b', 1, true]
+spread = [
+  "one", # the first
+  "two",
+
+  # a comment alone
+  "three",
+]
+dotted.key = "d"
+a . spaced . key = 1
+
+[table]
+inner = "x"
+
+[ table.deeper ]
+x = 1
+
+[[items]]
+name = "first"
+[items.part]
+size = 1
+
+[[items]]
+name = "second"
+[[items.sub]]
+v = 1

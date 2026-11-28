@@ -1,0 +1,4 @@
+[[hook]]
+run = "fmt"
+[[hook]]
+run = "lint"

@@ -1,0 +1,4 @@
+seen = ["base"]
+
+[meta.predicates.cloud]
+shell = "test -f marker"

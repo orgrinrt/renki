@@ -1,0 +1,10 @@
+seen = ["base"]
+
+[meta.predicates.cloud]
+any = ["a"]
+
+[meta.predicates.a]
+not = "b"
+
+[meta.predicates.b]
+not = "a"

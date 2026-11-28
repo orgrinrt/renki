@@ -1,0 +1,1 @@
+app.toml:4: an inline table is outside the POSIX reader's TOML subset
