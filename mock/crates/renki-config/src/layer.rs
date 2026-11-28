@@ -177,7 +177,7 @@ pub(crate) const fn same(a: &str, b: &str) -> bool {
     true
 }
 
-/// What `file` is of the manifest whose base is `name.<St::EXTENSION>`: the
+/// What `file` is of the manifest whose base is `name.<St::extension()>`: the
 /// base, a layer, or `Isnt` for a file of another name or extension. A file
 /// of the manifest's shape that cannot be a layer is refused: two words, the
 /// word `base`, or a word outside `[a-z0-9_-]`.
@@ -192,10 +192,10 @@ pub fn layer_of<'a, St: Store>(
     let Maybe::Is(rest) = after(rest, ".") else {
         return Outcome::Ok(Maybe::Isnt);
     };
-    if same(rest, St::EXTENSION) {
+    if same(rest, St::extension()) {
         return Outcome::Ok(Maybe::Is(Part::Base));
     }
-    let Maybe::Is(middle) = before(rest, St::EXTENSION) else {
+    let Maybe::Is(middle) = before(rest, St::extension()) else {
         return Outcome::Ok(Maybe::Isnt);
     };
     let Maybe::Is(word) = before(middle, ".") else {

@@ -16,15 +16,27 @@
 //! directory's override, which is why the file's carries the suffix.
 
 pub mod query;
-pub mod toml;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use notko::{Maybe, Outcome};
-use renki_config::{Declared, EnvKey, Layer, Lookup, Origin, Part, Stack, Store};
+use renki_config::{
+    Declared,
+    EnvKey,
+    Layer,
+    Lookup,
+    Origin,
+    Part,
+    Shelves,
+    Stack,
+    Store,
+    StoreShelf,
+    Walk,
+};
+pub use renki_manifest::Toml;
+use tomlfuse_parse::{Node, nodes_for};
 
-pub use self::toml::Toml;
 use crate::tool::Tool;
 
 /// The person's file: `<config root>/<config_file>`, so `~/.config/widget/widget.toml`
@@ -221,19 +233,21 @@ pub(crate) fn resolve_all(
     cli: &Cli,
     texts: &Texts,
 ) -> Result<Vec<ResolvedSetting>, String> {
-    fn parse<'t>(which: &str, text: &'t str) -> Result<<Toml as Store>::Document<'t>, String> {
-        match Toml::parse(text) {
-            Outcome::Ok(doc) => Ok(doc),
-            Outcome::Err(e) => Err(format!("the {which} configuration is {e}")),
+    let shelved = |t: &Maybe<String>| {
+        match t {
+            Maybe::Is(t) => Maybe::Is(Shelved::for_text(t)),
+            Maybe::Isnt => Maybe::Isnt,
         }
-    }
-    let user = match &texts.user {
-        Maybe::Is(t) => Maybe::Is(parse("user", t)?),
-        Maybe::Isnt => Maybe::Isnt,
     };
-    let repo = match &texts.repo {
-        Maybe::Is(t) => Maybe::Is(parse("repository", t)?),
-        Maybe::Isnt => Maybe::Isnt,
+    let mut user_shelves = shelved(&texts.user);
+    let mut repo_shelves = shelved(&texts.repo);
+    let user = match (&texts.user, &mut user_shelves) {
+        (Maybe::Is(t), Maybe::Is(s)) => Maybe::Is(parse("user", t, s)?),
+        _ => Maybe::Isnt,
+    };
+    let repo = match (&texts.repo, &mut repo_shelves) {
+        (Maybe::Is(t), Maybe::Is(s)) => Maybe::Is(parse("repository", t, s)?),
+        _ => Maybe::Isnt,
     };
     // Each file is its stack's one layer, the base, until the reader finds a
     // file's layers itself.
@@ -245,14 +259,14 @@ pub(crate) fn resolve_all(
         Maybe::Is(doc) => vec![Layer::new(Part::Base, "repository", doc)],
         Maybe::Isnt => Vec::new(),
     };
-    if let Some((key, _)) = renki_config::unknown_keys(tool.settings, &user).next() {
+    if let Maybe::Is((key, _)) = renki_config::unknown_keys(tool.settings, &user).step() {
         return Err(format!(
             "the user configuration names {key:?}, which {} has no setting called; `{} config schema` \
              lists them",
             tool.short, tool.short
         ));
     }
-    if let Some((key, _)) = renki_config::misplaced_keys(tool.settings, &repo).next() {
+    if let Maybe::Is((key, _)) = renki_config::misplaced_keys(tool.settings, &repo).step() {
         return Err(format!(
             "the repository's {} sets {key:?}, which is a user setting and does not belong in a \
              repository file",
@@ -333,3 +347,56 @@ fn checked<'a>(file: &str, stack: &'a [Layer<'a, Toml>]) -> Result<Stack<'a, Tom
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+/// The memory one TOML text is read into, owned here at the launcher's std
+/// boundary and sized from the store's own answer: as many nodes as a text of
+/// its length can need, and the spelling shelf the store said it wants.
+pub(crate) struct Shelved {
+    nodes:    Vec<Node>,
+    spelling: Vec<u8>,
+}
+
+impl Shelved {
+    /// Shelves `text` cannot outgrow: a read with no spelling shelf is refused
+    /// with the whole need of one, which is what is then given.
+    pub(crate) fn for_text(text: &str) -> Self {
+        let mut nodes = vec![Node::EMPTY; nodes_for(text.len())];
+        let mut none: [u8; 0] = [];
+        let need = match Toml::parse(text, &mut (&mut nodes[..], &mut none[..])) {
+            Outcome::Err(short) if short.shelf() == StoreShelf::Spelling => {
+                short.exhausted().wanted
+            },
+            _ => 0,
+        };
+        Shelved {
+            nodes,
+            spelling: vec![0; need],
+        }
+    }
+}
+
+impl Shelves<Node> for Shelved {
+    fn shelves(&mut self) -> (&mut [Node], &mut [u8]) {
+        (&mut self.nodes, &mut self.spelling)
+    }
+}
+
+/// `text` read as the `which` configuration into `shelves`, or why not.
+pub(crate) fn parse<'t>(
+    which: &str,
+    text: &'t str,
+    shelves: &'t mut Shelved,
+) -> Result<<Toml as Store>::Document<'t>, String> {
+    match Toml::parse(text, shelves) {
+        Outcome::Ok(Outcome::Ok(doc)) => Ok(doc),
+        Outcome::Ok(Outcome::Err(e)) => Err(format!("the {which} configuration is {e}")),
+        Outcome::Err(short) => {
+            Err(format!(
+                "the {which} configuration needs a {} shelf of {} and was read with {}",
+                short.shelf(),
+                short.exhausted().wanted,
+                short.exhausted().had
+            ))
+        },
+    }
+}

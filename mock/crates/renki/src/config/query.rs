@@ -164,8 +164,10 @@ pub(crate) fn set(tool: &Tool, user: &Path, key: &str, value: &str) -> Result<St
         Maybe::Is(t) => t,
         Maybe::Isnt => String::new(),
     };
+    let mut shelves = super::Shelved::for_text(&existing);
+    let doc = super::parse("user", &existing, &mut shelves)?;
     let mut out = String::with_capacity(existing.len() + 64);
-    Toml::set(&existing, key, rendered, &mut out)
+    Toml::set(&doc, key, rendered, &mut out)
         .map_err(|_| "could not render the file".to_string())?;
     // and the file has to parse back with the schema still holding, which is
     // what stops a value carrying a newline from splitting a line in two

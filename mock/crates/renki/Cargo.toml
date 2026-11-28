@@ -59,11 +59,11 @@ toml = { version = "0.8", default-features = false, features = ["parse", "displa
 # notko comes with it, with the default features off for the stable floor.
 renki-dirs = { version = "0.0.2", path = "../renki-dirs" }
 # The configuration contracts, the same way: the schema, the store contract
-# and the resolver are theirs, the TOML store and the reading are this
-# crate's. `toml_edit` is what `toml` is built on and is already in the
-# graph; it is named here for the source spans a list literal borrows.
+# and the resolver are theirs; the TOML store is renki-manifest's, over
+# tomlfuse-parse, whose index this crate lends it memory for.
 renki-config = { version = "0.0.2", path = "../renki-config" }
-toml_edit = { version = "0.22", default-features = false, features = ["parse"] }
+renki-manifest = { version = "0.0.1", path = "../renki-manifest" }
+tomlfuse-parse = { version = "0.0.1-rc.1", git = "https://github.com/orgrinrt/tomlfuse", rev = "cefd5bddd5489c243e25bd4e89fd07a338f385dd" }
 notko = { version = "0.0.1", default-features = false }
 
 [dev-dependencies]

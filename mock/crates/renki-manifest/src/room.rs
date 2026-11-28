@@ -15,8 +15,9 @@ use tomlfuse_parse::Node;
 pub enum Shelf {
     /// The text of every layer read, back to back.
     Text,
-    /// Where a string with an escape is decoded, as long as the text.
-    Decode,
+    /// Where the store writes each string it decodes and each key it spells
+    /// whole.
+    Spelling,
     /// The nodes of the parser's index, which is each document as it was read.
     Nodes,
     /// The base's path and each joined include path, each ending in a NUL.
@@ -27,22 +28,22 @@ impl fmt::Display for Shelf {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Shelf::Text => "text",
-            Shelf::Decode => "decode",
+            Shelf::Spelling => "spelling",
             Shelf::Nodes => "node",
             Shelf::Path => "path",
         })
     }
 }
 
-/// The memory a read uses, four shelves the caller lends: the text, the decode
-/// shelf, the parser's nodes and the paths. Every string a read hands out
+/// The memory a read uses, four shelves the caller lends: the text, the
+/// spelling shelf, the parser's nodes and the paths. Every string a read hands out
 /// borrows from it.
 #[derive(Debug)]
 pub struct Room<'r> {
-    pub(crate) text:   &'r mut [u8],
-    pub(crate) decode: &'r mut [u8],
-    pub(crate) nodes:  &'r mut [Node],
-    pub(crate) path:   &'r mut [u8],
+    pub(crate) text:     &'r mut [u8],
+    pub(crate) spelling: &'r mut [u8],
+    pub(crate) nodes:    &'r mut [Node],
+    pub(crate) path:     &'r mut [u8],
 }
 
 impl<'r> Room<'r> {
@@ -51,7 +52,7 @@ impl<'r> Room<'r> {
     /// any nodes will do.
     pub fn new<T, D, N, P>(
         text: &'r mut T,
-        decode: &'r mut D,
+        spelling: &'r mut D,
         nodes: &'r mut N,
         path: &'r mut P,
     ) -> Self
@@ -65,7 +66,7 @@ impl<'r> Room<'r> {
         nodes.fill(Node::EMPTY);
         Room {
             text: text.lend(),
-            decode: decode.lend(),
+            spelling: spelling.lend(),
             nodes,
             path: path.lend(),
         }
@@ -77,24 +78,24 @@ impl<'r> Room<'r> {
 const PATHS: usize = 16 * 1024;
 
 /// The four shelves owned in fixed arrays, on the stack or in a static, for a
-/// caller with no allocator: `TEXT` bytes of text, as many of decoding,
-/// `NODES` nodes, and 16 KiB of paths.
+/// caller with no allocator: `TEXT` bytes of text, `NODES` nodes, `SPELLING`
+/// bytes of spelling, and 16 KiB of paths.
 #[derive(Debug)]
-pub struct Rooms<const TEXT: usize, const NODES: usize> {
-    text:   [u8; TEXT],
-    decode: [u8; TEXT],
-    nodes:  [Node; NODES],
-    path:   [u8; PATHS],
+pub struct Rooms<const TEXT: usize, const NODES: usize, const SPELLING: usize> {
+    text:     [u8; TEXT],
+    spelling: [u8; SPELLING],
+    nodes:    [Node; NODES],
+    path:     [u8; PATHS],
 }
 
-impl<const TEXT: usize, const NODES: usize> Rooms<TEXT, NODES> {
+impl<const TEXT: usize, const NODES: usize, const SPELLING: usize> Rooms<TEXT, NODES, SPELLING> {
     /// Every shelf empty.
     pub const fn new() -> Self {
         Rooms {
-            text:   [0; TEXT],
-            decode: [0; TEXT],
-            nodes:  [Node::EMPTY; NODES],
-            path:   [0; PATHS],
+            text:     [0; TEXT],
+            spelling: [0; SPELLING],
+            nodes:    [Node::EMPTY; NODES],
+            path:     [0; PATHS],
         }
     }
 
@@ -102,14 +103,16 @@ impl<const TEXT: usize, const NODES: usize> Rooms<TEXT, NODES> {
     pub fn room(&mut self) -> Room<'_> {
         Room::new(
             &mut self.text,
-            &mut self.decode,
+            &mut self.spelling,
             &mut self.nodes,
             &mut self.path,
         )
     }
 }
 
-impl<const TEXT: usize, const NODES: usize> Default for Rooms<TEXT, NODES> {
+impl<const TEXT: usize, const NODES: usize, const SPELLING: usize> Default
+    for Rooms<TEXT, NODES, SPELLING>
+{
     fn default() -> Self {
         Self::new()
     }

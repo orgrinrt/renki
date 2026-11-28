@@ -29,9 +29,12 @@ compile_error!(
 
 mod host;
 mod room;
+mod toml;
 #[allow(unsafe_code)]
 mod unix;
+mod writer;
 
 pub use host::{BadRead, Host};
 pub use room::{Room, Rooms, Shelf};
+pub use toml::{Toml, TomlDocument, TomlItems, TomlKeys, TomlList, Unread};
 pub use unix::Unix;

@@ -77,11 +77,9 @@ pub enum Rendered<'a> {
 /// resolver's and are the same over every store.
 pub trait Store: Sized + 'static {
     /// What the schema and the diagnostics call the format.
-    // lint:allow(no-bare-static-str) reason: a format's static name. FIXME: port to Str.
-    const NAME: &'static str;
+    fn name() -> &'static str;
     /// The file's extension, without the dot.
-    // lint:allow(no-bare-static-str) reason: a format's static extension. FIXME: port to Str.
-    const EXTENSION: &'static str;
+    fn extension() -> &'static str;
     /// One slot of the index a document is read into, which the caller gives
     /// through [`Shelves`] so the store keeps no memory of its own.
     type Cell;

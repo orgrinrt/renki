@@ -136,10 +136,11 @@ dependencies = [
  "notko",
  "renki-config",
  "renki-dirs",
+ "renki-manifest",
  "serde",
  "tempfile",
  "toml 0.8.23",
- "toml_edit",
+ "tomlfuse-parse",
 ]
 
 [[package]]
