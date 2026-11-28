@@ -90,6 +90,6 @@ pub trait Host {
 
     /// Runs `sh -c <command>` in the directory `dir` and answers its exit, or
     /// `None` where it ended with no exit, by a signal.
-    #[cfg(feature = "shell-predicate")]
+    #[cfg(feature = "processes")]
     fn shell<'p>(dir: &'p CStr, command: &CStr) -> Result<Option<c_int>, BadRead<'p>>;
 }

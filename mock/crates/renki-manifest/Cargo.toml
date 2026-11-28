@@ -13,7 +13,9 @@ rust-version = "1.88"
 categories = ["config", "command-line-interface"]
 keywords = ["config", "manifest", "overlays", "toml", "layers"]
 # The writer and host tests read their fixtures, so the fixtures ship with them.
-include = ["src/**/*.rs", "tests/**/*.rs", "tests/writer/*/*", "tests/host/**", "README.md", "LICENSE"]
+# The POSIX reader's test reads `posix/` at the repository root, which the
+# package does not carry, so it stays out.
+include = ["src/**/*.rs", "tests/the_c_calls_on_this_host.rs", "tests/every_target_unix_names_builds.rs", "tests/writer/*/*", "tests/host/**", "README.md", "LICENSE"]
 
 [dependencies]
 # The rules a manifest is read by, and the parser it is read with. Neither
@@ -21,7 +23,7 @@ include = ["src/**/*.rs", "tests/**/*.rs", "tests/writer/*/*", "tests/host/**", 
 renki-config = { version = "0.0.2", path = "../renki-config" }
 # A git dependency until `tomlfuse-parse` is published, and renki-manifest
 # is not released while it stands.
-tomlfuse-parse = { version = "0.0.6-rc.1", git = "https://github.com/orgrinrt/tomlfuse", branch = "work/tomlfuse-parse" }
+tomlfuse-parse = { version = "0.0.1-rc.1", git = "https://github.com/orgrinrt/tomlfuse", branch = "work/tomlfuse-parse" }
 serde = { version = "1", default-features = false }
 
 # The C library, on the targets `Unix` has a row for and no other.
@@ -29,5 +31,6 @@ serde = { version = "1", default-features = false }
 libc = { version = "0.2", default-features = false }
 
 [features]
-# A predicate answered by `sh -c`, which spawns a process.
-shell-predicate = []
+# Spawning a process: a predicate answered by `sh -c` and the untracked-layer
+# check through git. Off by default; the launcher turns it on.
+processes = []
