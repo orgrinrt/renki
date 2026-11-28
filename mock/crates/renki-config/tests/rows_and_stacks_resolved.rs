@@ -205,18 +205,14 @@ fn unknown_and_misplaced_keys_skip_meta_and_name_their_layer() {
         doc("meta.replace = [\"port\"]\nport = 2\nprot = 3\ntheme = \"light\"\n"),
     );
     let repo = [layer("app.toy", &b), layer("app.local.toy", &l)];
-    let unknown: Vec<(&str, &str)> = unknown_keys(&rows, &repo)
-        .map(|(k, layer)| (k, layer.label()))
-        .collect();
+    let unknown = labelled(unknown_keys(&rows, &repo));
     assert_eq!(unknown, [("prot", "app.local.toy")]);
-    let misplaced: Vec<(&str, &str)> = misplaced_keys(&rows, &repo)
-        .map(|(k, layer)| (k, layer.label()))
-        .collect();
+    let misplaced = labelled(misplaced_keys(&rows, &repo));
     assert_eq!(misplaced, [("theme", "app.local.toy")]);
     // the control: a stack of declared keys and meta alone has neither
     let repo = [layer("app.toy", &b)];
-    assert_eq!(unknown_keys(&rows, &repo).count(), 0);
-    assert_eq!(misplaced_keys(&rows, &repo).count(), 0);
+    assert!(labelled(unknown_keys(&rows, &repo)).is_empty());
+    assert!(labelled(misplaced_keys(&rows, &repo)).is_empty());
 }
 
 #[test]
@@ -232,4 +228,15 @@ fn a_repo_only_setting_is_not_read_from_the_persons_stack() {
         (got.source(), got.to_string()),
         (Origin::Default, "0".to_string())
     );
+}
+
+/// Each key a walk of held keys hands out, with the label of its layer.
+fn labelled<'d, W: renki_config::Walk<Item = (&'d str, &'d renki_config::Layer<'d, Toy>)>>(
+    mut walk: W,
+) -> Vec<(&'d str, &'d str)> {
+    let mut out = Vec::new();
+    while let Maybe::Is((k, layer)) = walk.step() {
+        out.push((k, layer.label()));
+    }
+    out
 }

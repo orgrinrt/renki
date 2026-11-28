@@ -339,7 +339,7 @@ fn a_repo_file_cannot_set_a_persons_setting_and_a_user_file_cannot_set_the_repos
     let got = all(&rows, &cli, &stack(Maybe::Is(&repo)), &[]);
     assert_eq!(got[0], ("theme", "dark".to_string(), Origin::Default));
     let repo_stack = stack(Maybe::Is(&repo));
-    let misplaced: Vec<&str> = misplaced_keys(&rows, &repo_stack).map(|(k, _)| k).collect();
+    let misplaced: Vec<&str> = held(misplaced_keys(&rows, &repo_stack));
     assert_eq!(misplaced, ["theme"]);
     // and the other way: `strict` is the repo's, and a user file naming it is
     // not read for it
@@ -348,7 +348,10 @@ fn a_repo_file_cannot_set_a_persons_setting_and_a_user_file_cannot_set_the_repos
     assert_eq!(got[2], ("strict", "false".to_string(), Origin::Default));
     // the control: a key the repo may hold is not misplaced
     let repo = doc("strict = true\nserver.port = 9\n");
-    assert_eq!(misplaced_keys(&rows, &stack(Maybe::Is(&repo))).count(), 0);
+    assert_eq!(
+        held(misplaced_keys(&rows, &stack(Maybe::Is(&repo)))).len(),
+        0
+    );
 }
 
 #[test]
@@ -356,11 +359,11 @@ fn a_key_the_schema_does_not_know_is_named() {
     let rows = table();
     let user = doc("theme = \"dark\"\nthme = \"light\"\nserver.prot = 1\n");
     let user_stack = stack(Maybe::Is(&user));
-    let unknown: Vec<&str> = unknown_keys(&rows, &user_stack).map(|(k, _)| k).collect();
+    let unknown: Vec<&str> = held(unknown_keys(&rows, &user_stack));
     assert_eq!(unknown, ["thme", "server.prot"]);
     // the control
     let user = doc("theme = \"dark\"\n");
-    assert_eq!(unknown_keys(&rows, &stack(Maybe::Is(&user))).count(), 0);
+    assert_eq!(held(unknown_keys(&rows, &stack(Maybe::Is(&user)))).len(), 0);
 }
 
 #[test]
@@ -461,9 +464,8 @@ fn a_short_shelf_is_refused_naming_it_with_the_whole_need_apart_from_a_wrong_doc
     assert_eq!(short(3, 5), refused(StoreShelf::Spelling, 7, 5));
     // the whole need, given, is enough in one more read
     let (mut index, mut spelling) = ([(); 3], [0u8; 7]);
-    let d = Toy::parse(text, &mut (&mut index, &mut spelling))
-        .unwrap()
-        .unwrap();
+    let mut shelves = (&mut index, &mut spelling);
+    let d = Toy::parse(text, &mut shelves).unwrap().unwrap();
     assert_eq!(Toy::get(&d, "c"), Maybe::Is(Literal::Int(3)));
     assert_eq!(short(1, 64).shelf(), StoreShelf::Index);
     assert_eq!(short(1, 64).exhausted().wanted, 3);
@@ -513,4 +515,13 @@ fn the_source_names_are_the_words_config_get_prints() {
         .collect();
     assert_eq!(names, ["flag", "env", "repo", "user", "default"]);
     assert!(Origin::Flag < Origin::Default, "precedence is the order");
+}
+
+/// The keys a walk of held keys hands out, in its order.
+fn held<'d, W: Walk<Item = (&'d str, &'d Layer<'d, Toy>)>>(mut walk: W) -> Vec<&'d str> {
+    let mut out = Vec::new();
+    while let Maybe::Is((k, _)) = walk.step() {
+        out.push(k);
+    }
+    out
 }
