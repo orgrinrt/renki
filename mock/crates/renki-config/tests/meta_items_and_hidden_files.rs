@@ -10,7 +10,7 @@ mod common;
 
 use common::{Toy, doc, part};
 use notko::Maybe;
-use renki_config::{BadLayer, Got, Meta, glob_matches};
+use renki_config::{BadLayer, Got, Meta, MetaList, glob_matches};
 
 fn defect(text: &str) -> Maybe<BadLayer<'_>> {
     let d = Box::leak(Box::new(doc(text)));
@@ -27,15 +27,15 @@ fn an_item_of_include_replace_or_unset_that_is_not_a_string_is_refused_naming_wh
     for (text, want) in [
         (
             "meta.overlays.include = [\"a/\", 1]\n",
-            BadLayer::NotAString("meta.overlays.include", Got::Int),
+            BadLayer::NotAString(MetaList::Include, Got::Int),
         ),
         (
             "meta.replace = [true]\n",
-            BadLayer::NotAString("meta.replace", Got::Bool),
+            BadLayer::NotAString(MetaList::Replace, Got::Bool),
         ),
         (
             "meta.unset = [\"port\", 2]\nport = 1\n",
-            BadLayer::NotAString("meta.unset", Got::Int),
+            BadLayer::NotAString(MetaList::Unset, Got::Int),
         ),
     ] {
         assert_eq!(defect(text), Maybe::Is(want), "{text}");
@@ -52,7 +52,7 @@ fn an_item_of_untracked_that_is_not_a_string_is_refused_as_no_word() {
     for file in ["app.toy", "app.defaults.toy"] {
         assert_eq!(
             defect_in("meta.overlays.untracked = [\"local\", true]\n", file),
-            Maybe::Is(BadLayer::NotAWord("meta.overlays.untracked", Got::Bool)),
+            Maybe::Is(BadLayer::NotAWord(MetaList::Untracked, Got::Bool)),
             "{file}"
         );
         // the control: words only stand

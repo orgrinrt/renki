@@ -9,7 +9,7 @@ mod common;
 
 use common::{Toy, doc, layer, sound};
 use notko::{Maybe, Outcome};
-use renki_config::{BadMerge, Clash, Layer, Literal, Meet, Shape, Stack, Value, meet, stacked};
+use renki_config::{BadMerge, Layer, Literal, Meet, Shape, Stack, Value, meet, stacked};
 
 #[test]
 fn two_tables_merge_two_lists_append_and_two_scalars_go_over() {
@@ -48,7 +48,7 @@ fn a_shape_over_another_that_nothing_replaces_is_refused_naming_both() {
         (Shape::Scalar, Shape::List),
     ] {
         let e = meet(lower, higher, false).unwrap_err();
-        assert_eq!(e, Clash::new(lower, higher));
+        assert_eq!(e, BadMerge::Shapes(lower, higher));
         let said = e.to_string();
         assert!(
             said.contains(lower.name()) && said.contains(higher.name()),
@@ -172,11 +172,7 @@ fn a_shape_over_a_shape_in_the_stack_is_refused_unless_replaced() {
     let stack = [layer("app.toy", &b), layer("app.local.toy", &l)];
     assert_eq!(
         Stack::new(&stack).err(),
-        Maybe::Is(BadMerge::Shapes(
-            "skip",
-            "app.toy",
-            Clash::new(Shape::List, Shape::Scalar)
-        ))
+        Maybe::Is(BadMerge::Shapes(Shape::List, Shape::Scalar))
     );
     // the control: the same, replaced
     let l = doc("meta.replace = [\"skip\"]\nskip = \"a\"\n");

@@ -17,7 +17,7 @@ use std::ffi::CStr;
 use std::fs;
 
 use common::{Fixture, suite};
-use renki_config::{BadLayer, BadMerge, BadPredicate, Clash, Got, Shape};
+use renki_config::{BadLayer, BadMerge, BadPredicate, Got, MetaList, Shape};
 use renki_manifest::BadRead;
 use tomlfuse_parse::{Node, Options, Version, nodes_for, parse};
 
@@ -103,14 +103,13 @@ fn reader_tables() -> (Vec<String>, Vec<String>) {
 }
 
 /// What each placeholder is filled with to render a sample.
-const FILLED: [(&str, &str); 13] = [
+const FILLED: [(&str, &str); 12] = [
     ("<file>", "app.x.toml"),
     ("<word>", "w0rd"),
-    ("<key>", "meta.k"),
+    ("<key>", "meta.overlays.order"),
     ("<got>", "an integer"),
     ("<higher>", "an array of tables"),
     ("<lower>", "a list of values"),
-    ("<below>", "app.toml"),
     ("<name>", "n4me"),
     ("<from>", "fr0m"),
     ("<var>", "V4R"),
@@ -168,7 +167,7 @@ fn predicate_id(e: &BadPredicate<'_>) -> &'static str {
 /// One of every refusal of the contracts, each with its variant's name and
 /// its `Display`, made of the values [`FILLED`] names.
 fn contract_samples() -> Vec<(&'static str, String)> {
-    let (file, word, key) = ("app.x.toml", "w0rd", "meta.k");
+    let (file, word, key) = ("app.x.toml", "w0rd", "meta.overlays.order");
     let layers = [
         BadLayer::TwoWords(file),
         BadLayer::NamedBase(file),
@@ -176,18 +175,15 @@ fn contract_samples() -> Vec<(&'static str, String)> {
         BadLayer::Unordered(word),
         BadLayer::OrderNames(word),
         BadLayer::OrderTwice(word),
-        BadLayer::NotAWord(key, Got::Int),
-        BadLayer::NotAString(key, Got::Int),
+        BadLayer::NotAWord(MetaList::Order, Got::Int),
+        BadLayer::NotAString(MetaList::Order, Got::Int),
         BadLayer::UnknownMeta(key),
         BadLayer::MetaShape(key),
         BadLayer::AboveBase(key),
         BadLayer::AlwaysRead(key),
         BadLayer::ReplaceNotHeld(key),
     ];
-    let merges = [
-        BadMerge::Shapes(key, "app.toml", Clash::new(Shape::List, Shape::Tables)),
-        BadMerge::Unset(key),
-    ];
+    let merges = [BadMerge::Shapes(Shape::List, Shape::Tables), BadMerge::Unset(key)];
     let predicates = [
         BadPredicate::Undefined("n4me"),
         BadPredicate::Loop("n4me", "fr0m"),
