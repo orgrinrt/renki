@@ -154,9 +154,10 @@ that asks a key. It answers the checked `Stack<'a, St>` or the first
 layer holding a scalar wins; for a list it answers `ListRun<'a, St>`, the run
 of each holding layer's list from the lowest that the highest `replace` and
 `unset` leave, which the kind walks layer by layer through the store's
-`items`, so an appended list is neither copied nor allocated. `stacked`
-refuses nothing: whatever the stack holds was refused or let stand when it
-was checked.
+`items`, so an appended list is neither copied nor allocated. `stacked` is
+the one walk of the merge rule, and `Stack::new` checks by asking it every key
+the layers hold, every table above one and every key an `unset` names, so
+over a stack `Stack::new` answered, `stacked` refuses nothing.
 
 ## The predicate
 
