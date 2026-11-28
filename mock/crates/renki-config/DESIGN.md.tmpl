@@ -115,10 +115,14 @@ a directory where it ends in `/`, relative to the file that names it),
 `order`, `untracked` (the words that must not be tracked by git, default
 `local`, `secret` and `private`), `when` (a predicate's name), `predicates`,
 `replace` and `unset` (dotted keys of this layer). `Meta::defect` refuses a
-`meta` key that is none of these, an `order`, `untracked` or `predicates` in a
-layer above the base, a `when` on the base or on `defaults`, and an item of
-`include`, `replace` or `unset` that is not a string, each by name.
-`unknown_keys` and the resolver never see a key under `meta`.
+`meta` key that is none of these; `meta`, `meta.overlays` or
+`meta.predicates` holding anything but a table, and a key of these holding a
+value of the wrong shape, as the wrong shape; an `order`, `untracked` or
+`predicates` in a layer above the base; a `when` on the base or on
+`defaults`; and an item that is not a string, of `include`, `replace` or
+`unset` as no string and of `order` or `untracked` as no word, naming what it
+holds. Each is refused by name. `unknown_keys` and the resolver never see a
+key under `meta`.
 
 `glob_matches` is the one glob rule both readers keep: `*`, `?` and `[...]`
 within one path segment, with `!` negating a bracket, which is the POSIX
@@ -133,10 +137,13 @@ include's glob, an editor's swap file among them, is never matched.
 whether the higher's `meta.replace` names the key, it answers the `Meet`:
 `Deep` for two tables, which merge key by key; `Append` for two lists of
 values or two arrays of tables, the higher's items after the lower's; `Over`
-for two scalars, or for anything the higher replaces; or a `BadMerge` for one
-shape over another that nothing replaces, naming both. The shapes a store
+for two scalars, or for anything the higher replaces; or a `Clash` for one
+shape over another that nothing replaces, naming both. `stacked` refuses a
+`Clash` as a `BadMerge` naming the key and the layer below that holds the
+lower shape. The shapes a store
 answers are `Table`, `Tables` for an array of tables, `List` for a list of
-values, `Empty` for the empty list and `Scalar`. An array of tables over a
+values, `Empty` for the empty list and `Scalar`; an inline array is `Tables`
+where every item is an inline table and `List` where any item is not. An array of tables over a
 list of values, or the reverse, does not append, since no kind reads a list
 holding both; the empty list holds neither, so it appends to either and
 either appends to it. `meta.unset` takes a key out of what the layers below
@@ -170,9 +177,13 @@ predicates' names. `Predicates<'d, St>` is the table read from the base and
 `defaults`, the two layers always read, so no predicate depends on a layer it
 decides; a definition in an overlay is refused by name. The table is checked
 whole when it is read, whether anything uses a definition or not: one that
-holds no kind, two kinds, or a kind over a value of the wrong shape, and a
-`Not`, `All` or `Any` naming what the table does not define, is refused then,
-by name.
+holds no kind, two kinds, or a kind over a value of the wrong shape, a `Not`,
+`All` or `Any` naming what the table does not define, and a loop among them,
+is refused then, by name. The check takes the definitions in the order the
+base and then `defaults` hold them and follows each one's names depth first in
+the order written, so both readers meet the same refusal first: a loop is
+refused as the first name met again on the path that reached it, with the
+definition that named it.
 
 `Answers` is what only the caller can give: a variable's value, and a shell
 command's exit, run in the manifest's directory. `holds` evaluates a name over
@@ -181,10 +192,50 @@ value is (`1`, `true`, `yes`, `on`, in any case), does not where it is unset,
 empty, `0`, `false`, `no` or `off`, and is a `BadPredicate` naming the
 variable and the value otherwise; `Shell` holds on exit 0, not on 1, and is a
 `BadPredicate` with the command and the exit on anything else. A name the
-table does not define, and a loop among `Not`, `All` and `Any`, are refused
-with the name and the loop. Nothing is kept between calls: a predicate is
+table does not define is refused with the name; a loop cannot be met, since
+the table was checked for one when it was read. Nothing is kept between calls: a predicate is
 evaluated when its use site is read, every time. This crate names no variable
 and defines no predicate.
+
+## The refusals
+
+Every refusal of a manifest's rules is one line of text, which is the
+`Display` of the value refused with, and which a reader writes after the place
+it is about. The lines are these, once; both readers write the same bytes,
+each fixture of the reader's suite holds one of them, and a test of the reader
+holds each `Display` to its line here and each fixture's refusal to a line.
+
+```text
+BadLayer::TwoWords        <file> names two layer words; a layer is one
+BadLayer::NamedBase       <file> names the word base, which is no layer
+BadLayer::BadWord         <file> has a layer word outside a-z, 0-9, _ and -
+BadLayer::Unordered       the layer <word> has no place in the order; add it or * to meta.overlays.order
+BadLayer::OrderNames      meta.overlays.order names <word>, which stays below every overlay
+BadLayer::OrderTwice      meta.overlays.order names <word> twice
+BadLayer::NotAWord        <key> holds <got>, which is no word
+BadLayer::NotAString      <key> holds <got>, which is no string
+BadLayer::UnknownMeta     <key> is no key of the meta table
+BadLayer::MetaShape       <key> holds a value of the wrong shape
+BadLayer::AboveBase       <key> is read from the base and defaults only, not from an overlay
+BadLayer::AlwaysRead      <key> is refused on the base and defaults, which are always read
+BadLayer::ReplaceNotHeld  meta.replace names <key>, which this layer does not hold
+BadMerge::Shapes          <higher> at <key> over <lower> in <below> does not merge; name the key in meta.replace to replace it
+BadMerge::Unset           meta.unset names <key>, which no lower layer holds
+BadPredicate::Undefined   no predicate <name> is defined under meta.predicates
+BadPredicate::Loop        the predicate <name> is reached again from <from>, a loop
+BadPredicate::Value       <var> is <value>, which is neither true nor false
+BadPredicate::Exit        `<command>` exited <code>, which is neither 0 nor 1
+BadPredicate::NoExit      `<command>` gave no exit
+BadPredicate::Malformed   the predicate <name> is not one of env, shell, not, all or any of its shape
+```
+
+`<higher>` and `<lower>` are a `Shape` by its name: `a table`, `an array of
+tables`, `a list of values`, `an empty list`, `a scalar`. `<got>` is what a
+`Got` names: `a boolean`, `an integer`, `a list`. `<below>` is the label of
+the layer below that holds the lower shape. `<value>` is the variable's value
+as a TOML basic string: in double quotes, with `\"`, `\\`, `\n`, `\t` and
+`\r`, and every other byte below 0x20 and 0x7f as `\u00XX` in upper case.
+`<code>` is the exit in decimal.
 
 ## Resolution and provenance
 

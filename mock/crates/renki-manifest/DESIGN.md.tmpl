@@ -12,10 +12,12 @@ Its reading implements the contracts' store, so it will speak notko and the
 stack's string and number types as `renki-config` does. Its reading, its store
 and its deserialiser wait, with the contracts' port, on those crates being on
 the registry; the host, the one unsafe module and the POSIX reader do not.
-Until the stack is on the registry the crate is outside the reach of the
-stack's bare-type lints, which read no crate of it, and nothing in it is
-called passing them: the host speaks `core`'s `Result` and `Option` and the C
-library's integers, and is ported with the rest.
+The stack's bare-type lints read the crates that take notko or arvo. This
+crate takes neither until the stack's string and number crates are on the
+registry, so the lints read none of it now, and whether they should before
+then is a question open with the maintainer. The host does not take notko
+meanwhile: it speaks `core`'s `Result` and `Option` and the C library's
+integers.
 
 ## Reading a manifest
 
@@ -78,15 +80,21 @@ A file is opened without blocking and refused with `BadRead::NotAFile` unless
 it is a regular file, so a directory or a FIFO named like a layer is refused
 and never read or waited on. A directory listing the C library ends with an
 error is refused, so no layer goes missing in silence. A variable's value is
-copied, never borrowed from the process's environment, which a thread of the
-program may change while a manifest is read.
+copied out of the process's environment, so no borrow of it outlives the
+call. The copy does not make the read safe against a thread of the program
+setting a variable at the same time: the C library guards `getenv` against no
+concurrent `setenv`, so a program that sets variables from one thread while
+another reads a manifest has that race, as every reader of the environment
+does.
 
 A shell runs in its directory through a wrapping
-`sh -c 'cd -- "$1" || exit 125; exec sh -c "$2" >/dev/null'`, so no target
-needs a spawn call some C libraries lack. Its standard output goes to
-`/dev/null` and its standard error is the reader's, in both readers, so what a
-predicate prints never reaches a dump. A directory the shell cannot enter
-exits 125, which a predicate neither holds nor fails on, so it is refused.
+`/bin/sh -c 'cd -- "$1" || exit 125; exec /bin/sh -c "$2" >/dev/null'`, so no
+target needs a spawn call some C libraries lack. Both readers run `/bin/sh`
+by that path, whatever `sh` the caller's `PATH` finds, so a predicate meets the
+same shell in either. Its standard output goes to `/dev/null` and its standard
+error is the reader's, in both readers, so what a predicate prints never
+reaches a dump. A directory the shell cannot enter exits 125, which a
+predicate neither holds nor fails on, so it is refused.
 
 ## Finding the layers
 
@@ -189,7 +197,8 @@ manifest is never parsed two ways.
 `Manifest::dump` writes the view as the one text both readers answer in: one
 line per leaf, `<dotted path> = <value>`, an array of tables indexed as
 `name[0]`, the value in one canonical TOML form (a basic string with `\"`,
-`\\`, `\n` and `\t` escaped, an integer, `true` or `false`, a float in the
+`\\`, `\n`, `\t` and `\r` escaped and every other byte below 0x20 and 0x7f
+as `\u00XX` in upper case, which is how a refusal writes a value too, an integer, `true` or `false`, a float in the
 shortest form that reads back to the same number with `.0` where that form
 has no point or exponent and `inf`, `-inf` or `nan` as TOML spells them, a
 date, a time or a date-time in its RFC 3339 text with `T` between date and
@@ -198,6 +207,84 @@ the lines in byte order of the path. The order is found by walking the
 leaves smallest first through the room's index, and the lines go into a
 `core::fmt::Write` sink. `get <key>` is the dump's line for that key.
 
+## The refusals
+
+A manifest that cannot be read is refused with one line, and both readers
+write the same bytes. A line is about a file, named as the reader names it:
+the base as it was given, and every other file joined to the base's directory
+as the include that reached it wrote it. Where it is about a key, the line
+starts `<file>:<line>: `, `<line>` counted from 1; where it is about the whole
+file, `<file>: `, unless the text names the file itself. A refusal of
+`renki-config`'s rules is written as its text there, named below by its
+variant; the others are this crate's.
+
+```text
+BadLayer::TwoWords
+BadLayer::NamedBase
+BadLayer::BadWord
+<file>: BadLayer::Unordered
+<file>:<line>: BadLayer::OrderNames
+<file>:<line>: BadLayer::OrderTwice
+<file>:<line>: BadLayer::NotAWord
+<file>:<line>: BadLayer::NotAString
+<file>:<line>: BadLayer::UnknownMeta
+<file>:<line>: BadLayer::MetaShape
+<file>:<line>: BadLayer::AboveBase
+<file>:<line>: BadLayer::AlwaysRead
+<file>:<line>: BadLayer::ReplaceNotHeld
+<file>:<line>: BadMerge::Shapes
+<file>:<line>: BadMerge::Unset
+<file>:<line>: BadPredicate::Undefined
+<file>:<line>: BadPredicate::Loop
+<file>:<line>: BadPredicate::Value
+<file>:<line>: BadPredicate::Exit
+<file>:<line>: BadPredicate::NoExit
+<file>:<line>: BadPredicate::Malformed
+<file> cannot be read
+<file> is not a regular file
+<file>:<line>: <parser>
+<file>:<line>: <form> is outside the POSIX reader's TOML subset
+<file>: a manifest is name.ext
+<file>: its directory cannot be listed
+<file>:<line>: meta.overlays.include names <entry>, which is no directory
+<file>:<line>: meta.overlays.include names <entry>, which cannot be listed
+<file>:<line>: meta.overlays.include matches <file>, which is no layer of <file>
+<file> and <file> are both the base
+<file> and <file> carry the same layer word <word>
+<file>: the defaults layer is read from beside the base only
+<file>: the layer <word> is tracked by git and must not be; git rm --cached <file>
+<file>:<line>: meta.overlays.include names a path holding a newline, which no line can name
+```
+
+A refusal about a key is at the line the key stands on: a merge at the
+higher layer's key, `meta.unset` at its own line, a definition's refusal at
+the definition, and a predicate's answer at the `meta.when` that asked for
+it. Two files are named in byte order. `<parser>` is the `Display` of
+`tomlfuse-parse`'s `ErrorKind` where the parser stopped, at the line holding
+the byte it stopped at, so a document is refused in one wording whichever
+reader reads it; the POSIX reader gives the parser's wording for every form of
+its subset. The parser also refuses bytes that are no UTF-8, so the host
+checks none. `<form>` is the POSIX reader's own: `a multi-line string`, `an
+inline table`, `a nested array`, `a quoted key`, `a float`, `a date or time`
+or `a \u escape`, which the Rust reader reads. `BadRead::Os` keeps the C call
+and its `errno` for a caller that asks, and writes neither, since the POSIX
+reader cannot know them.
+
+Every line above has a fixture, but these, each held by a test of its own:
+
+```text
+<file> needs a room of <need> bytes
+<file>:<line>: the predicate <name> runs a shell, which this build cannot
+<file>: its path holds a newline, which no line can name
+the base: its path holds a newline, which no line can name
+<file>:<line>: meta.overlays.include matches a path holding a newline, which no line can name
+<file>: its directory holds a layer whose name holds a newline, which no line can name
+```
+
+The room is the Rust reader's alone and the build without `processes` is
+too; a name holding a newline cannot be kept in every checkout of the
+fixtures, so a test writes each such tree itself.
+
 ## The POSIX reader
 
 Under `posix/` at the repository's root, beside the crates, and reading
@@ -205,7 +292,11 @@ nothing outside it: `posix/manifest.sh`, a library of POSIX `sh` to source,
 and the `awk` it runs. It answers `dump <file>` and `get <file> <key>` in the
 dump's bytes, and applies the same layers, include rule, order, merge, meta
 and predicates. A `shell` predicate runs its command on every `dump` and
-`get` that reads a use of it, as the Rust reader does; nothing is kept.
+`get` that reads a use of it, as the Rust reader does; nothing is kept. It is
+written to the POSIX shell and the POSIX `awk`, using no extension of either:
+it is sourced into `dash` or `bash` alike, and its `awk` holds no NUL byte, no
+octal escape inside a bracket expression, and reads no `system()` status past
+0 and 1.
 
 It reads a stated subset of TOML and refuses, with file and line, anything
 outside it, so it reads a manifest right or says it cannot. In: comments,
@@ -214,8 +305,8 @@ headers; bare and dotted keys; basic strings with `\"`, `\\`, `\n` and `\t`;
 literal strings; integers; booleans; arrays of those, on one line or several.
 Out: multi-line strings, inline tables, nested arrays, quoted keys, floats,
 dates and times, and `\u` escapes. What is not TOML inside the subset's own
-forms is refused the same: a control byte in a string or a comment, and bytes
-that are no UTF-8.
+forms is refused the same, in the parser's words: a control byte in a string
+or a comment, and bytes that are no UTF-8.
 
 A consumer that cannot link Rust adds the repository as a git submodule at a
 pinned revision, checks out `posix/` alone, and sources `posix/manifest.sh`;
@@ -230,25 +321,36 @@ fixture outside the POSIX subset holds
 both: the dump the Rust reader answers and the refusal the POSIX reader gives.
 A file of a fixture that is not TOML is kept as `<name>.toml.in` and copied to
 its name when the fixture is run, so the repository's TOML lint, which reads
-every `*.toml`, never meets it. One test of this crate runs every fixture
-through `Manifest::dump` and through `posix/manifest.sh`, and compares each
-with what the fixture holds. Each reader is checked against the fixture, and
-both against the same bytes, so a behaviour lands in both readers or the
-fixture that pins it is red for the one that lacks it. The fixtures sit under
+every `*.toml`, never meets it. The base is `app.toml` unless the fixture's
+`context` names another. One test of this crate runs every fixture through
+`Manifest::dump` and through `posix/manifest.sh`, and compares each with what
+the fixture holds. Each reader is checked against the fixture, and both
+against the same bytes, so a behaviour lands in both readers or the fixture
+that pins it is red for the one that lacks it. The fixtures sit under
 `posix/` so a consumer's sparse checkout carries them too.
 
-Every refusal either reader gives has a fixture: each layer and include rule,
-each form outside the subset and each invalid one inside it. Paths that hold a
-space or a quote, an include through a link, and a dot file beside an include's
-glob have fixtures too, and so does each of the three ways the untracked check
-is skipped. A broken copy of the POSIX reader, run over the suite, turns it
-red, which shows the suite can fail.
+The POSIX reader is run over the suite under `dash` and under `bash`, each
+where it is installed, and under every `awk` of `mawk`, `gawk`, the one true
+`awk` and `busybox awk` that is installed; at least one shell and one `awk`
+must be. A variable a fixture sets is never one a shell reads itself, such as
+`LC_ALL`, since a shell would answer it before the reader does.
+
+Every refusal of the table above has a fixture but those named there: each
+layer and include rule, each form outside the subset and each invalid one
+inside it, a directory that cannot be listed, by a permission the test takes
+away, and a file found that then cannot be read. Paths that hold a space
+or a quote, an include through a link, and a dot file beside an include's
+glob have fixtures too, and so does each of the three ways the untracked
+check is skipped. One test holds every `Display` of the table to its line,
+every fixture's refusal to one line of the table, and every line of the table
+but those named to a fixture. A broken copy of the POSIX reader, run over the
+suite, turns it red, which shows the suite can fail.
 
 Both readers evaluate the same predicate kinds, `env`, `shell`, `not`, `all`
 and `any`, and the suite holds a fixture for each: one where it holds and one
 where it does not, `env` with each truthy and falsy word and a refused one.
 The `shell` fixtures run through the Rust reader where `processes` is on; the
-POSIX reader runs them always, through the same `sh -c`.
+POSIX reader runs them always, through the same `/bin/sh -c`.
 
 TOML itself is held by `tomlfuse-parse`'s own run of the toml-test suite;
 this crate's suite holds the layers and the POSIX reader's subset.
