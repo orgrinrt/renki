@@ -128,24 +128,35 @@ shell's pattern rule, and no `**`.
 `meet` is the merge rule, once, for every reader that merges: given the
 `Shape` a lower layer holds at a key, the shape a higher one holds, and
 whether the higher's `meta.replace` names the key, it answers the `Meet`:
-`Deep` for two tables, which merge key by key; `Append` for two lists, the
-higher's items after the lower's, an array of tables the same; `Over` for two
-scalars, or for anything the higher replaces; or a `BadMerge` for one shape
-over another that nothing replaces, naming both. `meta.unset` takes a key out
-of what the layers below hold before the layer applies. A key `replace` names
-that the layer does not hold, or `unset` names that no lower layer holds, is
-refused.
+`Deep` for two tables, which merge key by key; `Append` for two lists of
+values or two arrays of tables, the higher's items after the lower's; `Over`
+for two scalars, or for anything the higher replaces; or a `BadMerge` for one
+shape over another that nothing replaces, naming both. The shapes a store
+answers are `Table`, `Tables` for an array of tables, `List` for a list of
+values, `Empty` for the empty list and `Scalar`. An array of tables over a
+list of values, or the reverse, does not append, since no kind reads a list
+holding both; the empty list holds neither, so it appends to either and
+either appends to it. `meta.unset` takes a key out of what the layers below
+hold before the layer applies. A key `replace` names that the layer does not
+hold, or `unset` names that no lower layer holds, is refused.
 
 ## The stack
 
 A `Layer<'a, St>` is one read layer: its `LayerName` or the base, a label for
 the file it came from, and its document. A stack is a slice of them, lowest
-first, which the caller builds and this crate only reads. `stacked` answers a
-dotted key over a stack by `meet`: the highest layer holding a scalar wins;
-for a list it answers `ListRun<'a, St>`, the run of each holding layer's list
-from the lowest that the highest `replace` and `unset` leave, which the kind
-walks layer by layer through the store's `items`, so an appended list is
-neither copied nor allocated.
+first, which the caller builds. `Stack::new` checks the slice whole, once:
+every `meta.unset` against the layers below it, and at every key each layer
+holds and every table above one, the shape it holds against the layers below
+by `meet`, so a reader that walks the leaves meets the same refusals as one
+that asks a key. It answers the checked `Stack<'a, St>` or the first
+`BadMerge` in the stack's order, and `Stack::layers` gives the slice back.
+`stacked` answers a dotted key over a checked stack by `meet`: the highest
+layer holding a scalar wins; for a list it answers `ListRun<'a, St>`, the run
+of each holding layer's list from the lowest that the highest `replace` and
+`unset` leave, which the kind walks layer by layer through the store's
+`items`, so an appended list is neither copied nor allocated. `stacked`
+refuses nothing: whatever the stack holds was refused or let stand when it
+was checked.
 
 ## The predicate
 
@@ -172,7 +183,7 @@ and defines no predicate.
 `Origin` is the closed set of places a value comes from: `Flag`, `Env`,
 `Repo`, `User`, `Default`, in that precedence. `resolve` is generic over the
 store and over how the caller answers a flag and a variable by key, takes the
-repository's stack and the person's stack, each possibly empty, and yields per
+repository's checked `Stack` and the person's, each possibly empty, and yields per
 setting a `ResolvedView<'a, St>`: the key, the value, the origin that won and,
 for `Repo` and `User`, the layer, so `config get` prints `repo:local` where
 the value came from `name.local.ext`. Its `Value<'a, St>` is text, a literal,
