@@ -422,13 +422,13 @@ fn a_resolved_value_keeps_where_it_was_found_and_prints_canonically() {
 fn a_store_writes_one_key_and_keeps_every_other_byte() {
     let text = "# the theme\ntheme = \"dark\" # keep me\nserver.port = 1\n";
     let mut out = String::new();
-    Toy::set(text, "theme", Rendered::Text("light"), &mut out).unwrap();
+    Toy::set(&doc(text), "theme", Rendered::Text("light"), &mut out).unwrap();
     assert_eq!(
         out,
         "# the theme\ntheme = \"light\" # keep me\nserver.port = 1\n"
     );
     let mut out = String::new();
-    Toy::set(text, "strict", Rendered::Raw("true"), &mut out).unwrap();
+    Toy::set(&doc(text), "strict", Rendered::Raw("true"), &mut out).unwrap();
     assert_eq!(out, format!("{text}strict = true\n"));
 }
 

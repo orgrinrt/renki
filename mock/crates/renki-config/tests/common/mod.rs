@@ -161,7 +161,13 @@ impl Store for Toy {
         Maybe::Isnt
     }
 
-    fn set(text: &str, key: &str, value: Rendered<'_>, into: &mut impl fmt::Write) -> fmt::Result {
+    fn set(
+        doc: &ToyDoc<'_>,
+        key: &str,
+        value: Rendered<'_>,
+        into: &mut impl fmt::Write,
+    ) -> fmt::Result {
+        let text = doc.text;
         let rendered = match value {
             Rendered::Text(t) => format!("\"{t}\""),
             Rendered::Raw(t) => t.to_string(),
