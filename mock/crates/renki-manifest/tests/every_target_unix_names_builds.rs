@@ -40,7 +40,7 @@ fn check(target: &str, features: &[&str]) -> std::process::Output {
 fn the_library_builds_for_every_target_unix_names() {
     let mut failed = Vec::new();
     for target in TARGETS {
-        for features in [&[][..], &["--features", "shell-predicate"][..]] {
+        for features in [&[][..], &["--features", "processes"][..]] {
             let out = check(target, features);
             if !out.status.success() {
                 failed.push(format!(

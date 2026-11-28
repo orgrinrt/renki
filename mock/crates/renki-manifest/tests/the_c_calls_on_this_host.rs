@@ -148,7 +148,7 @@ fn getenv_answers_a_set_variable_and_nothing_for_an_unset_one() {
     assert_eq!(Unix::var(c"RENKI_MANIFEST_NO_SUCH_VARIABLE"), None);
 }
 
-#[cfg(feature = "shell-predicate")]
+#[cfg(feature = "processes")]
 mod spawned {
     use super::*;
 

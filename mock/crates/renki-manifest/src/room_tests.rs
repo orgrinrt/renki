@@ -77,7 +77,8 @@ fn a_room_sized_by_nodes_for_never_runs_out_of_nodes() {
         nodes,
         &mut (),
     )
-    .unwrap();
+    .unwrap()
+    .used();
     assert_eq!(held, 511, "the document needs a node per segment");
 }
 

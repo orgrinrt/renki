@@ -178,13 +178,13 @@ impl Host for Unix {
         Some(unsafe { CStr::from_ptr(value) }.to_bytes())
     }
 
-    #[cfg(feature = "shell-predicate")]
+    #[cfg(feature = "processes")]
     fn shell<'p>(dir: &'p CStr, command: &CStr) -> Result<Option<c_int>, BadRead<'p>> {
         spawn::shell(dir, command)
     }
 }
 
-#[cfg(feature = "shell-predicate")]
+#[cfg(feature = "processes")]
 mod spawn {
     use core::ffi::{CStr, c_char, c_int};
 

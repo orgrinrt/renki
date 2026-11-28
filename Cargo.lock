@@ -362,8 +362,8 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tomlfuse-parse"
-version = "0.0.6-rc.1"
-source = "git+https://github.com/orgrinrt/tomlfuse?branch=work%2Ftomlfuse-parse#27c0cf478701b525238bf892f09d0ca35f496c84"
+version = "0.0.1-rc.1"
+source = "git+https://github.com/orgrinrt/tomlfuse?branch=work%2Ftomlfuse-parse#d84048229f4b74f74460ed2e507ff234b4e824ed"
 
 [[package]]
 name = "trybuild"
