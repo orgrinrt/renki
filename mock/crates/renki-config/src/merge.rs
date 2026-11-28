@@ -13,13 +13,17 @@ use core::fmt;
 
 use notko::Outcome;
 
-/// What a document holds at a key. An array of tables is a list.
+/// What a document holds at a key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Shape {
     /// A table, whose keys merge one by one.
     Table,
-    /// A list, an array of tables included.
+    /// An array of tables.
+    Tables,
+    /// A list of values.
     List,
+    /// The empty list, which holds neither tables nor values.
+    Empty,
     /// A boolean, a number or text.
     Scalar,
 }
@@ -30,7 +34,9 @@ impl Shape {
     pub const fn name(self) -> &'static str {
         match self {
             Shape::Table => "a table",
-            Shape::List => "a list",
+            Shape::Tables => "an array of tables",
+            Shape::List => "a list of values",
+            Shape::Empty => "an empty list",
             Shape::Scalar => "a scalar",
         }
     }
@@ -75,8 +81,9 @@ impl fmt::Display for BadMerge<'_> {
 
 /// How the `higher` shape at a key meets the `lower`, where `replaced` says
 /// whether the higher layer's `meta.replace` names the key: two tables go
-/// deep, two lists append, two scalars and anything replaced go over, and
-/// any other pair is refused naming both.
+/// deep, two lists of values or two arrays of tables append, the empty list
+/// appends to either and either to it, two scalars and anything replaced go
+/// over, and any other pair is refused naming both.
 // lint:allow(no-bare-numeric, arvo-types-only) reason: whether `meta.replace` names the key. FIXME: port to arvo's Bool.
 pub const fn meet(lower: Shape, higher: Shape, replaced: bool) -> Outcome<Meet, BadMerge<'static>> {
     if replaced {
@@ -84,7 +91,10 @@ pub const fn meet(lower: Shape, higher: Shape, replaced: bool) -> Outcome<Meet, 
     }
     match (lower, higher) {
         (Shape::Table, Shape::Table) => Outcome::Ok(Meet::Deep),
-        (Shape::List, Shape::List) => Outcome::Ok(Meet::Append),
+        (Shape::List, Shape::List)
+        | (Shape::Tables, Shape::Tables)
+        | (Shape::Empty, Shape::List | Shape::Tables | Shape::Empty)
+        | (Shape::List | Shape::Tables, Shape::Empty) => Outcome::Ok(Meet::Append),
         (Shape::Scalar, Shape::Scalar) => Outcome::Ok(Meet::Over),
         _ => Outcome::Err(BadMerge::Shapes(lower, higher)),
     }

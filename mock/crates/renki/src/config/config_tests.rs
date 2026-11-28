@@ -277,3 +277,17 @@ fn the_users_file_sits_under_the_config_root_by_the_tools_own_name() {
     let file = user_file(&T).unwrap();
     assert!(file.ends_with("tns/t.toml"), "{}", file.display());
 }
+
+#[test]
+fn a_file_whose_stack_does_not_merge_is_refused_naming_the_file() {
+    let (c, _) = cli(&[], &[]);
+    let e = resolve_all(&T, &c, &texts(Some("meta.unset = [\"skip\"]\n"), None)).unwrap_err();
+    assert!(
+        e.contains("your file") && e.contains("meta.unset names skip"),
+        "{e}"
+    );
+    let e = resolve_all(&T, &c, &texts(None, Some("meta.unset = [\"strict\"]\n"))).unwrap_err();
+    assert!(e.contains("the repository's file"), "{e}");
+    // the control: the same files with nothing unset resolve
+    assert!(resolve_all(&T, &c, &texts(Some("skip = []\n"), Some("strict = true\n"))).is_ok());
+}

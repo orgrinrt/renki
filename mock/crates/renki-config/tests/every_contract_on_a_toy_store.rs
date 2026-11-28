@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{Cli, Toy, ToyDoc, doc, layer};
+use common::{Cli, Toy, ToyDoc, doc, layer, sound};
 use notko::{Maybe, Outcome};
 use renki_config::{
     BadDocument,
@@ -85,7 +85,7 @@ fn all<'a>(
 ) -> Vec<(&'static str, String, Origin)> {
     // the keys are taken from the static rows, so the answer outlives the stacks
     rows.iter()
-        .zip(resolve(rows, "widget", cli, repo, user))
+        .zip(resolve(rows, "widget", cli, sound(repo), sound(user)))
         .map(|(row, r)| {
             let r = r.unwrap();
             assert_eq!(r.row().key(), row.key());
@@ -368,7 +368,7 @@ fn a_value_the_kind_refuses_is_refused_with_its_source_named() {
         env:   &[],
     };
     let user_stack = stack(Maybe::Is(&user));
-    let bad = resolve(&rows, "widget", &cli, &[], &user_stack)
+    let bad = resolve(&rows, "widget", &cli, sound(&[]), sound(&user_stack))
         .find_map(erred)
         .unwrap();
     assert_eq!((bad.key(), bad.source()), ("server.port", Origin::User));
@@ -383,7 +383,7 @@ fn a_value_the_kind_refuses_is_refused_with_its_source_named() {
         flags: &[("theme", "blue")],
         env:   &[],
     };
-    let bad = resolve(&rows, "widget", &cli, &[], &[])
+    let bad = resolve(&rows, "widget", &cli, sound(&[]), sound(&[]))
         .find_map(erred)
         .unwrap();
     assert_eq!((bad.key(), bad.source()), ("theme", Origin::Flag));
@@ -396,7 +396,7 @@ fn a_resolved_value_keeps_where_it_was_found_and_prints_canonically() {
         flags: &[("skip", "a, b")],
         env:   &[],
     };
-    let r = resolve(&rows, "widget", &cli, &[], &[])
+    let r = resolve(&rows, "widget", &cli, sound(&[]), sound(&[]))
         .map(|r| r.unwrap())
         .find(|r| r.row().key() == "skip")
         .unwrap();

@@ -22,7 +22,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use notko::{Maybe, Outcome};
-use renki_config::{Declared, EnvKey, Layer, Lookup, Origin, Part, Store};
+use renki_config::{Declared, EnvKey, Layer, Lookup, Origin, Part, Stack, Store};
 
 pub use self::toml::Toml;
 use crate::tool::Tool;
@@ -259,14 +259,18 @@ pub(crate) fn resolve_all(
             tool.config_file
         ));
     }
+    let (repo, user) = (
+        checked("the repository's file:", &repo)?,
+        checked("your file:", &user)?,
+    );
     let mut out = Vec::with_capacity(tool.settings.len());
     // The key is taken from the static row, so the answer outlives the stacks.
     for (row, r) in tool.settings.iter().zip(renki_config::resolve(
         tool.settings,
         tool.short,
         cli,
-        &repo,
-        &user,
+        repo,
+        user,
     )) {
         match r {
             Outcome::Ok(r) => {
@@ -316,6 +320,14 @@ pub(crate) fn row_of<'t>(tool: &'t Tool, key: &str) -> Result<&'t Declared<'stat
                 tool.short, tool.short
             )
         })
+}
+
+/// A file's stack, checked whole, or why it does not merge, naming the file.
+fn checked<'a>(file: &str, stack: &'a [Layer<'a, Toml>]) -> Result<Stack<'a, Toml>, String> {
+    match Stack::new(stack) {
+        Outcome::Ok(s) => Ok(s),
+        Outcome::Err(e) => Err(format!("{file} {e}")),
+    }
 }
 
 #[cfg(test)]

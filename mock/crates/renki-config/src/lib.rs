@@ -79,5 +79,5 @@ pub use resolve::{
 pub use row::{BadTable, Declared};
 pub use scope::{Either, Repo, Scope, User};
 pub use setting::{Setting, key_is_wellformed};
-pub use stack::{Layer, ListRun, stacked};
+pub use stack::{Layer, ListRun, Stack, stacked};
 pub use store::{BadDocument, Origin, Rendered, Store};

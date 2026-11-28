@@ -13,6 +13,7 @@ use core::fmt;
 
 use notko::{Maybe, Outcome};
 
+use crate::meta::is_meta;
 use crate::{BadMerge, Literal, Meet, Meta, Part, Shape, Store, Value, meet};
 
 /// One read layer: which part of the manifest it is, a label for the file it
@@ -78,6 +79,65 @@ impl<'a, St: Store> Layer<'a, St> {
     }
 }
 
+/// A stack of read layers, lowest first, checked whole: every `meta.unset`
+/// names a key some lower layer holds, and at every key a layer holds and
+/// every table above one, each layer's shape meets the layers' below it. Only
+/// [`Stack::new`] makes one, so [`stacked`] and the resolver read no stack
+/// that was not checked.
+pub struct Stack<'a, St: Store> {
+    layers: &'a [Layer<'a, St>],
+}
+
+impl<St: Store> Clone for Stack<'_, St> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<St: Store> Copy for Stack<'_, St> {}
+
+impl<St: Store> fmt::Debug for Stack<'_, St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.layers).finish()
+    }
+}
+
+impl<'a, St: Store> Stack<'a, St> {
+    /// Check `layers`, lowest first, by asking [`stacked`] every key an
+    /// `unset` names, every key a layer holds and every table above one, and
+    /// answer the checked stack or the first refusal, lowest layer first.
+    pub fn new(layers: &'a [Layer<'a, St>]) -> Outcome<Self, BadMerge<'a>> {
+        let stack = Stack {
+            layers,
+        };
+        for layer in layers {
+            if let Maybe::Is(Literal::List(list)) = layer.meta.unset() {
+                for item in St::items(list) {
+                    if let Literal::Str(named) = item
+                        && let Outcome::Err(e) = stacked(&stack, named)
+                    {
+                        return Outcome::Err(e);
+                    }
+                }
+            }
+            for key in St::keys(layer.doc).filter(|k| !is_meta(k)) {
+                let tables = key.match_indices('.').map(|(at, _)| &key[.. at]);
+                for asked in tables.chain(core::iter::once(key)) {
+                    if let Outcome::Err(e) = stacked(&stack, asked) {
+                        return Outcome::Err(e);
+                    }
+                }
+            }
+        }
+        Outcome::Ok(stack)
+    }
+
+    /// The layers, lowest first.
+    pub const fn layers(&self) -> &'a [Layer<'a, St>] {
+        self.layers
+    }
+}
+
 /// Whether the list literal `list` names `key` itself, or, with `within`, a
 /// table `key` sits under.
 // lint:allow(no-bare-string, no-bare-numeric, arvo-types-only) reason: dotted keys and a predicate over them. FIXME: port to Str and arvo's Bool.
@@ -98,18 +158,22 @@ fn names<'l, St: Store>(list: Maybe<Literal<'l>>, key: &str, within: bool) -> Ma
     Maybe::Isnt
 }
 
-/// A dotted key answered over a stack, lowest layer first, by [`meet`]: the
-/// highest layer holding a scalar wins; for a list, the answer is the
-/// [`ListRun`] of every holding layer's list from the lowest one that the
-/// highest `meta.replace` and `meta.unset` leave, and the layer named is the
-/// highest that holds it. A table at the key answers nothing, since no
-/// setting is a table. A `meta.unset` naming the key, or a table it sits
-/// under, where no lower layer holds what it names, is refused.
+/// A dotted key answered over a checked stack, lowest layer first, by
+/// [`meet`]: the highest layer holding a scalar wins; for a list, the answer
+/// is the [`ListRun`] of every holding layer's list from the lowest one that
+/// the highest `meta.replace` and `meta.unset` leave, and the layer named is
+/// the highest that holds it. A table at the key answers nothing, since no
+/// setting is a table. This is the one walk of the merge rule: a `meta.unset`
+/// naming the key, or a table it sits under, where no lower layer holds what
+/// it names, and one shape over another, are refused here, and
+/// [`Stack::new`] checks a stack by asking this every key, so over a stack it
+/// answered nothing is refused.
 // lint:allow(no-bare-string) reason: a dotted key. FIXME: port to Str.
 pub fn stacked<'a, St: Store>(
-    stack: &'a [Layer<'a, St>],
+    stack: &Stack<'a, St>,
     key: &'a str,
 ) -> Outcome<Maybe<(&'a Layer<'a, St>, Value<'a, St>)>, BadMerge<'a>> {
+    let stack = stack.layers;
     // the layer that last set the key, with its shape, and where a list's run starts
     // lint:allow(no-bare-numeric, arvo-types-only) reason: a position in the stack. FIXME: port to arvo.
     let mut held: Maybe<(usize, Shape)> = Maybe::Isnt;
@@ -150,7 +214,7 @@ pub fn stacked<'a, St: Store>(
     let layer = &stack[at];
     let value = match shape {
         Shape::Table => return Outcome::Ok(Maybe::Isnt),
-        Shape::List => {
+        Shape::List | Shape::Tables | Shape::Empty => {
             Value::Run(ListRun {
                 rest: &stack[from ..],
                 key,
