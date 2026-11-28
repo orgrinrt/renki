@@ -276,9 +276,9 @@ mod spawn {
             )
         };
         if spawned != 0 {
-            return Err(BadRead::Os {
-                file:  dir,
-                call:  "posix_spawn",
+            return Err(BadRead::Shell {
+                dir,
+                call: "posix_spawn",
                 errno: spawned,
             });
         }
@@ -291,9 +291,9 @@ mod spawn {
             }
             let e = errno();
             if e != libc::EINTR {
-                return Err(BadRead::Os {
-                    file:  dir,
-                    call:  "waitpid",
+                return Err(BadRead::Shell {
+                    dir,
+                    call: "waitpid",
                     errno: e,
                 });
             }

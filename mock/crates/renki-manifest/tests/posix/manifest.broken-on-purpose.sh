@@ -55,7 +55,7 @@ BEGIN {
 	SUBSET = " is outside the POSIX reader\047s TOML subset"
 	# Byte classes built from the bytes themselves, since an awk may read an
 	# octal escape inside a bracket expression its own way.
-	CTRL = "[" byte(1) "-" byte(8) byte(10) "-" byte(31) byte(127) "]"
+	CTRL = "[" byte(1) "-" byte(8) byte(10) "-" byte(12) byte(14) "-" byte(31) byte(127) "]"
 	for (i = 1; i < 32; i++) ORD[byte(i)] = i
 	ORD[byte(127)] = 127
 	HIGH = "[" byte(128) "-" byte(255) "]"
@@ -230,6 +230,22 @@ function expected(what) { refuse(here() "expected " what) }
 
 function extend() { refuse(here() "a key path through something it may not extend") }
 
+# A carriage return outside a string or a comment, with no line feed after
+# it; one inside a string or a comment is a control character, as the parser
+# reads them.
+function barecr() { refuse(here() "a carriage return with no line feed after it") }
+
+# A comment from I to the end of the line.
+function comment() { if (index(substr(S, I), "\r")) refuse(here() "a control character") }
+
+# What may follow a value or a header on its line: nothing, or a comment.
+function end() {
+	if (I > length(S)) return
+	if (ch() == "\r") barecr()
+	if (ch() == "#") comment()
+	else expected("newline")
+}
+
 # The whole file into FL, its lines without their newlines, with FN of them
 # and FEND the line its end is on. The file is read through tr, which gives a
 # NUL byte as another control byte, so no awk ever holds one, and its exit is
@@ -237,7 +253,7 @@ function extend() { refuse(here() "a key path through something it may not exten
 # empty one. The parser refuses bytes that are no UTF-8 before anything else,
 # and so does this.
 function load(   cmd, l, n, st) {
-	cmd = "{ tr " q("\\000") " " q("\\001") " < " q(PPATH) " 2>/dev/null && echo; } ; echo \"/$?\""
+	cmd = "{ tr " q("\\000") " " q("\\001") " 2>/dev/null < " q(PPATH) " && echo; } 2>/dev/null; echo \"/$?\""
 	n = 0
 	while ((cmd | getline l) > 0) FL[++n] = l
 	close(cmd)
@@ -290,7 +306,9 @@ function parse(L,   cur) {
 	load()
 	while (nextline()) {
 		ws()
-		if (I > length(S) || ch() == "#") continue
+		if (I > length(S)) continue
+		if (ch() == "#") { comment(); continue }
+		if (ch() == "\r") barecr()
 		if (ch() == "[") cur = header(L)
 		else keyval(L, cur)
 	}
@@ -334,7 +352,7 @@ function header(L,   arr, K, nk, p, e) {
 	if (arr) { if (substr(S, I, 2) != "]]") expected("]]"); I += 2 }
 	else { if (ch() != "]") expected("]"); I++ }
 	ws()
-	if (I <= length(S) && ch() != "#") expected("newline")
+	end()
 	p = prefix(L, K, nk, "i")
 	if (!arr) {
 		if (!((L, p) in SH)) { node(L, p, "t"); DEF[L, p] = "h" }
@@ -363,13 +381,13 @@ function keyval(L, cur,   K, nk, i, p) {
 	if ((L, p) in SH) refuse(here() "a key defined twice")
 	value(L, p)
 	ws()
-	if (I <= length(S) && ch() != "#") expected("newline")
+	end()
 }
 
 function value(L, p,   c) {
 	ws()
 	c = ch()
-	if (c == "") expected("value")
+	if (c == "" || c == "\r") expected("value")
 	if (c == "[") { list(L, p); return }
 	if (c == "{") beyond("an inline table")
 	scalar()
@@ -382,7 +400,9 @@ function value(L, p,   c) {
 function fill(want) {
 	while (1) {
 		ws()
+		if (ch() == "\r") barecr()
 		if (I <= length(S) && ch() != "#") return
+		if (I <= length(S)) comment()
 		if (!nextline()) expected(want)
 	}
 }
@@ -441,7 +461,7 @@ function scalar(   c, start, tok) {
 		return
 	}
 	start = I
-	while (I <= length(S) && (c = ch()) != " " && c != "\t" && c != "," && c != "]" && c != "#") I++
+	while (I <= length(S) && (c = ch()) != " " && c != "\t" && c != "," && c != "]" && c != "#" && c != "\r") I++
 	tok = substr(S, start, I - start)
 	SS = ""
 	if (tok == "") expected("value")
@@ -460,6 +480,7 @@ function basic(   out, c, e) {
 		if (I > length(S)) refuse(here() "a string with no end")
 		c = ch()
 		if (c == "\"") { I++; break }
+		if (c == "\r") refuse(here() "a control character")
 		if (c == "\\") {
 			e = substr(S, I + 1, 1)
 			if (e == "\"") out = out "\""
@@ -480,6 +501,7 @@ function basic(   out, c, e) {
 
 function literal(   j) {
 	j = index(substr(S, I + 1), Q)
+	if (index(j ? substr(S, I + 1, j - 1) : substr(S, I + 1), "\r")) refuse(here() "a control character")
 	if (j == 0) refuse(here() "a string with no end")
 	SS = substr(S, I + 1, j - 1)
 	I += j + 1
@@ -544,17 +566,17 @@ function lists(   n, ks, i) {
 }
 
 # The first thing wrong with the meta table of L, a part that is "base",
-# "defaults" or "layer", taken key by key in the order the file holds them.
-# The predicates are checked whole once the base and defaults are read.
-function defect(L, part,   i, p, k, j, seen, defines) {
-	defines = ""
+# "defaults" or "layer", taken key by key in the order the file holds them,
+# each key asked for its shape, then its place, then its items. The
+# predicates are checked whole once the base and defaults are read; a
+# definition in an overlay is refused at its first leaf.
+function defect(L, part,   i, p, k, j, seen) {
 	for (i = 1; i <= NN[L]; i++) {
 		p = NODES[L, i]
 		if (!ismeta(p)) continue
-		if (p == "meta" || p == "meta.overlays") { if (SH[L, p] != "t") wrong(L, p); continue }
-		if (p == "meta.predicates" || substr(p, 1, 16) == "meta.predicates.") {
-			if (part == "layer" && (defines == "" || (leaf(L, p) && !leaf(L, defines)))) defines = p
-			if (p == "meta.predicates" && SH[L, p] != "t") wrong(L, p)
+		if (p == "meta" || p == "meta.overlays" || p == "meta.predicates") { if (SH[L, p] != "t") wrong(L, p); continue }
+		if (substr(p, 1, 16) == "meta.predicates.") {
+			if (part == "layer" && leaf(L, p)) overlay(L, p)
 			continue
 		}
 		if (p == "meta.when") {
@@ -567,6 +589,9 @@ function defect(L, part,   i, p, k, j, seen, defines) {
 			if (part == "layer" && ITEM[p] == "word") overlay(L, p)
 			for (j = 1; j <= NI[L, p]; j++)
 				if (ITY[L, p, j] != "str") refuse(at(L, p) p " holds " got(ITY[L, p, j]) ", which is no " ITEM[p])
+			if (p == "meta.replace") for (j = 1; j <= NI[L, p]; j++)
+				if (!((L, ISTR[L, p, j]) in SH))
+					refuse(at(L, p) "meta.replace names " ISTR[L, p, j] ", which this layer does not hold")
 			continue
 		}
 		seen = 0
@@ -575,13 +600,6 @@ function defect(L, part,   i, p, k, j, seen, defines) {
 		if (seen) continue
 		refuse(at(L, p) p " is no key of the meta table")
 	}
-	# A definition in an overlay is named by its first value, or by the
-	# table where it holds none.
-	if (defines != "") overlay(L, defines)
-	k = "meta.replace"
-	if ((L, k) in SH) for (j = 1; j <= NI[L, k]; j++)
-		if (!((L, ISTR[L, k, j]) in SH))
-			refuse(at(L, k) "meta.replace names " ISTR[L, k, j] ", which this layer does not hold")
 }
 
 # The predicate defined at node p of L: its one kind into PKIND, at PKEY;
@@ -856,7 +874,9 @@ function answer(name,   i, kind, dd, dk, v, set, t, r, cmd, st, j, b) {
 		cmd = (LCSET == "set" ? "LC_ALL=" q(LCVAL) "; export LC_ALL; " : "unset LC_ALL; ") \
 			"/bin/sh -c " q("cd -- \"$1\" || { echo /125; exit; }; (exec /bin/sh -c \"$2\" >/dev/null 2>&3 3>&-); echo \"/$?\"") \
 			" sh " q(dirof(CAN[B])) " " q(v) " 3>&2 2>/dev/null"
-		st = substr(output(cmd), 2)
+		st = output(cmd)
+		if (st !~ /^\/[0-9]+$/) refuse(dirof(CAN[B]) ": no shell could be run there")
+		st = substr(st, 2)
 		if (st == "0") r = 1
 		else if (st == "1") r = 0
 		else if (st + 0 > 128) prefuse("`" v "` gave no exit")
