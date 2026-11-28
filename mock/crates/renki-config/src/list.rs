@@ -16,7 +16,7 @@ use core::marker::PhantomData;
 use notko::{Maybe, Outcome};
 
 use crate::kind::{bad, got_of};
-use crate::{BadValue, Got, Kind, List, ListRun, Literal, Store};
+use crate::{BadValue, Got, Kind, List, ListRun, Literal, Store, Walk};
 
 /// A list's value: the items, parsed one at a time by the element kind, from
 /// whichever side the list came. Iterating yields each item's parse, so a
@@ -50,11 +50,16 @@ impl<'a, K: Kind, S: Store> Iterator for ListValue<'a, K, S> {
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             ListValue::FromText(items, _) => items.next().map(K::from_text::<S>),
-            ListValue::FromStore(items) => items.next().map(K::from_literal::<S>),
+            ListValue::FromStore(items) => {
+                match items.step() {
+                    Maybe::Is(item) => Some(K::from_literal::<S>(item)),
+                    Maybe::Isnt => None,
+                }
+            },
             ListValue::FromRun(run, walking) => {
                 loop {
                     if let Maybe::Is(items) = walking
-                        && let Some(item) = items.next()
+                        && let Maybe::Is(item) = items.step()
                     {
                         return Some(K::from_literal::<S>(item));
                     }

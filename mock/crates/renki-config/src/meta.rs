@@ -16,6 +16,7 @@ use core::marker::PhantomData;
 use notko::Maybe;
 
 use crate::kind::got_of;
+use crate::walk::{self, Walk};
 use crate::{BadLayer, Literal, Part, Shape, Store};
 
 // lint:allow(no-bare-string, no-bare-static-str) reason: the reader's static key names. FIXME: port to Str.
@@ -127,7 +128,8 @@ impl<'d, St: Store> Meta<'d, St> {
             (UNSET, MetaList::Unset, false),
         ];
         let (mut always, mut overlay) = (Maybe::Isnt, Maybe::Isnt);
-        for key in St::keys(doc) {
+        let mut walk_keys = St::keys(doc);
+        while let Maybe::Is(key) = walk_keys.step() {
             if !is_meta(key) {
                 continue;
             }
@@ -170,18 +172,22 @@ impl<'d, St: Store> Meta<'d, St> {
             {
                 match St::get(doc, name) {
                     Maybe::Is(Literal::List(items)) => {
-                        let wrong_item = St::items(items).find(|i| !matches!(i, Literal::Str(_)));
+                        let wrong_item =
+                            walk::find(St::items(items), |i| !matches!(i, Literal::Str(_)));
                         let item = match wrong_item {
-                            Some(i) if words => Maybe::Is(BadLayer::NotAWord(list, got_of(i))),
-                            Some(i) => Maybe::Is(BadLayer::NotAString(list, got_of(i))),
-                            None => Maybe::Isnt,
+                            Maybe::Is(i) if words => Maybe::Is(BadLayer::NotAWord(list, got_of(i))),
+                            Maybe::Is(i) => Maybe::Is(BadLayer::NotAString(list, got_of(i))),
+                            Maybe::Isnt => Maybe::Isnt,
                         };
                         // a name `meta.replace` lists that this layer does not hold
                         let unheld = if name == REPLACE {
-                            match St::items(items)
-                                .find(|i| matches!(i, Literal::Str(k) if St::shape(doc, k).isnt()))
-                            {
-                                Some(Literal::Str(k)) => Maybe::Is(BadLayer::ReplaceNotHeld(k)),
+                            match walk::find(
+                                St::items(items),
+                                |i| matches!(i, Literal::Str(k) if St::shape(doc, k).isnt()),
+                            ) {
+                                Maybe::Is(Literal::Str(k)) => {
+                                    Maybe::Is(BadLayer::ReplaceNotHeld(k))
+                                },
                                 _ => Maybe::Isnt,
                             }
                         } else {

@@ -15,7 +15,7 @@ use core::fmt::{self, Write};
 use notko::{Maybe, Outcome};
 
 use crate::meta::PREDICATES;
-use crate::{Layer, Literal, Store};
+use crate::{Layer, Literal, Store, Walk};
 
 /// One definition under `meta.predicates.<name>`.
 pub enum Predicate<'a, St: Store> {
@@ -124,7 +124,8 @@ impl<'d, St: Store> Predicates<'d, St> {
                 Maybe::Isnt => None,
             }
         }) {
-            for key in St::keys(layer.doc()) {
+            let mut walk_keys = St::keys(layer.doc());
+            while let Maybe::Is(key) = walk_keys.step() {
                 let Some(rest) = key.strip_prefix(PREDICATES) else {
                     continue;
                 };
@@ -132,7 +133,8 @@ impl<'d, St: Store> Predicates<'d, St> {
                 let named = match table.get(name) {
                     Outcome::Ok(Maybe::Is(Predicate::Not(other))) => Maybe::Is(other),
                     Outcome::Ok(Maybe::Is(Predicate::All(list) | Predicate::Any(list))) => {
-                        for item in St::items(list) {
+                        let mut walk_items = St::items(list);
+                        while let Maybe::Is(item) = walk_items.step() {
                             let Literal::Str(other) = item else {
                                 return Outcome::Err(BadPredicate::Malformed(name));
                             };
@@ -161,7 +163,8 @@ impl<'d, St: Store> Predicates<'d, St> {
                 Maybe::Isnt => None,
             }
         }) {
-            for key in St::keys(layer.doc()) {
+            let mut walk_keys = St::keys(layer.doc());
+            while let Maybe::Is(key) = walk_keys.step() {
                 let Some(rest) = key.strip_prefix(PREDICATES) else {
                     continue;
                 };
@@ -195,7 +198,8 @@ fn definition<'d, 'n, St: Store>(
     name: &'n str,
 ) -> Outcome<Maybe<Predicate<'d, St>>, BadPredicate<'n>> {
     let mut found = Maybe::Isnt;
-    for key in St::keys(layer.doc()) {
+    let mut walk_keys = St::keys(layer.doc());
+    while let Maybe::Is(key) = walk_keys.step() {
         let Some(rest) = key.strip_prefix(PREDICATES) else {
             continue;
         };
@@ -406,7 +410,8 @@ fn answer<'r, 'd: 'r, St: Store, F: Fn(Predicate<'d, St>) -> Outcome<bool, BadPr
         Predicate::All(list) | Predicate::Any(list) => {
             let all = matches!(definition, Predicate::All(_));
             let mut result = all;
-            for item in St::items(list) {
+            let mut walk_items = St::items(list);
+            while let Maybe::Is(item) = walk_items.step() {
                 let Literal::Str(other) = item else {
                     return Outcome::Err(BadPredicate::Malformed(name));
                 };

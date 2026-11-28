@@ -14,7 +14,7 @@ use core::fmt;
 use notko::{Maybe, Outcome};
 
 use crate::meta::is_meta;
-use crate::{BadMerge, Literal, Meet, Meta, Part, Shape, Store, Value, meet};
+use crate::{BadMerge, Literal, Meet, Meta, Part, Shape, Store, Value, Walk, meet};
 
 /// One read layer: which part of the manifest it is, a label for the file it
 /// came from, its document, and the `meta` table read out of it. A stack is a
@@ -112,7 +112,8 @@ impl<'a, St: Store> Stack<'a, St> {
         };
         for layer in layers {
             if let Maybe::Is(Literal::List(list)) = layer.meta.unset() {
-                for item in St::items(list) {
+                let mut walk_items = St::items(list);
+                while let Maybe::Is(item) = walk_items.step() {
                     if let Literal::Str(named) = item
                         && let Outcome::Err(e) = stacked(&stack, named)
                     {
@@ -120,7 +121,11 @@ impl<'a, St: Store> Stack<'a, St> {
                     }
                 }
             }
-            for key in St::keys(layer.doc).filter(|k| !is_meta(k)) {
+            let mut keys = St::keys(layer.doc);
+            while let Maybe::Is(key) = keys.step() {
+                if is_meta(key) {
+                    continue;
+                }
                 let tables = key.match_indices('.').map(|(at, _)| &key[.. at]);
                 for asked in tables.chain(core::iter::once(key)) {
                     if let Outcome::Err(e) = stacked(&stack, asked) {
@@ -145,7 +150,8 @@ fn names<'l, St: Store>(list: Maybe<Literal<'l, St>>, key: &str, within: bool) -
     let Maybe::Is(Literal::List(list)) = list else {
         return Maybe::Isnt;
     };
-    for item in St::items(list) {
+    let mut walk_items = St::items(list);
+    while let Maybe::Is(item) = walk_items.step() {
         if let Literal::Str(named) = item {
             let under = key
                 .strip_prefix(named)

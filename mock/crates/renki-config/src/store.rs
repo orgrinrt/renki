@@ -11,10 +11,9 @@
 
 use core::fmt;
 
-use notko::lend::{Exhausted, Lend};
 use notko::{Maybe, Outcome};
 
-use crate::{Literal, Shape};
+use crate::{Literal, Shape, Shelves, ShortShelf, Walk};
 
 /// Why text is not a document of some store.
 ///
@@ -83,8 +82,8 @@ pub trait Store: Sized + 'static {
     /// The file's extension, without the dot.
     // lint:allow(no-bare-static-str) reason: a format's static extension. FIXME: port to Str.
     const EXTENSION: &'static str;
-    /// One slot of the index a document is read into, which the caller lends
-    /// so the store keeps no memory of its own.
+    /// One slot of the index a document is read into, which the caller gives
+    /// through [`Shelves`] so the store keeps no memory of its own.
     type Cell;
     /// The store's handle on a list a document holds, walked by
     /// [`Store::items`].
@@ -94,18 +93,19 @@ pub trait Store: Sized + 'static {
     type Document<'t>;
     /// The keys a document holds, dotted, in the document's order.
     // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
-    type Keys<'d>: Iterator<Item = &'d str>;
+    type Keys<'d>: Walk<Item = &'d str>;
     /// The items of a list, in order.
-    type Items<'d>: Iterator<Item = Literal<'d, Self>>;
+    type Items<'d>: Walk<Item = Literal<'d, Self>>;
 
-    /// Parse `text` into `index`. An index that falls short is refused with
-    /// the [`Exhausted`] it gave, outside; text that is no document is
-    /// refused at its line, inside.
+    /// Parse `text` into the shelves given. A shelf that falls short is
+    /// refused with [`ShortShelf`], outside, its `wanted` the whole need where
+    /// the store read that far; text that is no document is refused at its
+    /// line, inside.
     // lint:allow(no-bare-string) reason: the caller's file text. FIXME: port to Str.
-    fn parse<'t, L: Lend<Self::Cell> + ?Sized>(
+    fn parse<'t, S: Shelves<Self::Cell> + ?Sized>(
         text: &'t str,
-        index: &'t mut L,
-    ) -> Outcome<Outcome<Self::Document<'t>, BadDocument>, Exhausted>;
+        shelves: &'t mut S,
+    ) -> Outcome<Outcome<Self::Document<'t>, BadDocument>, ShortShelf>;
     /// The value under a dotted key, or `Isnt` where the document has none.
     // lint:allow(no-bare-string) reason: a dotted key. FIXME: port to Str.
     fn get<'d>(doc: &'d Self::Document<'_>, key: &str) -> Maybe<Literal<'d, Self>>;

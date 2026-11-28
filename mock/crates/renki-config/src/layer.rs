@@ -15,6 +15,7 @@ use core::fmt;
 use notko::{Maybe, Outcome};
 
 use crate::meta::ORDER;
+use crate::walk::{self, Walk};
 use crate::{Got, Literal, Meta, MetaList, Store};
 
 /// The word of a layer, `local` in `name.local.ext`, borrowed from the file
@@ -288,7 +289,10 @@ impl<'a, St: Store> Order<'a, St> {
             Maybe::Is(Literal::List(text)) => text,
             Maybe::Is(_) => return Outcome::Err(BadLayer::MetaShape(ORDER)),
         };
-        for (i, item) in St::items(list).enumerate() {
+        let mut items = St::items(list);
+        let mut i = 0;
+        while let Maybe::Is(item) = items.step() {
+            i += 1;
             let word = match item {
                 Literal::Str(w) => w,
                 Literal::Bool(_) => {
@@ -304,10 +308,11 @@ impl<'a, St: Store> Order<'a, St> {
             if same(word, DEFAULTS) || same(word, BASE) {
                 return Outcome::Err(BadLayer::OrderNames(word));
             }
-            if St::items(list)
-                .take(i)
-                .any(|earlier| matches!(earlier, Literal::Str(e) if e == word))
-            {
+            let mut seen = 0;
+            if walk::any(St::items(list), |earlier| {
+                seen += 1;
+                seen < i && matches!(earlier, Literal::Str(e) if e == word)
+            }) {
                 return Outcome::Err(BadLayer::OrderTwice(word));
             }
         }
@@ -339,7 +344,9 @@ impl<'a, St: Store> Order<'a, St> {
         };
         let found = match self.list {
             Maybe::Isnt => DEFAULT_WORDS.iter().any(|w| seen(w)),
-            Maybe::Is(list) => St::items(list).any(|l| matches!(l, Literal::Str(w) if seen(w))),
+            Maybe::Is(list) => {
+                walk::any(St::items(list), |l| matches!(l, Literal::Str(w) if seen(w)))
+            },
         };
         if found {
             return Outcome::Ok((at, name.word));

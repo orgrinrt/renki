@@ -15,6 +15,7 @@ use core::fmt;
 use notko::{Maybe, Outcome};
 
 use crate::meta::is_meta;
+use crate::walk::Walk;
 use crate::{
     BadMerge,
     BadValue,
@@ -352,32 +353,65 @@ fn find<'a, St: Store, L: Lookup>(
     Outcome::Ok((Origin::Default, Maybe::Isnt, Value::Text(row.default())))
 }
 
+/// The keys a stack's layers hold that `keep` answers true for, each with the
+/// layer that holds it, walked layer by layer in the stack's order. Keys
+/// under `meta` are the reader's and never among them.
+pub struct KeysHeld<'d, St: Store, F> {
+    layers: &'d [Layer<'d, St>],
+    keys:   Maybe<St::Keys<'d>>,
+    keep:   F,
+}
+
+impl<'d, St: Store, F: FnMut(&str) -> bool> Walk for KeysHeld<'d, St, F> {
+    type Item = (&'d str, &'d Layer<'d, St>);
+
+    fn step(&mut self) -> Maybe<Self::Item> {
+        loop {
+            let [layer, rest @ ..] = self.layers else {
+                return Maybe::Isnt;
+            };
+            let keys = match &mut self.keys {
+                Maybe::Is(keys) => keys,
+                Maybe::Isnt => {
+                    self.keys = Maybe::Is(St::keys(layer.doc()));
+                    continue;
+                },
+            };
+            match keys.step() {
+                Maybe::Is(k) if !is_meta(k) && (self.keep)(k) => return Maybe::Is((k, layer)),
+                Maybe::Is(_) => {},
+                Maybe::Isnt => {
+                    self.layers = rest;
+                    self.keys = Maybe::Isnt;
+                },
+            }
+        }
+    }
+}
+
 /// The keys a stack's layers hold that no row declares, each with the layer
 /// that holds it, so a typo in a hand edit is refused by name and file
-/// rather than silently being a default. Keys under `meta` are the reader's
-/// and never among them.
-// lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
+/// rather than silently being a default.
 pub fn unknown_keys<'d, St: Store>(
     rows: &'d [Declared<'_, St>],
     stack: &'d [Layer<'d, St>],
-) -> impl Iterator<Item = (&'d str, &'d Layer<'d, St>)> + 'd {
-    stack.iter().flat_map(move |layer| {
-        St::keys(layer.doc())
-            .filter(move |k| !is_meta(k) && !rows.iter().any(|r| r.key() == *k))
-            .map(move |k| (k, layer))
-    })
+) -> KeysHeld<'d, St, impl FnMut(&str) -> bool + 'd> {
+    KeysHeld {
+        layers: stack,
+        keys:   Maybe::Isnt,
+        keep:   move |k: &str| !rows.iter().any(|r| r.key() == k),
+    }
 }
 
 /// The keys the repository's stack holds that are the person's alone, each
 /// with the layer that holds it, so a clone cannot set somebody's theme.
-// lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
 pub fn misplaced_keys<'d, St: Store>(
     rows: &'d [Declared<'_, St>],
     repo: &'d [Layer<'d, St>],
-) -> impl Iterator<Item = (&'d str, &'d Layer<'d, St>)> + 'd {
-    repo.iter().flat_map(move |layer| {
-        St::keys(layer.doc())
-            .filter(move |k| !is_meta(k) && rows.iter().any(|r| r.key() == *k && !r.reads_repo()))
-            .map(move |k| (k, layer))
-    })
+) -> KeysHeld<'d, St, impl FnMut(&str) -> bool + 'd> {
+    KeysHeld {
+        layers: repo,
+        keys:   Maybe::Isnt,
+        keep:   move |k: &str| rows.iter().any(|r| r.key() == k && !r.reads_repo()),
+    }
 }
