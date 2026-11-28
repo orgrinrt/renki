@@ -332,8 +332,9 @@ that pins it is red for the one that lacks it. The fixtures sit under
 The POSIX reader is run over the suite under `dash` and under `bash`, each
 where it is installed, and under every `awk` of `mawk`, `gawk`, the one true
 `awk` and `busybox awk` that is installed; at least one shell and one `awk`
-must be. A variable a fixture sets is never one a shell reads itself, such as
-`LC_ALL`, since a shell would answer it before the reader does.
+must be. An `env` predicate of a fixture never names a variable a shell reads
+itself, such as `LC_ALL`, since a shell would answer one before the reader
+does, and a fixture that sets one gives it a value every shell takes.
 
 Every refusal of the table above has a fixture but those named there: each
 layer and include rule, each form outside the subset and each invalid one
