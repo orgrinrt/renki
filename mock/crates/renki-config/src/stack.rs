@@ -141,7 +141,7 @@ impl<'a, St: Store> Stack<'a, St> {
 /// Whether the list literal `list` names `key` itself, or, with `within`, a
 /// table `key` sits under.
 // lint:allow(no-bare-string, no-bare-numeric, arvo-types-only) reason: dotted keys and a predicate over them. FIXME: port to Str and arvo's Bool.
-fn names<'l, St: Store>(list: Maybe<Literal<'l>>, key: &str, within: bool) -> Maybe<&'l str> {
+fn names<'l, St: Store>(list: Maybe<Literal<'l, St>>, key: &str, within: bool) -> Maybe<&'l str> {
     let Maybe::Is(Literal::List(list)) = list else {
         return Maybe::Isnt;
     };
@@ -231,7 +231,7 @@ pub fn stacked<'a, St: Store>(
 }
 
 /// A list appended across a stack: each holding layer's list in turn, from
-/// the lowest the merge leaves, as the list's own text in the store's syntax.
+/// the lowest the merge leaves, as the store's own handle on the list.
 /// A kind walks each through [`Store::items`], so the appended list is
 /// neither copied nor allocated.
 pub struct ListRun<'a, St: Store> {
@@ -265,15 +265,14 @@ impl<St: Store> fmt::Debug for ListRun<'_, St> {
 }
 
 impl<'a, St: Store> Iterator for ListRun<'a, St> {
-    // lint:allow(no-bare-string) reason: the list's own text. FIXME: port to Str.
-    type Item = &'a str;
+    type Item = St::List<'a>;
 
-    // lint:allow(no-bare-option, no-bare-string) reason: `Iterator::next` is core's signature.
-    fn next(&mut self) -> Option<&'a str> {
+    // lint:allow(no-bare-option) reason: `Iterator::next` is core's signature.
+    fn next(&mut self) -> Option<St::List<'a>> {
         while let [first, tail @ ..] = self.rest {
             self.rest = tail;
-            if let Maybe::Is(Literal::List(text)) = St::get(first.doc, self.key) {
-                return Some(text);
+            if let Maybe::Is(Literal::List(list)) = St::get(first.doc, self.key) {
+                return Some(list);
             }
         }
         None

@@ -18,8 +18,7 @@ use crate::meta::PREDICATES;
 use crate::{Layer, Literal, Store};
 
 /// One definition under `meta.predicates.<name>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Predicate<'a> {
+pub enum Predicate<'a, St: Store> {
     /// `env = "<NAME>"`: holds where the variable is truthy.
     // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
     Env(&'a str),
@@ -29,14 +28,49 @@ pub enum Predicate<'a> {
     /// `not = "<name>"`: holds where the named predicate does not.
     // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
     Not(&'a str),
-    /// `all = ["<name>", ...]`, as the list's own text: holds where every
-    /// named predicate does.
-    // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
-    All(&'a str),
-    /// `any = ["<name>", ...]`, as the list's own text: holds where one of the
-    /// named predicates does.
-    // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
-    Any(&'a str),
+    /// `all = ["<name>", ...]`, as the store's handle on the list: holds
+    /// where every named predicate does.
+    All(St::List<'a>),
+    /// `any = ["<name>", ...]`, as the store's handle on the list: holds
+    /// where one of the named predicates does.
+    Any(St::List<'a>),
+}
+
+impl<St: Store> Clone for Predicate<'_, St> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<St: Store> Copy for Predicate<'_, St> {}
+
+impl<St: Store> PartialEq for Predicate<'_, St> {
+    // lint:allow(no-bare-numeric, arvo-types-only) reason: `PartialEq::eq` is core's signature.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Predicate::Env(a), Predicate::Env(b))
+            | (Predicate::Shell(a), Predicate::Shell(b))
+            | (Predicate::Not(a), Predicate::Not(b)) => a == b,
+            (Predicate::All(a), Predicate::All(b)) | (Predicate::Any(a), Predicate::Any(b)) => {
+                a == b
+            },
+            _ => false,
+        }
+    }
+}
+
+impl<St: Store> Eq for Predicate<'_, St> {}
+
+impl<St: Store> fmt::Debug for Predicate<'_, St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Predicate::Env(v) => f.debug_tuple("Env").field(v).finish(),
+            Predicate::Shell(v) => f.debug_tuple("Shell").field(v).finish(),
+            Predicate::Not(v) => f.debug_tuple("Not").field(v).finish(),
+            Predicate::All(l) => f.debug_tuple("All").field(l).finish(),
+            Predicate::Any(l) => f.debug_tuple("Any").field(l).finish(),
+        }
+    }
 }
 
 /// The predicates a manifest defines, read from its base and its `defaults`
@@ -120,7 +154,7 @@ impl<'d, St: Store> Predicates<'d, St> {
         }
         // then a loop, walking each definition in turn, its names depth first
         // in the order written, answering no variable and running nothing
-        let quiet = |_: Predicate<'d>| Outcome::Ok(false);
+        let quiet = |_: Predicate<'d, St>| Outcome::Ok(false);
         for layer in layers.into_iter().filter_map(|l| {
             match l {
                 Maybe::Is(l) => Some(l),
@@ -143,7 +177,7 @@ impl<'d, St: Store> Predicates<'d, St> {
     /// The definition of `name`, `Isnt` where neither layer defines it, or a
     /// refusal of one that is no single definition of a known kind and shape.
     // lint:allow(no-bare-string) reason: a predicate's name. FIXME: port to Str.
-    pub fn get<'n>(&self, name: &'n str) -> Outcome<Maybe<Predicate<'d>>, BadPredicate<'n>> {
+    pub fn get<'n>(&self, name: &'n str) -> Outcome<Maybe<Predicate<'d, St>>, BadPredicate<'n>> {
         match definition(self.base, name) {
             Outcome::Ok(Maybe::Isnt) => {},
             other => return other,
@@ -159,7 +193,7 @@ impl<'d, St: Store> Predicates<'d, St> {
 fn definition<'d, 'n, St: Store>(
     layer: &'d Layer<'d, St>,
     name: &'n str,
-) -> Outcome<Maybe<Predicate<'d>>, BadPredicate<'n>> {
+) -> Outcome<Maybe<Predicate<'d, St>>, BadPredicate<'n>> {
     let mut found = Maybe::Isnt;
     for key in St::keys(layer.doc()) {
         let Some(rest) = key.strip_prefix(PREDICATES) else {
@@ -304,7 +338,7 @@ pub fn holds<'r, 'd: 'r, St: Store, A: Answers>(
     table: &Predicates<'d, St>,
     answers: &'r A,
 ) -> Outcome<bool, BadPredicate<'r>> {
-    let leaf = |p: Predicate<'r>| {
+    let leaf = |p: Predicate<'d, St>| {
         match p {
             Predicate::Env(var) => {
                 match answers.var(var) {
@@ -340,7 +374,7 @@ pub fn holds<'r, 'd: 'r, St: Store, A: Answers>(
 /// `any` lists walked in the order written, and a name met again on the path
 /// that reached it refused as a loop, with the name that reached it.
 // lint:allow(no-bare-string, no-bare-numeric, arvo-types-only) reason: a predicate's name and its truth. FIXME: port to Str and arvo's Bool.
-fn answer<'r, 'd: 'r, St: Store, F: Fn(Predicate<'r>) -> Outcome<bool, BadPredicate<'r>>>(
+fn answer<'r, 'd: 'r, St: Store, F: Fn(Predicate<'d, St>) -> Outcome<bool, BadPredicate<'r>>>(
     name: &'r str,
     table: &Predicates<'d, St>,
     leaf: &F,

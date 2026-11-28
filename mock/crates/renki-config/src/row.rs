@@ -70,11 +70,11 @@ pub struct Declared<'a, St: Store> {
     doc:            &'a str,
     // lint:allow(no-bare-string) reason: the caller's text. FIXME: port to Str.
     check_text:     for<'t> fn(&'t str) -> Outcome<(), BadValue<'t>>,
-    check_literal:  for<'t> fn(Literal<'t>) -> Outcome<(), BadValue<'t>>,
+    check_literal:  for<'t> fn(Literal<'t, St>) -> Outcome<(), BadValue<'t>>,
     check_run:      for<'t> fn(ListRun<'t, St>) -> Outcome<(), BadValue<'t>>,
     // lint:allow(no-bare-string) reason: the caller's text. FIXME: port to Str.
     render_text:    fn(&str, &mut fmt::Formatter<'_>) -> fmt::Result,
-    render_literal: fn(Literal<'_>, &mut fmt::Formatter<'_>) -> fmt::Result,
+    render_literal: fn(Literal<'_, St>, &mut fmt::Formatter<'_>) -> fmt::Result,
     render_run:     fn(ListRun<'_, St>, &mut fmt::Formatter<'_>) -> fmt::Result,
     _store:         PhantomData<St>,
 }
@@ -210,7 +210,7 @@ impl<'a, St: Store> Declared<'a, St> {
     }
 
     /// Check a store's literal.
-    pub fn check_literal<'t>(&self, lit: Literal<'t>) -> Outcome<(), BadValue<'t>> {
+    pub fn check_literal<'t>(&self, lit: Literal<'t, St>) -> Outcome<(), BadValue<'t>> {
         (self.check_literal)(lit)
     }
 
@@ -226,7 +226,7 @@ impl<'a, St: Store> Declared<'a, St> {
     }
 
     /// The canonical text of a store's literal, written into `f`.
-    pub fn render_literal(&self, lit: Literal<'_>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    pub fn render_literal(&self, lit: Literal<'_, St>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         (self.render_literal)(lit, f)
     }
 

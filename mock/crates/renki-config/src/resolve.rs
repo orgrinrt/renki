@@ -101,7 +101,7 @@ pub enum Value<'a, St: Store> {
     // lint:allow(no-bare-string) reason: borrowed from the caller's text. FIXME: port to Str.
     Text(&'a str),
     /// A literal, from a layer's document.
-    Stored(Literal<'a>),
+    Stored(Literal<'a, St>),
     /// A list, from every layer of a stack that holds it.
     Run(ListRun<'a, St>),
 }

@@ -74,12 +74,12 @@ impl fmt::Display for MetaList {
 /// and `meta.unset`. The definitions under `meta.predicates` are read by
 /// [`Predicates`](crate::Predicates); this keeps only whether there are any.
 pub struct Meta<'d, St: Store> {
-    include:   Maybe<Literal<'d>>,
-    order:     Maybe<Literal<'d>>,
-    untracked: Maybe<Literal<'d>>,
-    when:      Maybe<Literal<'d>>,
-    replace:   Maybe<Literal<'d>>,
-    unset:     Maybe<Literal<'d>>,
+    include:   Maybe<Literal<'d, St>>,
+    order:     Maybe<Literal<'d, St>>,
+    untracked: Maybe<Literal<'d, St>>,
+    when:      Maybe<Literal<'d, St>>,
+    replace:   Maybe<Literal<'d, St>>,
+    unset:     Maybe<Literal<'d, St>>,
     /// The first defect where the layer is always read.
     always:    Maybe<BadLayer<'d>>,
     /// The first defect where the layer is an overlay.
@@ -227,18 +227,18 @@ impl<'d, St: Store> Meta<'d, St> {
 
     /// `meta.overlays.include`: entries relative to the file that names them,
     /// each a glob matching files, or a directory where it ends in `/`.
-    pub const fn include(&self) -> Maybe<Literal<'d>> {
+    pub const fn include(&self) -> Maybe<Literal<'d, St>> {
         self.include
     }
 
     /// `meta.overlays.order`, read by [`Order`](crate::Order).
-    pub const fn order(&self) -> Maybe<Literal<'d>> {
+    pub const fn order(&self) -> Maybe<Literal<'d, St>> {
         self.order
     }
 
     /// `meta.overlays.untracked`, where it is set; [`Meta::UNTRACKED`] where
     /// it is not.
-    pub const fn untracked(&self) -> Maybe<Literal<'d>> {
+    pub const fn untracked(&self) -> Maybe<Literal<'d, St>> {
         self.untracked
     }
 
@@ -253,12 +253,12 @@ impl<'d, St: Store> Meta<'d, St> {
 
     /// `meta.replace`: the dotted keys of this layer whose values replace
     /// what the layers below hold.
-    pub const fn replace(&self) -> Maybe<Literal<'d>> {
+    pub const fn replace(&self) -> Maybe<Literal<'d, St>> {
         self.replace
     }
 
     /// `meta.unset`: the dotted keys taken out of what the layers below hold.
-    pub const fn unset(&self) -> Maybe<Literal<'d>> {
+    pub const fn unset(&self) -> Maybe<Literal<'d, St>> {
         self.unset
     }
 

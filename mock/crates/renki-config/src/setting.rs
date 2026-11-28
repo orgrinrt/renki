@@ -63,7 +63,9 @@ pub(crate) fn check_text<'a, K: Kind, S: Store>(text: &'a str) -> Outcome<(), Ba
     K::from_text::<S>(text).map(|_| ())
 }
 
-pub(crate) fn check_literal<'a, K: Kind, S: Store>(lit: Literal<'a>) -> Outcome<(), BadValue<'a>> {
+pub(crate) fn check_literal<'a, K: Kind, S: Store>(
+    lit: Literal<'a, S>,
+) -> Outcome<(), BadValue<'a>> {
     K::from_literal::<S>(lit).map(|_| ())
 }
 
@@ -84,7 +86,7 @@ pub(crate) fn render_text<K: Kind, S: Store>(
 }
 
 pub(crate) fn render_literal<K: Kind, S: Store>(
-    lit: Literal<'_>,
+    lit: Literal<'_, S>,
     f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
     match K::from_literal::<S>(lit) {

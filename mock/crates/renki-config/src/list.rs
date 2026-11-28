@@ -90,7 +90,9 @@ impl<K: Kind> Kind for List<K> {
         Outcome::Ok(ListValue::FromText(items, PhantomData))
     }
 
-    fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<Self::Value<'a, S>, BadValue<'a>> {
+    fn from_literal<'a, S: Store>(
+        lit: Literal<'a, S>,
+    ) -> Outcome<Self::Value<'a, S>, BadValue<'a>> {
         match lit {
             Literal::List(text) => Outcome::Ok(ListValue::FromStore(S::items(text))),
             other => Outcome::Err(bad::<Self>(got_of(other))),

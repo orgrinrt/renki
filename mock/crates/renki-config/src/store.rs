@@ -11,6 +11,7 @@
 
 use core::fmt;
 
+use notko::lend::{Exhausted, Lend};
 use notko::{Maybe, Outcome};
 
 use crate::{Literal, Shape};
@@ -68,39 +69,50 @@ pub enum Rendered<'a> {
 /// A file format a configuration is kept in.
 ///
 /// Implemented by a marker type per format. It parses text into a document
-/// that borrows from it, answers one dotted key as a [`Literal`], lists the
-/// keys a document holds so a key the schema does not know is refused by
-/// name, tells what shape a key holds, walks a list literal's items, and
-/// writes one key back into the text it was given, keeping everything else
-/// in that text where it was, comments included. Nothing else: the
-/// precedence, the kinds and the scopes are the resolver's and are the same
-/// over every store.
-pub trait Store: 'static {
+/// that borrows from it and from an index the caller lends, answers one
+/// dotted key as a [`Literal`], lists the keys a document holds so a key the
+/// schema does not know is refused by name, tells what shape a key holds,
+/// walks a list it handed out, and writes one key back into the text it was
+/// given, keeping everything else in that text where it was, comments
+/// included. Nothing else: the precedence, the kinds and the scopes are the
+/// resolver's and are the same over every store.
+pub trait Store: Sized + 'static {
     /// What the schema and the diagnostics call the format.
     // lint:allow(no-bare-static-str) reason: a format's static name. FIXME: port to Str.
     const NAME: &'static str;
     /// The file's extension, without the dot.
     // lint:allow(no-bare-static-str) reason: a format's static extension. FIXME: port to Str.
     const EXTENSION: &'static str;
-    /// A parsed document, borrowing the text it was parsed from.
+    /// One slot of the index a document is read into, which the caller lends
+    /// so the store keeps no memory of its own.
+    type Cell;
+    /// The store's handle on a list a document holds, walked by
+    /// [`Store::items`].
+    type List<'d>: Copy + fmt::Debug + Eq;
+    /// A parsed document, borrowing the text it was parsed from and the index
+    /// it was parsed into.
     type Document<'t>;
     /// The keys a document holds, dotted, in the document's order.
     // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
     type Keys<'d>: Iterator<Item = &'d str>;
-    /// The items of a list literal, in order.
-    type Items<'d>: Iterator<Item = Literal<'d>>;
+    /// The items of a list, in order.
+    type Items<'d>: Iterator<Item = Literal<'d, Self>>;
 
-    /// Parse, or say where the text stops being a document.
+    /// Parse `text` into `index`. An index that falls short is refused with
+    /// the [`Exhausted`] it gave, outside; text that is no document is
+    /// refused at its line, inside.
     // lint:allow(no-bare-string) reason: the caller's file text. FIXME: port to Str.
-    fn parse<'t>(text: &'t str) -> Outcome<Self::Document<'t>, BadDocument>;
+    fn parse<'t, L: Lend<Self::Cell> + ?Sized>(
+        text: &'t str,
+        index: &'t mut L,
+    ) -> Outcome<Outcome<Self::Document<'t>, BadDocument>, Exhausted>;
     /// The value under a dotted key, or `Isnt` where the document has none.
     // lint:allow(no-bare-string) reason: a dotted key. FIXME: port to Str.
-    fn get<'d>(doc: &'d Self::Document<'_>, key: &str) -> Maybe<Literal<'d>>;
+    fn get<'d>(doc: &'d Self::Document<'_>, key: &str) -> Maybe<Literal<'d, Self>>;
     /// Every dotted key the document holds a scalar or a list under.
     fn keys<'d>(doc: &'d Self::Document<'_>) -> Self::Keys<'d>;
-    /// The items of a list literal this store produced.
-    // lint:allow(no-bare-string) reason: the list's own text. FIXME: port to Str.
-    fn items<'d>(list: &'d str) -> Self::Items<'d>;
+    /// The items of a list this store handed out.
+    fn items<'d>(list: Self::List<'d>) -> Self::Items<'d>;
     /// What shape the document holds at a dotted key: a table, a list or a
     /// scalar, or `Isnt` where it holds nothing there. An array of tables is
     /// a list, and its tables' keys are `name.0.field` in the document's

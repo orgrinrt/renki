@@ -11,7 +11,6 @@
 //! the item they cover, which is where rustfmt leaves them alone.
 
 use core::fmt;
-use core::marker::PhantomData;
 
 use notko::{Maybe, Outcome};
 
@@ -246,9 +245,7 @@ fn before<'a>(text: &'a str, suffix: &str) -> Maybe<&'a str> {
 /// layer's, else it is [`Order::DEFAULT`]. Where it sits below the base, the
 /// `defaults` layer is the caller's to place and no word of the order.
 pub struct Order<'a, St: Store> {
-    // lint:allow(no-bare-string) reason: the list's own text, borrowed from the document. FIXME: port to Str.
-    list:   Maybe<&'a str>,
-    _store: PhantomData<St>,
+    list: Maybe<St::List<'a>>,
 }
 
 impl<St: Store> Clone for Order<'_, St> {
@@ -271,8 +268,7 @@ const DEFAULT_WORDS: [&str; 4] = ["*", "local", "secret", "private"];
 impl<'a, St: Store> Order<'a, St> {
     /// `["*", "local", "secret", "private"]`.
     pub const DEFAULT: Self = Order {
-        list:   Maybe::Isnt,
-        _store: PhantomData,
+        list: Maybe::Isnt,
     };
 
     /// The order the base's `meta` sets, else the one `defaults` sets, else
@@ -316,8 +312,7 @@ impl<'a, St: Store> Order<'a, St> {
             }
         }
         Outcome::Ok(Order {
-            list:   Maybe::Is(list),
-            _store: PhantomData,
+            list: Maybe::Is(list),
         })
     }
 

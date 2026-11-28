@@ -39,7 +39,8 @@ pub trait Kind: 'static {
     // lint:allow(no-bare-string) reason: the caller's text. FIXME: port to Str.
     fn from_text<'a, S: Store>(text: &'a str) -> Outcome<Self::Value<'a, S>, BadValue<'a>>;
     /// From a file, through the store's literal.
-    fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<Self::Value<'a, S>, BadValue<'a>>;
+    fn from_literal<'a, S: Store>(lit: Literal<'a, S>)
+    -> Outcome<Self::Value<'a, S>, BadValue<'a>>;
     /// From a list appended across a stack of layers, walked layer by layer.
     /// Only a list is one; every other kind refuses it as a list.
     fn from_run<'a, S: Store>(run: ListRun<'a, S>) -> Outcome<Self::Value<'a, S>, BadValue<'a>> {
@@ -130,7 +131,7 @@ impl Kind for Bool {
     }
 
     // lint:allow(no-bare-numeric, arvo-types-only) reason: the file's own boolean. FIXME: port to arvo's Bool.
-    fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<bool, BadValue<'a>> {
+    fn from_literal<'a, S: Store>(lit: Literal<'a, S>) -> Outcome<bool, BadValue<'a>> {
         match lit {
             Literal::Bool(b) => Outcome::Ok(b),
             other => Outcome::Err(bad::<Self>(got_of(other))),
@@ -163,7 +164,7 @@ impl Kind for Int {
     }
 
     // lint:allow(no-bare-numeric, arvo-types-only) reason: the file's own integer. FIXME: port to arvo.
-    fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<i64, BadValue<'a>> {
+    fn from_literal<'a, S: Store>(lit: Literal<'a, S>) -> Outcome<i64, BadValue<'a>> {
         match lit {
             Literal::Int(i) => Outcome::Ok(i),
             other => Outcome::Err(bad::<Self>(got_of(other))),
@@ -191,7 +192,7 @@ impl Kind for Text {
     }
 
     // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
-    fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<&'a str, BadValue<'a>> {
+    fn from_literal<'a, S: Store>(lit: Literal<'a, S>) -> Outcome<&'a str, BadValue<'a>> {
         match lit {
             Literal::Str(s) => Outcome::Ok(s),
             other => Outcome::Err(bad::<Self>(got_of(other))),
@@ -222,7 +223,7 @@ impl Kind for PathText {
     }
 
     // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
-    fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<&'a str, BadValue<'a>> {
+    fn from_literal<'a, S: Store>(lit: Literal<'a, S>) -> Outcome<&'a str, BadValue<'a>> {
         match lit {
             Literal::Str(s) if !s.is_empty() => Outcome::Ok(s),
             other => Outcome::Err(bad::<Self>(got_of(other))),
@@ -257,7 +258,7 @@ impl<C: Choices> Kind for Choice<C> {
     }
 
     // lint:allow(no-bare-static-str) reason: one of the set's static names. FIXME: port to Str.
-    fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<&'static str, BadValue<'a>> {
+    fn from_literal<'a, S: Store>(lit: Literal<'a, S>) -> Outcome<&'static str, BadValue<'a>> {
         match lit {
             Literal::Str(s) => Self::from_text::<S>(s),
             other => Outcome::Err(bad::<Self>(got_of(other))),
@@ -295,7 +296,7 @@ impl Kind for PredicateName {
     }
 
     // lint:allow(no-bare-string) reason: borrowed from the document. FIXME: port to Str.
-    fn from_literal<'a, S: Store>(lit: Literal<'a>) -> Outcome<&'a str, BadValue<'a>> {
+    fn from_literal<'a, S: Store>(lit: Literal<'a, S>) -> Outcome<&'a str, BadValue<'a>> {
         match lit {
             Literal::Str(s) => Self::from_text::<S>(s),
             other => Outcome::Err(bad::<Self>(got_of(other))),
@@ -307,7 +308,7 @@ impl Kind for PredicateName {
         f.write_str(value)
     }
 }
-pub(crate) const fn got_of(lit: Literal<'_>) -> Got<'_> {
+pub(crate) const fn got_of<S: Store>(lit: Literal<'_, S>) -> Got<'_> {
     match lit {
         Literal::Bool(_) => Got::Bool,
         Literal::Int(_) => Got::Int,
