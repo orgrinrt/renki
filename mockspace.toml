@@ -40,10 +40,10 @@ renki = "#EDE6F3 | #5C2D82"
 # ---------------------------------------------------------------------------
 
 [lint-crates]
-mockspace-extra-lints = { git = "ssh://git@github.com/orgrinrt/mockspace-extra-lints.git", branch = "dev" }
+mockspace-extra-lints = { git = "ssh://git@github.com/orgrinrt/mockspace-extra-lints.git", rev = "6a454721e6f58602ea32debaa5de8fe4e2e63c21" }
 # `mock search`: the one search over this repository, answered from its own index and never building
 # it. It comes in alone from the lint pack's repository, without the pack's workflow tools.
-mockspace-extra-search = { git = "ssh://git@github.com/orgrinrt/mockspace-extra-lints.git", branch = "dev" }
+mockspace-extra-search = { git = "ssh://git@github.com/orgrinrt/mockspace-extra-lints.git", rev = "6a454721e6f58602ea32debaa5de8fe4e2e63c21" }
 
 # --- Universal quality lints (mockspace built-ins) -------------------------
 
