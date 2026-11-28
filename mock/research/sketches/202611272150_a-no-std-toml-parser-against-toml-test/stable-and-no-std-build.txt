@@ -1,0 +1,12 @@
+$ rustc +stable --version
+rustc 1.97.0 (2d8144b78 2026-07-07)
+
+$ rustc +stable --edition 2024 --crate-type rlib --crate-name nostd_toml -D warnings src/lib.rs --out-dir <scratch>
+exit 0
+
+$ rustc +stable --target thumbv7em-none-eabihf --edition 2024 --crate-type rlib --crate-name nostd_toml -D warnings src/lib.rs --out-dir <scratch>
+exit 0
+
+$ grep -rn "alloc\|feature" src/
+src/lib.rs:1://! A TOML reader that is `no_std`, allocates nothing and builds on stable.
+exit 0
