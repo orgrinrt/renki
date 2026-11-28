@@ -4,7 +4,9 @@
 //--------------------------------------------------------------------------------------------------
 
 //! Each C library call `Unix` makes, run on this host against the fixtures
-//! under `tests/host/`, which are committed and never written to.
+//! under `tests/host/`, which are committed and never written to, and in a
+//! directory of its own under the system's temporary one for what no committed
+//! fixture can be, a FIFO and a directory of many entries.
 
 use core::ffi::CStr;
 
@@ -142,10 +144,115 @@ fn realpath_refuses_a_buffer_shorter_than_the_longest_path_with_the_size_it_need
 }
 
 #[test]
-fn getenv_answers_a_set_variable_and_nothing_for_an_unset_one() {
+fn getenv_copies_a_set_variable_and_answers_nothing_for_an_unset_one() {
     let path = std::env::var_os("PATH").expect("a test runs with a PATH");
-    assert_eq!(Unix::var(c"PATH"), Some(path.as_encoded_bytes()));
-    assert_eq!(Unix::var(c"RENKI_MANIFEST_NO_SUCH_VARIABLE"), None);
+    let path = path.as_encoded_bytes();
+    let mut into = vec![0u8; path.len()];
+    assert_eq!(Unix::var(c"PATH", &mut into), Ok(Some(path)));
+    let mut none = [0u8; 0];
+    assert_eq!(
+        Unix::var(c"RENKI_MANIFEST_NO_SUCH_VARIABLE", &mut none),
+        Ok(None)
+    );
+}
+
+#[test]
+fn getenv_refuses_a_buffer_too_short_for_the_value_with_the_size_it_needs() {
+    let path = std::env::var_os("PATH").expect("a test runs with a PATH");
+    let mut short = vec![0u8; path.len() - 1];
+    assert_eq!(
+        Unix::var(c"PATH", &mut short),
+        Err(BadRead::Room {
+            file: c"PATH",
+            need: path.len(),
+        })
+    );
+}
+
+/// A directory of this test binary's own under the system's temporary one,
+/// made afresh, for files the committed fixtures cannot hold.
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("renki-manifest-host-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn c_path(path: &std::path::Path) -> std::ffi::CString {
+    std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap()
+}
+
+#[test]
+fn a_directory_given_as_a_file_is_refused_as_no_regular_file() {
+    let mut into = [0u8; 8192];
+    assert_eq!(
+        Unix::read(LISTED, &mut into),
+        Err(BadRead::NotAFile {
+            file: LISTED,
+        })
+    );
+    // and so with a buffer too short for what `fstat` says a directory holds
+    let mut small = [0u8; 4];
+    assert_eq!(
+        Unix::read(LISTED, &mut small),
+        Err(BadRead::NotAFile {
+            file: LISTED,
+        })
+    );
+}
+
+#[test]
+fn a_fifo_named_like_a_layer_is_refused_and_never_waited_on() {
+    let dir = scratch("fifo");
+    let fifo = dir.join("app.local.toml");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success(), "mkfifo made the fifo");
+    let path = c_path(&fifo);
+    let (send, got) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut into = [0u8; 64];
+        let refused = matches!(Unix::read(&path, &mut into), Err(BadRead::NotAFile { .. }));
+        send.send(refused).unwrap();
+    });
+    let answer = got.recv_timeout(std::time::Duration::from_secs(5));
+    assert_eq!(
+        answer,
+        Ok(true),
+        "the read answered at once, refusing the fifo"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_that_holds_more_than_fstat_said_is_refused_with_more_room() {
+    // `/proc` files say a size of 0 and hold more: the grow-past branch
+    let status = c"/proc/self/status";
+    let mut none = [0u8; 0];
+    assert_eq!(
+        Unix::read(status, &mut none),
+        Err(BadRead::Room {
+            file: status,
+            need: 1,
+        })
+    );
+}
+
+#[test]
+fn readdir_lists_every_entry_of_a_large_directory_then_ends() {
+    let dir = scratch("many");
+    for i in 0 .. 2000 {
+        std::fs::write(dir.join(format!("f{i:04}")), b"").unwrap();
+    }
+    let path = c_path(&dir);
+    let mut seen = 0;
+    Unix::list(&path, |_| seen += 1).unwrap();
+    assert_eq!(seen, 2000);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[cfg(feature = "processes")]
@@ -179,5 +286,24 @@ mod spawned {
             panic!("the wrapper ran and answered");
         };
         assert_ne!(exit, 0);
+    }
+
+    #[test]
+    fn a_directory_the_shell_cannot_enter_exits_125() {
+        assert_eq!(Unix::shell(MISSING, c"exit 0"), Ok(Some(125)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_a_command_prints_goes_to_dev_null() {
+        assert_eq!(
+            Unix::shell(LISTED, c"test \"$(readlink /proc/$$/fd/1)\" = /dev/null"),
+            Ok(Some(0))
+        );
+        // the control: its standard error is still the reader's
+        assert_eq!(
+            Unix::shell(LISTED, c"test \"$(readlink /proc/$$/fd/2)\" != /dev/null"),
+            Ok(Some(0))
+        );
     }
 }
