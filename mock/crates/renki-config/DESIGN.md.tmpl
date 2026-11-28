@@ -121,7 +121,8 @@ value of the wrong shape, as the wrong shape; an `order`, `untracked` or
 `predicates` in a layer above the base; a `when` on the base or on
 `defaults`; and an item that is not a string, of `include`, `replace` or
 `unset` as no string and of `order` or `untracked` as no word, naming what it
-holds. Each is refused by name. `unknown_keys` and the resolver never see a
+holds and which list it is of by its `MetaList`. Each is refused by name.
+`unknown_keys` and the resolver never see a
 key under `meta`.
 
 `glob_matches` is the one glob rule both readers keep: `*`, `?` and `[...]`
@@ -137,10 +138,10 @@ include's glob, an editor's swap file among them, is never matched.
 whether the higher's `meta.replace` names the key, it answers the `Meet`:
 `Deep` for two tables, which merge key by key; `Append` for two lists of
 values or two arrays of tables, the higher's items after the lower's; `Over`
-for two scalars, or for anything the higher replaces; or a `Clash` for one
-shape over another that nothing replaces, naming both. `stacked` refuses a
-`Clash` as a `BadMerge` naming the key and the layer below that holds the
-lower shape. The shapes a store
+for two scalars, or for anything the higher replaces; or a `BadMerge` for one
+shape over another that nothing replaces, naming both shapes, written at
+the line of the higher layer's key, which names the key and its file. The
+shapes a store
 answers are `Table`, `Tables` for an array of tables, `List` for a list of
 values, `Empty` for the empty list and `Scalar`; an inline array is `Tables`
 where every item is an inline table and `List` where any item is not. An array of tables over a
@@ -219,7 +220,7 @@ BadLayer::MetaShape       <key> holds a value of the wrong shape
 BadLayer::AboveBase       <key> is read from the base and defaults only, not from an overlay
 BadLayer::AlwaysRead      <key> is refused on the base and defaults, which are always read
 BadLayer::ReplaceNotHeld  meta.replace names <key>, which this layer does not hold
-BadMerge::Shapes          <higher> at <key> over <lower> in <below> does not merge; name the key in meta.replace to replace it
+BadMerge::Shapes          <higher> over <lower> does not merge; name the key in meta.replace to replace it
 BadMerge::Unset           meta.unset names <key>, which no lower layer holds
 BadPredicate::Undefined   no predicate <name> is defined under meta.predicates
 BadPredicate::Loop        the predicate <name> is reached again from <from>, a loop
@@ -231,9 +232,8 @@ BadPredicate::Malformed   the predicate <name> is not one of env, shell, not, al
 
 `<higher>` and `<lower>` are a `Shape` by its name: `a table`, `an array of
 tables`, `a list of values`, `an empty list`, `a scalar`. `<got>` is what a
-`Got` names: `a boolean`, `an integer`, `a list`. `<below>` is the label of
-the layer below that holds the lower shape. `<value>` is the variable's value
-as a TOML basic string: in double quotes, with `\"`, `\\`, `\n`, `\t` and
+`Got` names: `a boolean`, `an integer`, `a list`. `<value>` is the variable's
+value as a TOML basic string: in double quotes, with `\"`, `\\`, `\n`, `\t` and
 `\r`, and every other byte below 0x20 and 0x7f as `\u00XX` in upper case.
 `<code>` is the exit in decimal.
 
