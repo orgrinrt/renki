@@ -19,11 +19,11 @@ include = ["src/**/*.rs", "tests/the_c_calls_on_this_host.rs", "tests/the_readme
 
 [dependencies]
 notko = { version = "0.0.1", default-features = false }
-renki-config = { path = "../renki-config" }
+renki-config = { version = "0.0.2", path = "../renki-config" }
 serde = { version = "1", default-features = false }
 # By git at a revision of its trunk until its release candidate is on
 # the registry.
-tomlfuse-parse = { git = "https://github.com/orgrinrt/tomlfuse", rev = "cefd5bddd5489c243e25bd4e89fd07a338f385dd" }
+tomlfuse-parse = { version = "0.0.1-rc.1", git = "https://github.com/orgrinrt/tomlfuse", rev = "cefd5bddd5489c243e25bd4e89fd07a338f385dd" }
 
 # The C library, on the targets `Unix` has a row for and no other.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "illumos"))'.dependencies]
