@@ -1,1 +1,1 @@
-app.local.toml:1: a table at a over a scalar in app.toml does not merge; name the key in meta.replace to replace it
+app.local.toml:1: a table over a scalar does not merge; name the key in meta.replace to replace it

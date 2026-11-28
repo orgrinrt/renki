@@ -1,1 +1,1 @@
-app.local.toml:1: an array of tables at hooks over a list of values in app.toml does not merge; name the key in meta.replace to replace it
+app.local.toml:1: an array of tables over a list of values does not merge; name the key in meta.replace to replace it

@@ -11,7 +11,7 @@ mod common;
 
 use common::{Toy, doc, layer};
 use notko::{Maybe, Outcome};
-use renki_config::{BadMerge, Clash, Meet, Shape, Stack, Store, meet};
+use renki_config::{BadMerge, Meet, Shape, Stack, Store, meet};
 
 const LISTS: [Shape; 3] = [Shape::List, Shape::Tables, Shape::Empty];
 
@@ -38,7 +38,7 @@ fn each_list_appends_to_its_own_kind_and_the_empty_list_to_either() {
 fn an_array_of_tables_and_a_list_of_values_do_not_append_either_way() {
     for (lower, higher) in [(Shape::List, Shape::Tables), (Shape::Tables, Shape::List)] {
         let e = meet(lower, higher, false).unwrap_err();
-        assert_eq!(e, Clash::new(lower, higher));
+        assert_eq!(e, BadMerge::Shapes(lower, higher));
         let said = e.to_string();
         assert!(
             said.contains(lower.name()) && said.contains(higher.name()),
@@ -86,11 +86,7 @@ fn a_stack_of_an_array_of_tables_over_a_list_of_values_is_refused() {
     let stack = [layer("app.toy", &b), layer("app.local.toy", &l)];
     assert_eq!(
         Stack::new(&stack).err(),
-        Maybe::Is(BadMerge::Shapes(
-            "hooks",
-            "app.toy",
-            Clash::new(Shape::List, Shape::Tables)
-        ))
+        Maybe::Is(BadMerge::Shapes(Shape::List, Shape::Tables))
     );
     // the control: over an empty list it stands
     let b = doc("hooks = []\n");
