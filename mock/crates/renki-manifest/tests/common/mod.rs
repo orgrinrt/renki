@@ -18,6 +18,7 @@
 //! - `base FILE`: the base is `FILE`, where it is not `app.toml`.
 //! - `unlistable DIR`: the directory, `.` for the fixture's own, is one the
 //!   reader may enter and not list.
+//! - `unreadable FILE`: the file is one the reader may find and not read.
 //! - a line starting `#`, or a blank one, says nothing.
 
 #![allow(dead_code)]
@@ -49,6 +50,7 @@ pub struct Fixture {
     pub sh_fails:   bool,
     pub base:       String,
     pub unlistable: Vec<String>,
+    pub unreadable: Vec<String>,
 }
 
 /// Whether the fixture at `dir` holds `file`, kept under its own name or, as
@@ -76,6 +78,7 @@ impl Fixture {
             sh_fails:   false,
             base:       BASE.to_owned(),
             unlistable: Vec::new(),
+            unreadable: Vec::new(),
         };
         for line in text("context").unwrap_or_default().lines() {
             let line = line.trim();
@@ -96,6 +99,7 @@ impl Fixture {
                 "sh-on-path-fails" => f.sh_fails = true,
                 "base" => rest.clone_into(&mut f.base),
                 "unlistable" => f.unlistable.push(rest.to_owned()),
+                "unreadable" => f.unreadable.push(rest.to_owned()),
                 _ => panic!("{name}: the context line `{line}` is none the suite knows"),
             }
         }
@@ -181,6 +185,13 @@ pub fn suite() -> Vec<Fixture> {
             assert!(
                 dir == "." || f.dir.join(dir).is_dir(),
                 "{}: the context makes {dir} unlistable, which the fixture does not hold",
+                f.name
+            );
+        }
+        for file in &f.unreadable {
+            assert!(
+                f.dir.join(file).is_file(),
+                "{}: the context makes {file} unreadable, which the fixture does not hold",
                 f.name
             );
         }

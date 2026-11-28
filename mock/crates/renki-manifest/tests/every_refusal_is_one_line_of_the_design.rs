@@ -266,13 +266,21 @@ fn every_display_of_the_host_is_its_line_of_the_table() {
         BadRead::NotAFile {
             file,
         },
+        BadRead::Shell {
+            dir:   file,
+            call:  "posix_spawn",
+            errno: 2,
+        },
     ] {
         let line = host_line(&e);
         assert!(
             pinned.iter().chain(&elsewhere).any(|l| l == line),
             "{line} is no line of the reader's table"
         );
-        assert_eq!(e.to_string(), fill(line).replace("<need>", "7"), "{e:?}");
+        let filled = fill(line)
+            .replace("<need>", "7")
+            .replace("<dir>", "app.x.toml");
+        assert_eq!(e.to_string(), filled, "{e:?}");
     }
 }
 

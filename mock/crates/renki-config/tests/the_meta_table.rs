@@ -9,7 +9,7 @@ mod common;
 
 use common::{Toy, doc, part};
 use notko::Maybe;
-use renki_config::{BadLayer, Literal, Meta, glob_matches};
+use renki_config::{BadLayer, Got, Literal, Meta, MetaList, glob_matches};
 
 fn defect<'d>(text: &'d common::ToyDoc<'d>, file: &str) -> Maybe<BadLayer<'d>> {
     Meta::<Toy>::read(text).defect(part(file))
@@ -203,6 +203,56 @@ fn a_glob_is_the_shells_pattern_within_one_segment() {
         assert!(
             !glob_matches(pattern, name),
             "{pattern} does not match {name}"
+        );
+    }
+}
+
+#[test]
+fn of_several_defects_the_first_key_the_file_holds_is_refused() {
+    // an item of the wrong kind before an unknown key
+    let d = doc("meta.replace = [1]\nmeta.colour = 1\n");
+    assert_eq!(
+        defect(&d, "app.toy"),
+        Maybe::Is(BadLayer::NotAString(MetaList::Replace, Got::Int))
+    );
+    // and the unknown key first where the file holds it first
+    let d = doc("meta.colour = 1\nmeta.replace = [1]\n");
+    assert_eq!(
+        defect(&d, "app.toy"),
+        Maybe::Is(BadLayer::UnknownMeta("meta.colour"))
+    );
+    // a name `meta.replace` lists that the layer lacks, at `meta.replace`'s place
+    let d = doc("meta.replace = [\"y\"]\nmeta.colour = 1\n");
+    assert_eq!(
+        defect(&d, "app.local.toy"),
+        Maybe::Is(BadLayer::ReplaceNotHeld("y"))
+    );
+    // a key's place before its items: an order in an overlay holding a number
+    let d = doc("meta.overlays.order = [1]\n");
+    assert_eq!(
+        defect(&d, "app.local.toy"),
+        Maybe::Is(BadLayer::AboveBase("meta.overlays.order"))
+    );
+    // a definition in an overlay at its first leaf, before a later unknown key
+    let d = doc("meta.predicates.x.env = \"X\"\nmeta.colour = 1\n");
+    assert_eq!(
+        defect(&d, "app.local.toy"),
+        Maybe::Is(BadLayer::AboveBase("meta.predicates.x.env"))
+    );
+}
+
+#[test]
+fn a_value_under_a_key_the_reader_holds_as_a_leaf_is_that_key_s_wrong_shape() {
+    for (text, key) in [
+        ("meta.when.x = 1\n", "meta.when"),
+        ("meta.replace.x = 1\n", "meta.replace"),
+        ("meta.overlays.include.a = 1\n", "meta.overlays.include"),
+    ] {
+        let d = doc(text);
+        assert_eq!(
+            defect(&d, "app.local.toy"),
+            Maybe::Is(BadLayer::MetaShape(key)),
+            "{text}"
         );
     }
 }
