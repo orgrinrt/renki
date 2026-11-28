@@ -37,7 +37,8 @@ own schema that applies conditionally.
 
 `Literal<'a, St>` is the seam between a store and a kind: `Bool`, `Int`,
 `Str` over text the store lends already decoded, and `List` over the store's
-own handle for the list, `St::List<'a>`, walked through the store's `items`;
+own handle for the list, `St::List<'a>`, walked through the store's `items`,
+a `Walk` of the items;
 a list has no text of its own to be read again, so an array of tables is one
 like any other. A store turns its node into one, a kind turns one
 into its value, and neither knows the other. `BadValue` is the refusal,
@@ -75,16 +76,29 @@ refuses.
 ## The store
 
 `Store` is the backend contract, implemented by marker types. It names the
-format and its extension, parses text into a borrowed `Document<'a>` over an
-index the caller lends with the text, `St::Cell` slots through any
-`notko::lend::Lend`, so a store keeps no memory of its own and allocates
-nothing; an index that falls short is refused with the
-`notko::lend::Exhausted` it gave, apart from a document that is wrong. It
-answers
-a dotted key as a `Literal` or `Isnt`, iterates the keys a document holds so
-an unknown one is refused by name, tells what shape a key holds (`Shape`), and
+format and its extension, and parses text into a borrowed `Document<'a>` over
+the memory the caller gives it, so a store keeps no memory of its own and
+allocates nothing. That memory reaches the store through one contract,
+`Shelves`, whose implementation hands out two shelves at once: the index,
+`St::Cell` slots, and the spelling shelf, bytes where the store writes what
+it hands out that is no text of the document as written, a string with its
+escapes decoded and a key spelled whole with its tables. `Shelves` is
+implemented for a pair of `notko::lend::Lend`s, one of cells and one of bytes,
+and is the one place the crate names how memory is lent, so another lender,
+a managed allocator among them, implements `Shelves` and nothing else
+changes. A shelf that falls short is refused with `ShortShelf`, naming which
+of the two by `StoreShelf`, `Index` or `Spelling`, and the
+`notko::lend::Exhausted` it gave, apart from a document that is wrong. A store
+knows the whole need of both once it has read the text, so its `wanted` is the
+whole need where it read that far, and one more read with shelves of that
+size is enough. It answers
+a dotted key as a `Literal` or `Isnt`, walks the keys a document holds so an
+unknown one is refused by name, tells what shape a key holds (`Shape`), and
 writes one key into text it is given, into a `core::fmt::Write` sink, keeping
-everything else in that text byte for byte, comments included. An array of
+everything else in that text byte for byte, comments included. Its keys and a
+list's items are walked through `Walk`, this crate's own trait, which answers
+each next one as a `Maybe`, so no store implements a trait whose signature
+fixes a type of `core` the stack replaces. An array of
 tables is a list here like any other, and its keys are `name.0.field` in the
 document's order. TOML is the store that ships, in `renki-manifest`, which
 reads the disk; the contracts name no format. A second store is an impl of
